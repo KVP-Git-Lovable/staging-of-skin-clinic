@@ -1,0 +1,9 @@
+Lovable sync trigger
+
+Touched 2026-09-10 to force a pull of the current GitHub main.
+
+send-appointment-whatsapp was deployed from Lovable but a test booking still
+produced the pre-cd09317 message (bare time in {{2}}, "call us on" footer, no
+buttons), which means Lovable deployed its own older copy of that file rather
+than the one on main. Precedent: 998515d, where a Lovable editor edit silently
+reverted TEMPLATE_SID in this same file.

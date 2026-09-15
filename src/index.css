@@ -1,0 +1,322 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 210 40% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 210 40% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 40% 10%;
+
+    --primary: 174 62% 38%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 25% 93%;
+    --secondary-foreground: 210 40% 10%;
+
+    --muted: 210 20% 95%;
+    --muted-foreground: 210 15% 50%;
+
+    --accent: 174 40% 92%;
+    --accent-foreground: 174 62% 25%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 210 20% 90%;
+    --input: 210 20% 90%;
+    --ring: 174 62% 38%;
+
+    --radius: 0.75rem;
+
+    /* Soft, light default sidebar (Warm Amber) */
+    --sidebar-background: 34 40% 97%;
+    --sidebar-foreground: 28 18% 32%;
+    --sidebar-primary: 26 84% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 32 78% 94%;
+    --sidebar-accent-foreground: 26 78% 38%;
+    --sidebar-border: 32 30% 90%;
+    --sidebar-ring: 26 84% 48%;
+    --sidebar-header-bg: linear-gradient(135deg, hsl(30 92% 55%) 0%, hsl(22 88% 46%) 100%);
+
+    --success: 152 60% 40%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --info: 210 80% 55%;
+    --info-foreground: 0 0% 100%;
+
+    --gold: 42 65% 55%;
+    --gold-foreground: 210 40% 10%;
+    --emerald: 158 64% 42%;
+
+    --font-display: 'Plus Jakarta Sans', sans-serif;
+    --font-body: 'Inter', sans-serif;
+
+    --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.04);
+    --shadow-elevated: 0 4px 6px -1px rgb(0 0 0 / 0.06), 0 2px 4px -2px rgb(0 0 0 / 0.06);
+    --shadow-luxe: 0 30px 60px -20px hsl(174 62% 20% / 0.25), 0 18px 36px -18px hsl(174 62% 20% / 0.15);
+    --gradient-hero: linear-gradient(135deg, hsl(174 62% 38% / 0.85) 0%, hsl(158 64% 42% / 0.7) 50%, hsl(210 40% 10% / 0.6) 100%);
+    --gradient-luxe: linear-gradient(135deg, hsl(174 62% 38%) 0%, hsl(158 64% 42%) 100%);
+  }
+
+  .dark {
+    --background: 210 30% 8%;
+    --foreground: 210 15% 90%;
+    --card: 210 30% 12%;
+    --card-foreground: 210 15% 90%;
+    --popover: 210 30% 12%;
+    --popover-foreground: 210 15% 90%;
+    --primary: 174 62% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 25% 18%;
+    --secondary-foreground: 210 15% 90%;
+    --muted: 210 25% 15%;
+    --muted-foreground: 210 15% 55%;
+    --accent: 174 40% 15%;
+    --accent-foreground: 174 62% 70%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 210 25% 20%;
+    --input: 210 25% 20%;
+    --ring: 174 62% 50%;
+    --sidebar-background: 210 35% 6%;
+    --sidebar-foreground: 210 15% 75%;
+    --sidebar-primary: 174 62% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 25% 12%;
+    --sidebar-accent-foreground: 210 15% 90%;
+    --sidebar-border: 210 25% 15%;
+    --sidebar-ring: 174 62% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+  }
+}
+
+@layer components {
+  /* Horizontal scrollers should feel native on touch devices */
+  .tabs-scroll,
+  .table-scroll {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    overscroll-behavior-x: contain;
+  }
+
+  .tabs-scroll {
+    scroll-snap-type: x proximity;
+  }
+
+  .tabs-scroll::-webkit-scrollbar,
+  .table-scroll::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .tabs-scroll::-webkit-scrollbar-thumb,
+  .table-scroll::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 9999px;
+  }
+
+  .stat-card {
+    @apply bg-card rounded-xl p-4 sm:p-6 border border-border;
+    box-shadow: var(--shadow-card);
+  }
+
+  .stat-card:hover {
+    box-shadow: var(--shadow-elevated);
+    @apply transition-shadow duration-200;
+  }
+
+  .page-header {
+    @apply mb-4 sm:mb-8;
+  }
+
+  .page-title {
+    @apply text-xl sm:text-2xl font-bold tracking-tight;
+    font-family: var(--font-display);
+  }
+
+  .page-subtitle {
+    @apply text-muted-foreground mt-1 text-sm;
+  }
+
+  .data-table {
+    @apply bg-card rounded-xl border border-border overflow-hidden;
+    box-shadow: var(--shadow-card);
+  }
+
+  .theme-header {
+    background: var(--sidebar-header-bg);
+    border-radius: 0.75rem;
+  }
+
+  .theme-header,
+  .theme-header * {
+    color: hsl(0 0% 100%);
+  }
+
+  [data-sidebar="sidebar"] {
+    border-right: 1px solid hsl(var(--sidebar-border));
+  }
+}
+
+@layer base {
+  /* Prevent accidental page-level horizontal scroll on phones */
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  /* Radix's Dialog/Sheet scroll-lock only touches document.body
+     (react-remove-scroll-bar sets body[data-scroll-locked]{overflow:hidden}),
+     but this app's actual scroll container is <main overflow-auto> in
+     AppLayout.tsx, not the body - so an open Sheet/Dialog left the page
+     behind it independently scrollable (a "double scroll" - the sheet
+     scrolls its own content while the page behind it also scrolls).
+     Piggyback on the same attribute to lock <main> too, for every
+     Sheet/Dialog in the app. */
+  body[data-scroll-locked] main {
+    overflow: hidden !important;
+  }
+
+  @media (max-width: 767px) {
+    /* Page action rows wrap instead of overflowing off-screen */
+    .page-header .flex {
+      flex-wrap: wrap;
+    }
+
+    /* Nothing should push past the screen edge */
+    .data-table,
+    .stat-card,
+    main > * {
+      max-width: 100%;
+    }
+
+    /* Long values (emails, ids, service names) wrap instead of overflowing */
+    .data-table td,
+    .data-table th {
+      white-space: normal;
+      word-break: break-word;
+    }
+
+    /* Tables collapse into stacked label/value cards */
+    .responsive-table thead {
+      display: none;
+    }
+
+    .responsive-table,
+    .responsive-table tbody,
+    .responsive-table tr {
+      display: block;
+      width: 100%;
+    }
+
+    .responsive-table tbody {
+      padding: 0.5rem;
+      background: hsl(var(--muted) / 0.5);
+    }
+
+    /* Each row becomes a distinct, rounded, elevated card */
+    .responsive-table tbody tr {
+      padding: 0.75rem;
+      margin-bottom: 0.75rem;
+      border: 1px solid hsl(var(--border));
+      border-radius: 1rem;
+      background: hsl(var(--card));
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+    }
+
+    .responsive-table tbody tr:last-child {
+      margin-bottom: 0;
+    }
+
+    .responsive-table tbody td {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.25rem 0;
+      border: 0;
+      text-align: right;
+      white-space: normal;
+      word-break: break-word;
+      min-width: 0;
+    }
+
+    /* Keep interactive controls inside the card */
+    .responsive-table tbody td > * {
+      max-width: 100%;
+      min-width: 0;
+    }
+
+    .responsive-table tbody td button,
+    .responsive-table tbody td [role="combobox"],
+    .responsive-table tbody td a {
+      max-width: 100%;
+      white-space: normal;
+      text-align: right;
+      height: auto;
+    }
+
+    .responsive-table tbody td[data-label]:not([data-label=""])::before {
+      content: attr(data-label);
+      flex-shrink: 0;
+      max-width: 45%;
+      text-align: left;
+      font-size: 11px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: hsl(var(--muted-foreground));
+    }
+
+    .responsive-table tbody td[colspan] {
+      justify-content: center;
+      text-align: center;
+    }
+
+    /* Toolbars, filter chips and tab rows wrap rather than clip */
+    .mobile-wrap,
+    .page-header .flex,
+    .data-table .flex-wrap {
+      min-width: 0;
+    }
+
+    /* Compact form spacing for faster data entry on phones */
+    .space-y-6 > :not([hidden]) ~ :not([hidden]) {
+      margin-top: 1rem;
+    }
+
+    .space-y-4 > :not([hidden]) ~ :not([hidden]) {
+      margin-top: 0.75rem;
+    }
+
+    /* Comfortable tap targets without oversized fields */
+    input,
+    select,
+    textarea,
+    button[role="combobox"] {
+      font-size: 16px; /* avoids iOS zoom-on-focus */
+    }
+  }
+}
