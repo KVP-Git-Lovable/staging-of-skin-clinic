@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Mail, Lock, Loader2, ArrowRight } from "lucide-react";
-import skinClinicLogo from "@/assets/skin-clinic-logo.png";
+import { useClinicSettings } from "@/hooks/useClinicSettings";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -11,6 +11,7 @@ import { motion } from "framer-motion";
 
 const Login = () => {
   const navigate = useNavigate();
+  const { name: clinicName, logoUrl: clinicLogo } = useClinicSettings();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -41,8 +42,8 @@ const Login = () => {
         className="w-full max-w-sm"
       >
         <div className="text-center mb-8">
-          <img src={skinClinicLogo} alt="The Skin Clinic" className="h-[70px] w-auto mb-4 object-contain mx-auto" style={{ marginTop: 24, marginBottom: 16 }} />
-          <h1 className="text-2xl font-bold text-foreground font-display">The Skin Clinic</h1>
+          <img src={clinicLogo} alt={clinicName} className="h-[70px] w-auto mb-4 object-contain mx-auto" style={{ marginTop: 24, marginBottom: 16 }} />
+          <h1 className="text-2xl font-bold text-foreground font-display">{clinicName}</h1>
           <p className="text-muted-foreground text-sm mt-1">Sign in to your account</p>
         </div>
 

@@ -34,7 +34,7 @@ import {
 import { NavLink } from "@/components/NavLink";
 import { Link, useLocation } from "react-router-dom";
 import { useEffect } from "react";
-import skinClinicLogo from "@/assets/skin-clinic-logo.png";
+import { useClinicSettings } from "@/hooks/useClinicSettings";
 import {
   Sidebar,
   SidebarContent,
@@ -115,6 +115,7 @@ export function AppSidebar() {
   const location = useLocation();
   const currentPath = location.pathname;
   const { isAdmin, permissions } = useAuth();
+  const { name: clinicName, logoUrl: clinicLogo } = useClinicSettings();
 
   useEffect(() => {
     if (isMobile) setOpenMobile(false);
@@ -145,13 +146,13 @@ export function AppSidebar() {
         <div className={collapsed ? "flex items-center justify-center" : "flex items-center gap-2"}>
           {!collapsed && (
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/95 shadow-sm ring-1 ring-black/5">
-              <img src={skinClinicLogo} alt="The Skin Clinic" className="h-7 w-7 object-contain" />
+              <img src={clinicLogo} alt={clinicName} className="h-7 w-7 object-contain" />
             </span>
           )}
           {!collapsed && (
             <div className="min-w-0 flex-1">
               <h2 className="font-display text-sm font-bold leading-tight drop-shadow-sm truncate">
-                The Skin Clinic
+                {clinicName}
               </h2>
               <p className="text-xs opacity-90 leading-tight">Clinic Manager</p>
             </div>

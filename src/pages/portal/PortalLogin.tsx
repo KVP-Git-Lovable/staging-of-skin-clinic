@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
-import clinicLogo from "@/assets/skin-clinic-logo.png";
+import { useClinicSettings } from "@/hooks/useClinicSettings";
 
 type Step = "phone" | "enter_pin" | "create_pin" | "forgot_request" | "forgot_verify";
 
@@ -15,6 +15,7 @@ const SESSION_DAYS = 30;
 
 const PortalLogin = () => {
   const navigate = useNavigate();
+  const { name: clinicName, logoUrl: clinicLogo } = useClinicSettings();
   const [step, setStep] = useState<Step>("phone");
   const [phone, setPhone] = useState("");
   const [pin, setPin] = useState("");
@@ -178,9 +179,9 @@ const PortalLogin = () => {
       >
         {/* Logo */}
         <div className="text-center mb-8">
-          <img src={clinicLogo} alt="The Skin Clinic" className="h-16 w-16 mx-auto rounded-2xl object-contain shadow-lg mb-4" />
+          <img src={clinicLogo} alt={clinicName} className="h-16 w-16 mx-auto rounded-2xl object-contain shadow-lg mb-4" />
           <h1 className="text-2xl font-bold text-foreground" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-            The Skin Clinic
+            {clinicName}
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
             Access your health records securely

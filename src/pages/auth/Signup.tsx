@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Heart, Mail, Lock, User, Phone, Loader2, ArrowRight } from "lucide-react";
+import { useClinicSettings } from "@/hooks/useClinicSettings";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -10,6 +11,7 @@ import { motion } from "framer-motion";
 
 const Signup = () => {
   const navigate = useNavigate();
+  const { name: clinicName } = useClinicSettings();
   const [form, setForm] = useState({ firstName: "", lastName: "", email: "", phone: "", password: "" });
   const [loading, setLoading] = useState(false);
 
@@ -60,7 +62,7 @@ const Signup = () => {
             <Heart className="h-8 w-8" />
           </div>
           <h1 className="text-2xl font-bold text-foreground font-display">Create Account</h1>
-          <p className="text-muted-foreground text-sm mt-1">Join The Skin Clinic</p>
+          <p className="text-muted-foreground text-sm mt-1">Join {clinicName}</p>
         </div>
 
         <form onSubmit={handleSignup} className="bg-card rounded-2xl shadow-xl border p-6 space-y-4">

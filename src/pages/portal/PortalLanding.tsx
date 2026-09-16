@@ -17,7 +17,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { motion } from "framer-motion";
-import clinicLogo from "@/assets/skin-clinic-logo.png";
+import { useClinicSettings } from "@/hooks/useClinicSettings";
 import baAcneScars from "@/assets/portal-ba-acne-scars.jpg";
 import baPigmentation from "@/assets/portal-ba-pigmentation.jpg";
 import baAcneFace from "@/assets/portal-ba-acne-face.jpg";
@@ -152,6 +152,7 @@ const faqs = [
 /* ───────── component ───────── */
 const PortalLanding = () => {
   const navigate = useNavigate();
+  const { name: clinicName, logoUrl: clinicLogo } = useClinicSettings();
   const goLogin = () => navigate("/portal/login");
 
   return (
@@ -163,12 +164,12 @@ const PortalLanding = () => {
       <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-gray-100 shadow-sm">
         <div className="mx-auto max-w-7xl flex items-center justify-between px-4 md:px-8 h-16 md:h-20">
           <div className="flex items-center gap-2 md:gap-3">
-            <img src={clinicLogo} alt="The Skin Clinic" className="h-10 md:h-14 w-auto object-contain" />
+            <img src={clinicLogo} alt={clinicName} className="h-10 md:h-14 w-auto object-contain" />
             <span
               className="hidden sm:inline text-base md:text-lg font-bold tracking-tight"
               style={{ ...heading, color: NAVY }}
             >
-              The Skin Clinic
+              {clinicName}
             </span>
           </div>
           <Button
@@ -609,9 +610,9 @@ const PortalLanding = () => {
         <div className="mx-auto max-w-7xl px-6 py-12 grid gap-10 md:grid-cols-3">
           <div>
             <div className="flex items-center gap-3 mb-4">
-              <img src={clinicLogo} alt="The Skin Clinic" className="h-12 w-auto object-contain" />
+              <img src={clinicLogo} alt={clinicName} className="h-12 w-auto object-contain" />
               <span className="text-base font-bold" style={{ ...heading, color: NAVY }}>
-                The Skin Clinic
+                {clinicName}
               </span>
             </div>
             <p className="text-sm italic text-gray-600">Simply . Better . Skin</p>
@@ -645,7 +646,7 @@ const PortalLanding = () => {
           </div>
         </div>
         <div className="border-t border-gray-200 py-5 text-center text-xs text-gray-500">
-          © {new Date().getFullYear()} The Skin Clinic. All rights reserved.
+          © {new Date().getFullYear()} {clinicName}. All rights reserved.
         </div>
       </footer>
 

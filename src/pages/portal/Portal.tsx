@@ -8,7 +8,7 @@ import {
 import PortalShop from "@/components/portal/PortalShop";
 import PortalBot from "@/components/portal/PortalBot";
 import PortalSurveyFill from "@/components/portal/PortalSurveyFill";
-import clinicLogo from "@/assets/skin-clinic-logo.png";
+import { useClinicSettings } from "@/hooks/useClinicSettings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TimePicker12h } from "@/components/shared/TimePicker12h";
@@ -97,6 +97,7 @@ function PortalSurveysList({ patientId, onOpen }: { patientId: string; onOpen: (
 const Portal = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { name: clinicName, logoUrl: clinicLogo } = useClinicSettings();
   const { tab: tabParam } = useParams<{ tab?: string }>();
   const tabSlugMap: Record<string, string> = {
     home: "home",
@@ -444,9 +445,9 @@ const Portal = () => {
       <header className="bg-gradient-to-r from-primary to-[hsl(174,62%,30%)] text-primary-foreground px-4 py-4 safe-area-top">
         <div className="max-w-lg mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <img src={clinicLogo} alt="The Skin Clinic" className="h-9 w-9 rounded-lg bg-white object-contain p-0.5" />
+            <img src={clinicLogo} alt={clinicName} className="h-9 w-9 rounded-lg bg-white object-contain p-0.5" />
             <div>
-              <p className="font-bold text-sm" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>The Skin Clinic</p>
+              <p className="font-bold text-sm" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{clinicName}</p>
               <p className="text-xs opacity-80">Patient Portal</p>
             </div>
           </div>
