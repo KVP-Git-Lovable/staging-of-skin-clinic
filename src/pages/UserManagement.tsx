@@ -32,6 +32,7 @@ const ALL_MODULES = [
   { key: "leave", label: "Leave" },
   { key: "assets", label: "Assets" },
   { key: "portal_orders", label: "Portal Orders" },
+  { key: "communications", label: "Communications Center" },
   { key: "campaigns", label: "Campaigns" },
   { key: "expenses", label: "Expenses" },
   { key: "staff", label: "Staff" },

@@ -30,6 +30,10 @@ import {
   Trash2,
   History,
   Coins,
+  MessageCircle,
+  Phone,
+  Mail,
+  Workflow,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Link, useLocation } from "react-router-dom";
@@ -74,6 +78,14 @@ const mainItems = [
   { title: "Report Builder", url: "/report-builder", icon: FileBarChart, moduleKey: "report_builder" },
   { title: "Dashboards", url: "/dashboards", icon: LayoutDashboard, moduleKey: "dashboards" },
   { title: "Campaigns", url: "/campaigns", icon: Megaphone, moduleKey: "campaigns" },
+];
+
+const communicationsItems = [
+  { title: "WhatsApp", url: "/communications/whatsapp", icon: MessageCircle },
+  { title: "Voice", url: "/communications/voice", icon: Phone },
+  { title: "Email", url: "/communications/email", icon: Mail },
+  { title: "Journey Builder", url: "/communications/journeys", icon: Workflow },
+  { title: "Calendar", url: "/communications/calendar", icon: CalendarDays },
 ];
 
 const employeesSubItems = [
@@ -130,10 +142,13 @@ export function AppSidebar() {
     return true;
   };
 
-  const filteredMain = mainItems.filter((i) => canView(i.moduleKey));
+  const filteredMainBeforeComms = mainItems.slice(0, -1).filter((i) => canView(i.moduleKey));
+  const filteredMainAfterComms = mainItems.slice(-1).filter((i) => canView(i.moduleKey));
   const filteredMaster = masterDataItems.filter((i) => canView(i.moduleKey));
   const showSurveys = canView("surveys");
   const showEmployees = canView("staff") || canView("leave");
+  const showCommunications = canView("communications");
+  const communicationsPaths = communicationsItems.map((i) => i.url);
 
   const employeesPaths = ["/staff", "/leave"];
   const adminPaths = ["/admin", ...adminSubItems.map((i) => i.url)];
@@ -170,7 +185,64 @@ export function AppSidebar() {
           <SidebarGroupLabel>Main Menu</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {filteredMain.map((item) => (
+              {filteredMainBeforeComms.map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  {(
+                    <SidebarMenuButton asChild isActive={isActive(item.url)}>
+                      <NavLink
+                        to={item.url}
+                        end={item.url === "/"}
+                        className="hover:bg-sidebar-accent"
+                        activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                      >
+                        <item.icon className="mr-2 h-4 w-4" />
+                        {!collapsed && <span>{item.title}</span>}
+                      </NavLink>
+                    </SidebarMenuButton>
+                  )}
+                </SidebarMenuItem>
+              ))}
+
+              {showCommunications && (
+                <Collapsible
+                  defaultOpen={communicationsPaths.some((p) => currentPath.startsWith(p))}
+                  className="group/collapsible"
+                >
+                  <SidebarMenuItem>
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuButton
+                        tooltip="Communications Center"
+                        isActive={communicationsPaths.some((p) => currentPath.startsWith(p))}
+                      >
+                        <MessageCircle className="mr-2 h-4 w-4" />
+                        {!collapsed && <span>Communications Center</span>}
+                        {!collapsed && (
+                          <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                        )}
+                      </SidebarMenuButton>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarMenuSub>
+                        {communicationsItems.map((sub) => (
+                          <SidebarMenuSubItem key={sub.url}>
+                            <SidebarMenuSubButton
+                              asChild
+                              isActive={isActive(sub.url)}
+                            >
+                              <Link to={sub.url}>
+                                <sub.icon className="mr-2 h-3.5 w-3.5" />
+                                <span>{sub.title}</span>
+                              </Link>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                        ))}
+                      </SidebarMenuSub>
+                    </CollapsibleContent>
+                  </SidebarMenuItem>
+                </Collapsible>
+              )}
+
+              {filteredMainAfterComms.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   {(
                     <SidebarMenuButton asChild isActive={isActive(item.url)}>

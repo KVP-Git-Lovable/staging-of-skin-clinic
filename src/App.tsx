@@ -49,6 +49,11 @@ const StaffManagement = lazyWithReload(() => import("./pages/StaffManagement"));
 const StaffDetail = lazyWithReload(() => import("./pages/StaffDetail"));
 const Campaigns = lazyWithReload(() => import("./pages/Campaigns"));
 const CampaignDetail = lazyWithReload(() => import("./pages/CampaignDetail"));
+const WhatsAppCenter = lazyWithReload(() => import("./pages/communications/WhatsAppCenter"));
+const VoiceCenter = lazyWithReload(() => import("./pages/communications/VoiceCenter"));
+const EmailCenter = lazyWithReload(() => import("./pages/communications/EmailCenter"));
+const JourneyBuilder = lazyWithReload(() => import("./pages/communications/JourneyBuilder"));
+const CommunicationsCalendar = lazyWithReload(() => import("./pages/communications/CommunicationsCalendar"));
 const PortalLanding = lazyWithReload(() => import("./pages/portal/PortalLanding"));
 const PortalLogin = lazyWithReload(() => import("./pages/portal/PortalLogin"));
 const Portal = lazyWithReload(() => import("./pages/portal/Portal"));
@@ -202,6 +207,11 @@ const App = () => (
                     <Route path="/dashboard-explore" element={<ProtectedRoute moduleKey="dashboard"><DashboardExplore /></ProtectedRoute>} />
                     <Route path="/campaigns" element={<ProtectedRoute moduleKey="campaigns"><Campaigns /></ProtectedRoute>} />
                     <Route path="/campaigns/:id" element={<ProtectedRoute moduleKey="campaigns"><CampaignDetail /></ProtectedRoute>} />
+                    <Route path="/communications/whatsapp" element={<ProtectedRoute moduleKey="communications"><WhatsAppCenter /></ProtectedRoute>} />
+                    <Route path="/communications/voice" element={<ProtectedRoute moduleKey="communications"><VoiceCenter /></ProtectedRoute>} />
+                    <Route path="/communications/email" element={<ProtectedRoute moduleKey="communications"><EmailCenter /></ProtectedRoute>} />
+                    <Route path="/communications/journeys" element={<ProtectedRoute moduleKey="communications"><JourneyBuilder /></ProtectedRoute>} />
+                    <Route path="/communications/calendar" element={<ProtectedRoute moduleKey="communications"><CommunicationsCalendar /></ProtectedRoute>} />
                     <Route path="/procedures" element={<ProtectedRoute moduleKey="procedures"><Procedures /></ProtectedRoute>} />
                     <Route path="/procedures/new" element={<ProtectedRoute moduleKey="procedures"><ProcedureNew /></ProtectedRoute>} />
                     <Route path="/pharma" element={<ProtectedRoute moduleKey="pharmacy"><Pharma /></ProtectedRoute>} />
