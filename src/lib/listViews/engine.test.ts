@@ -35,7 +35,7 @@ describe("birthday presets still ignore the year", () => {
     const dob = `1980-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const result = applyFilters(
       [{ n: "birthday this month", date_of_birth: dob }],
-      { match: "all", conditions: [{ field: "date_of_birth", operator: "this_month" }] },
+      { match: "all", conditions: [{ field: "date_of_birth", operator: "this_month", value: "" }] },
       fields,
     ).map((r) => r.n);
     expect(result).toContain("birthday this month");
