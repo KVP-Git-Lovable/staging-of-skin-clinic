@@ -239,10 +239,8 @@ function matchOne(row: any, c: FilterCondition, fields: FieldDef[], rawValue: Ra
       if (!c.value) return true;
       const target = startOfDay(new Date(c.value));
       if (isNaN(target.getTime())) return true;
-      if (def.anniversary) {
-        const occ = new Date(target.getFullYear(), d.getMonth(), d.getDate()).getTime();
-        return c.operator === "before" ? occ < target.getTime() : occ > target.getTime();
-      }
+      // Compares the real stored date even for birthday fields: "born before 1995" means the
+      // actual date of birth, not the birthday moved into the target's year.
       return c.operator === "before" ? dayValue < target.getTime() : dayValue > target.getTime();
     }
 
