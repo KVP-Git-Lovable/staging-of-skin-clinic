@@ -675,6 +675,335 @@ export type Database = {
         }
         Relationships: []
       }
+      comms_email_campaigns: {
+        Row: {
+          audience_config: Json | null
+          audience_snapshot_count: number | null
+          bounce_count: number
+          click_count: number
+          created_at: string
+          created_by: string | null
+          delivered_count: number
+          dropped_count: number
+          from_email: string | null
+          from_name: string | null
+          html: string | null
+          id: string
+          last_error: string | null
+          mailchimp_account_id: string | null
+          mailchimp_campaign_id: string | null
+          mailchimp_list_id: string | null
+          mailchimp_report_synced_at: string | null
+          mailchimp_segment_id: number | null
+          mailchimp_web_id: number | null
+          name: string
+          open_count: number
+          preview_text: string | null
+          processed_count: number
+          reply_to: string | null
+          scheduled_at: string | null
+          sent_count: number
+          spam_count: number
+          status: string
+          subject: string
+          timezone: string | null
+          unsubscribe_count: number
+          updated_at: string
+        }
+        Insert: {
+          audience_config?: Json | null
+          audience_snapshot_count?: number | null
+          bounce_count?: number
+          click_count?: number
+          created_at?: string
+          created_by?: string | null
+          delivered_count?: number
+          dropped_count?: number
+          from_email?: string | null
+          from_name?: string | null
+          html?: string | null
+          id?: string
+          last_error?: string | null
+          mailchimp_account_id?: string | null
+          mailchimp_campaign_id?: string | null
+          mailchimp_list_id?: string | null
+          mailchimp_report_synced_at?: string | null
+          mailchimp_segment_id?: number | null
+          mailchimp_web_id?: number | null
+          name: string
+          open_count?: number
+          preview_text?: string | null
+          processed_count?: number
+          reply_to?: string | null
+          scheduled_at?: string | null
+          sent_count?: number
+          spam_count?: number
+          status?: string
+          subject?: string
+          timezone?: string | null
+          unsubscribe_count?: number
+          updated_at?: string
+        }
+        Update: {
+          audience_config?: Json | null
+          audience_snapshot_count?: number | null
+          bounce_count?: number
+          click_count?: number
+          created_at?: string
+          created_by?: string | null
+          delivered_count?: number
+          dropped_count?: number
+          from_email?: string | null
+          from_name?: string | null
+          html?: string | null
+          id?: string
+          last_error?: string | null
+          mailchimp_account_id?: string | null
+          mailchimp_campaign_id?: string | null
+          mailchimp_list_id?: string | null
+          mailchimp_report_synced_at?: string | null
+          mailchimp_segment_id?: number | null
+          mailchimp_web_id?: number | null
+          name?: string
+          open_count?: number
+          preview_text?: string | null
+          processed_count?: number
+          reply_to?: string | null
+          scheduled_at?: string | null
+          sent_count?: number
+          spam_count?: number
+          status?: string
+          subject?: string
+          timezone?: string | null
+          unsubscribe_count?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_email_campaigns_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      comms_email_events: {
+        Row: {
+          campaign_id: string
+          created_at: string
+          event_key: string
+          event_timestamp: string
+          event_type: string
+          id: string
+          raw: Json | null
+          reason: string | null
+          recipient_email: string
+          url: string | null
+        }
+        Insert: {
+          campaign_id: string
+          created_at?: string
+          event_key: string
+          event_timestamp?: string
+          event_type: string
+          id?: string
+          raw?: Json | null
+          reason?: string | null
+          recipient_email: string
+          url?: string | null
+        }
+        Update: {
+          campaign_id?: string
+          created_at?: string
+          event_key?: string
+          event_timestamp?: string
+          event_type?: string
+          id?: string
+          raw?: Json | null
+          reason?: string | null
+          recipient_email?: string
+          url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_email_events_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "comms_email_campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      comms_email_recipients: {
+        Row: {
+          campaign_id: string
+          created_at: string
+          email: string
+          id: string
+          merge_vars: Json
+          patient_id: string | null
+          status: string
+        }
+        Insert: {
+          campaign_id: string
+          created_at?: string
+          email: string
+          id?: string
+          merge_vars?: Json
+          patient_id?: string | null
+          status?: string
+        }
+        Update: {
+          campaign_id?: string
+          created_at?: string
+          email?: string
+          id?: string
+          merge_vars?: Json
+          patient_id?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_email_recipients_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "comms_email_campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_email_recipients_patient_id_fkey"
+            columns: ["patient_id"]
+            isOneToOne: false
+            referencedRelation: "patients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      comms_email_suppressions: {
+        Row: {
+          campaign_id: string | null
+          created_at: string
+          email: string
+          id: string
+          reason: string | null
+        }
+        Insert: {
+          campaign_id?: string | null
+          created_at?: string
+          email: string
+          id?: string
+          reason?: string | null
+        }
+        Update: {
+          campaign_id?: string | null
+          created_at?: string
+          email?: string
+          id?: string
+          reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_email_suppressions_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "comms_email_campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      comms_email_templates: {
+        Row: {
+          category: string
+          created_at: string
+          created_by: string | null
+          html: string
+          id: string
+          name: string
+          preview_text: string | null
+          subject: string | null
+          thumbnail_url: string | null
+          updated_at: string
+        }
+        Insert: {
+          category?: string
+          created_at?: string
+          created_by?: string | null
+          html?: string
+          id?: string
+          name: string
+          preview_text?: string | null
+          subject?: string | null
+          thumbnail_url?: string | null
+          updated_at?: string
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          created_by?: string | null
+          html?: string
+          id?: string
+          name?: string
+          preview_text?: string | null
+          subject?: string | null
+          thumbnail_url?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_email_templates_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      comms_email_test_sends: {
+        Row: {
+          campaign_id: string
+          error_message: string | null
+          id: string
+          recipients: string[]
+          sent_at: string
+          sent_by: string | null
+          status: string
+        }
+        Insert: {
+          campaign_id: string
+          error_message?: string | null
+          id?: string
+          recipients?: string[]
+          sent_at?: string
+          sent_by?: string | null
+          status?: string
+        }
+        Update: {
+          campaign_id?: string
+          error_message?: string | null
+          id?: string
+          recipients?: string[]
+          sent_at?: string
+          sent_by?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_email_test_sends_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "comms_email_campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_email_test_sends_sent_by_fkey"
+            columns: ["sent_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       comms_journey_enrollments: {
         Row: {
           current_node_id: string | null
@@ -939,6 +1268,77 @@ export type Database = {
           {
             foreignKeyName: "comms_journeys_submitted_by_fkey"
             columns: ["submitted_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      comms_mailchimp_connection: {
+        Row: {
+          account_id: string | null
+          account_name: string | null
+          consent_confirmed_at: string | null
+          consent_confirmed_by: string | null
+          created_at: string
+          dc: string | null
+          default_list_id: string | null
+          default_list_name: string | null
+          id: string
+          last_error: string | null
+          last_ping_at: string | null
+          login_email: string | null
+          pricing_plan_type: string | null
+          status: string
+          total_subscribers: number | null
+          updated_at: string
+          webhook_id: string | null
+          webhook_secret: string | null
+        }
+        Insert: {
+          account_id?: string | null
+          account_name?: string | null
+          consent_confirmed_at?: string | null
+          consent_confirmed_by?: string | null
+          created_at?: string
+          dc?: string | null
+          default_list_id?: string | null
+          default_list_name?: string | null
+          id?: string
+          last_error?: string | null
+          last_ping_at?: string | null
+          login_email?: string | null
+          pricing_plan_type?: string | null
+          status?: string
+          total_subscribers?: number | null
+          updated_at?: string
+          webhook_id?: string | null
+          webhook_secret?: string | null
+        }
+        Update: {
+          account_id?: string | null
+          account_name?: string | null
+          consent_confirmed_at?: string | null
+          consent_confirmed_by?: string | null
+          created_at?: string
+          dc?: string | null
+          default_list_id?: string | null
+          default_list_name?: string | null
+          id?: string
+          last_error?: string | null
+          last_ping_at?: string | null
+          login_email?: string | null
+          pricing_plan_type?: string | null
+          status?: string
+          total_subscribers?: number | null
+          updated_at?: string
+          webhook_id?: string | null
+          webhook_secret?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_mailchimp_connection_consent_confirmed_by_fkey"
+            columns: ["consent_confirmed_by"]
             isOneToOne: false
             referencedRelation: "staff"
             referencedColumns: ["id"]

@@ -39,7 +39,10 @@ export function validateAudienceConfig(config: unknown): AudienceConfig {
   return { segments, combinator, primary: c?.primary === "B" ? "B" : "A" };
 }
 
-export async function resolveAudience(admin: SupabaseClient, rawConfig: unknown): Promise<ResolvedAudience> {
+export type PatientSet = { patients: PatientRow[]; perSegment: Record<string, number> };
+
+/** Every patient matched by the segments (after the combinator), with no contact-detail filtering. */
+export async function resolvePatientSet(admin: SupabaseClient, rawConfig: unknown): Promise<PatientSet> {
   const config = validateAudienceConfig(rawConfig);
   const patients = await loadAllPatients(admin);
 
@@ -76,8 +79,11 @@ export async function resolveAudience(admin: SupabaseClient, rawConfig: unknown)
       ids = new Set([...keep].filter((x) => !drop.has(x)));
     } else ids = new Set([...a, ...b]);
   }
+  return { patients: patients.filter((p) => ids.has(p.id)), perSegment };
+}
 
-  const picked = patients.filter((p) => ids.has(p.id));
+export async function resolveAudience(admin: SupabaseClient, rawConfig: unknown): Promise<ResolvedAudience> {
+  const { patients: picked, perSegment } = await resolvePatientSet(admin, rawConfig);
   const reachable: ResolvedAudience["patients"] = [];
   for (const p of picked) {
     const phone = toE164IN(p.phone);

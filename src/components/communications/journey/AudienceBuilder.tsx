@@ -33,12 +33,19 @@ export function usePatientViews() {
 
 type Preview = { per_segment: Record<string, number>; total: number; without_phone: number };
 
+type PreviewFn = (config: AudienceConfig) => Promise<{ per_segment: Record<string, number>; total: number; skipped: number }>;
+
 export function AudienceBuilder({
   value,
   onChange,
+  previewAction,
+  contactNoun = "with a valid phone",
 }: {
   value: AudienceConfig | null;
   onChange: (config: AudienceConfig | null) => void;
+  /** Override how the live count is fetched (defaults to the journey audience preview). */
+  previewAction?: PreviewFn;
+  contactNoun?: string;
 }) {
   const { data: views = [], isLoading } = usePatientViews();
   const segments = value?.segments ?? [];
@@ -72,7 +79,12 @@ export function AudienceBuilder({
     setLoadingPreview(true);
     const timer = setTimeout(async () => {
       try {
-        setPreview(await invokeJourneyActions<Preview>({ action: "audience-preview", audience_config: value }));
+        if (previewAction) {
+          const r = await previewAction(value!);
+          setPreview({ per_segment: r.per_segment, total: r.total, without_phone: r.skipped });
+        } else {
+          setPreview(await invokeJourneyActions<Preview>({ action: "audience-preview", audience_config: value }));
+        }
       } catch (e) {
         setPreviewError(e instanceof Error ? e.message : "Preview failed");
       } finally {
@@ -162,8 +174,8 @@ export function AudienceBuilder({
                 <p key={s.key} className="text-muted-foreground">{s.key}: {s.label} — {preview.per_segment[s.key] ?? 0} patients</p>
               ))}
               <p className="font-medium">
-                Final audience: {preview.total} patient{preview.total === 1 ? "" : "s"} with a valid phone
-                {preview.without_phone > 0 && <span className="font-normal text-muted-foreground"> ({preview.without_phone} skipped, no usable phone)</span>}
+                Final audience: {preview.total} patient{preview.total === 1 ? "" : "s"} {contactNoun}
+                {preview.without_phone > 0 && <span className="font-normal text-muted-foreground"> ({preview.without_phone} skipped)</span>}
               </p>
             </div>
           ) : null}
