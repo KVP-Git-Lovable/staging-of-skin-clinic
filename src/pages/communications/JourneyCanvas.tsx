@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -8,7 +8,9 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
+  useNodesInitialized,
   useNodesState,
+  useReactFlow,
   type Connection,
   type Edge,
   type Node,
@@ -76,6 +78,16 @@ function Canvas({ journey }: { journey: Journey }) {
   const [showSchedule, setShowSchedule] = useState(false);
   const [showSubmit, setShowSubmit] = useState(false);
   const [showActivate, setShowActivate] = useState(false);
+
+  // Frame the steps once when the journey opens, then back off 25% from fitView's zoom.
+  const { fitView, getZoom, zoomTo } = useReactFlow();
+  const nodesInitialized = useNodesInitialized();
+  const framed = useRef(false);
+  useEffect(() => {
+    if (!nodesInitialized || framed.current) return;
+    framed.current = true;
+    fitView({ duration: 0 }).then(() => zoomTo(getZoom() * 0.75, { duration: 0 }));
+  }, [nodesInitialized, fitView, getZoom, zoomTo]);
 
   const locked = journey.status === "active" || journey.approval_status === "pending";
 
@@ -226,7 +238,7 @@ function Canvas({ journey }: { journey: Journey }) {
             </div>
           )}
           <div className="h-[62vh] rounded-lg border bg-card">
-            <JourneyCanvasContext.Provider value={{ audienceText: audienceSummary(journey.audience_config) }}>
+            <JourneyCanvasContext.Provider value={{ audienceText: audienceSummary(journey.audience_config), audienceConfig: journey.audience_config }}>
               <ReactFlow
                 nodes={nodes}
                 edges={edges}
@@ -246,7 +258,6 @@ function Canvas({ journey }: { journey: Journey }) {
                 nodesConnectable={!locked}
                 edgesReconnectable={false}
                 deleteKeyCode={locked ? null : ["Backspace", "Delete"]}
-                fitView
               >
                 <Background />
                 <Controls showInteractive={false} />

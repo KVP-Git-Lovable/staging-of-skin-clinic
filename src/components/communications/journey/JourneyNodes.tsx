@@ -1,11 +1,21 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { Clock, GitFork, MessageCircle, Square, Users } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Clock, Eye, GitFork, GitMerge, MessageCircle, Square, Users } from "lucide-react";
+import { AudiencePreviewDialog } from "@/components/communications/journey/AudiencePreviewDialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { DECISION_LABELS, type JourneyNodeData } from "@/lib/comms/journeyGraph";
+import { invokeJourneyActions, type AudienceConfig } from "@/lib/comms/journeys";
 
 // Entry reads the audience from the journey row, so the canvas passes it down through context.
-export const JourneyCanvasContext = createContext<{ audienceText: string }>({ audienceText: "—" });
+export const JourneyCanvasContext = createContext<{ audienceText: string; audienceConfig: AudienceConfig | null }>({
+  audienceText: "—",
+  audienceConfig: null,
+});
+
+const COMBINATOR_SYMBOL = { union: "A ∪ B", intersection: "A ∩ B", difference: "A − B" } as const;
 
 function Shell({
   selected,
@@ -34,14 +44,58 @@ function Shell({
 const handleCls = "!h-2.5 !w-2.5 !bg-primary";
 
 export function EntryNode({ data, selected }: NodeProps) {
-  const { audienceText } = useContext(JourneyCanvasContext);
+  const { audienceText, audienceConfig } = useContext(JourneyCanvasContext);
   const d = data as JourneyNodeData;
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const segments = audienceConfig?.segments ?? [];
+  const hasAudience = segments.length > 0;
+
+  const { data: count } = useQuery({
+    queryKey: ["comms-audience-count", JSON.stringify(audienceConfig)],
+    enabled: hasAudience,
+    staleTime: 60_000,
+    retry: false,
+    queryFn: () => invokeJourneyActions<{ total: number }>({ action: "audience-preview", audience_config: audienceConfig }),
+  });
+
+  const openPreview = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPreviewOpen(true);
+  };
+
   return (
     <>
       <Shell selected={selected} tone="bg-primary/10 text-primary" icon={Users} title={d.label || "Audience"}>
-        <p className="line-clamp-2">{audienceText}</p>
+        {hasAudience ? (
+          <div className="space-y-1.5">
+            {segments.length > 1 && (
+              <div className="flex items-center gap-1.5">
+                <GitMerge className="h-3 w-3" />
+                <span>Combine:</span>
+                <span className="font-medium text-foreground">{COMBINATOR_SYMBOL[audienceConfig!.combinator]}</span>
+              </div>
+            )}
+            {segments.map((s) => (
+              <div key={s.key} className="flex items-center gap-1.5 text-[11px]">
+                <Badge variant="outline" className="px-1 py-0 font-mono text-[9px]">{s.key}</Badge>
+                <span className="truncate" title={s.label}>{s.label}</span>
+              </div>
+            ))}
+            {typeof count?.total === "number" && (
+              <Badge variant="secondary" className="cursor-pointer text-[10px]" onClick={openPreview}>
+                {count.total} patient{count.total === 1 ? "" : "s"}
+              </Badge>
+            )}
+            <Button variant="ghost" size="sm" className="nodrag h-7 w-full px-2 text-xs" onClick={openPreview}>
+              <Eye className="mr-1 h-3 w-3" /> Preview Audience
+            </Button>
+          </div>
+        ) : (
+          <p className="line-clamp-2">{audienceText}</p>
+        )}
       </Shell>
       <Handle type="source" position={Position.Bottom} className={handleCls} />
+      {hasAudience && <AudiencePreviewDialog open={previewOpen} onOpenChange={setPreviewOpen} audienceConfig={audienceConfig} />}
     </>
   );
 }

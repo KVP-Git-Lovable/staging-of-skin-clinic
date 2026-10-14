@@ -28,7 +28,24 @@ Deno.serve(async (req) => {
   try {
     if (action === "audience-preview") {
       const r = await resolveAudience(admin, body.audience_config);
-      return json({ per_segment: r.perSegment, total: r.total, without_phone: r.withoutPhone });
+      const result: Record<string, unknown> = { per_segment: r.perSegment, total: r.total, without_phone: r.withoutPhone };
+      if (body.include_rows === true) {
+        // Staff whose role is limited to their own records see counts only, never other patients' details.
+        const { data: roleRow } = await admin.from("staff").select("user_roles_config(data_scope)").eq("id", me).maybeSingle();
+        const scope = (roleRow?.user_roles_config as { data_scope?: string } | null)?.data_scope;
+        result.can_view_rows = scope !== "own";
+        if (result.can_view_rows) {
+          result.rows = r.patients.slice(0, 50).map((p) => ({
+            id: p.id,
+            name: `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim(),
+            phone: p.phone ?? null,
+            email: p.email ?? null,
+            date_of_birth: p.date_of_birth ?? null,
+            city: p.city ?? null,
+          }));
+        }
+      }
+      return json(result);
     }
 
     const journey = await loadJourney();
