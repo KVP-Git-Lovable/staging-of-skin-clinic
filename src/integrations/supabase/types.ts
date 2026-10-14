@@ -698,7 +698,7 @@ export type Database = {
         Insert: {
           body: string
           category: string
-          content_type: string
+          content_type?: string
           created_at?: string
           created_by?: string | null
           cta_actions?: Json | null
