@@ -771,17 +771,17 @@ export type Database = {
         }
         Relationships: [
           {
-            foreignKeyName: "comms_journey_message_log_journey_id_fkey"
-            columns: ["journey_id"]
-            isOneToOne: false
-            referencedRelation: "comms_journeys"
-            referencedColumns: ["id"]
-          },
-          {
             foreignKeyName: "comms_journey_message_log_enrollment_id_fkey"
             columns: ["enrollment_id"]
             isOneToOne: false
             referencedRelation: "comms_journey_enrollments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_journey_message_log_journey_id_fkey"
+            columns: ["journey_id"]
+            isOneToOne: false
+            referencedRelation: "comms_journeys"
             referencedColumns: ["id"]
           },
           {
@@ -851,17 +851,17 @@ export type Database = {
         }
         Relationships: [
           {
-            foreignKeyName: "comms_journey_schedules_journey_id_fkey"
-            columns: ["journey_id"]
-            isOneToOne: true
-            referencedRelation: "comms_journeys"
-            referencedColumns: ["id"]
-          },
-          {
             foreignKeyName: "comms_journey_schedules_created_by_fkey"
             columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_journey_schedules_journey_id_fkey"
+            columns: ["journey_id"]
+            isOneToOne: true
+            referencedRelation: "comms_journeys"
             referencedColumns: ["id"]
           },
         ]

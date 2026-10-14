@@ -8,6 +8,13 @@
       "when": 1791956334744,
       "tag": "0000_create_comms_whatsapp_templates",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791960115053,
+      "tag": "0001_create_comms_journeys",
+      "breakpoints": true
     }
   ]
 }
