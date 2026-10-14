@@ -675,6 +675,276 @@ export type Database = {
         }
         Relationships: []
       }
+      comms_journey_enrollments: {
+        Row: {
+          current_node_id: string | null
+          enrolled_at: string
+          id: string
+          journey_id: string
+          next_action_at: string | null
+          patient_id: string
+          retry_count: number
+          status: string
+        }
+        Insert: {
+          current_node_id?: string | null
+          enrolled_at?: string
+          id?: string
+          journey_id: string
+          next_action_at?: string | null
+          patient_id: string
+          retry_count?: number
+          status?: string
+        }
+        Update: {
+          current_node_id?: string | null
+          enrolled_at?: string
+          id?: string
+          journey_id?: string
+          next_action_at?: string | null
+          patient_id?: string
+          retry_count?: number
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_journey_enrollments_journey_id_fkey"
+            columns: ["journey_id"]
+            isOneToOne: false
+            referencedRelation: "comms_journeys"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_journey_enrollments_patient_id_fkey"
+            columns: ["patient_id"]
+            isOneToOne: false
+            referencedRelation: "patients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      comms_journey_message_log: {
+        Row: {
+          channel: string
+          delivery_status: string | null
+          enrollment_id: string | null
+          error_code: string | null
+          error_message: string | null
+          id: string
+          journey_id: string
+          node_id: string | null
+          patient_id: string | null
+          sent_at: string
+          status: string
+          template_id: string | null
+          twilio_message_sid: string | null
+        }
+        Insert: {
+          channel?: string
+          delivery_status?: string | null
+          enrollment_id?: string | null
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          journey_id: string
+          node_id?: string | null
+          patient_id?: string | null
+          sent_at?: string
+          status?: string
+          template_id?: string | null
+          twilio_message_sid?: string | null
+        }
+        Update: {
+          channel?: string
+          delivery_status?: string | null
+          enrollment_id?: string | null
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          journey_id?: string
+          node_id?: string | null
+          patient_id?: string | null
+          sent_at?: string
+          status?: string
+          template_id?: string | null
+          twilio_message_sid?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_journey_message_log_journey_id_fkey"
+            columns: ["journey_id"]
+            isOneToOne: false
+            referencedRelation: "comms_journeys"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_journey_message_log_enrollment_id_fkey"
+            columns: ["enrollment_id"]
+            isOneToOne: false
+            referencedRelation: "comms_journey_enrollments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_journey_message_log_patient_id_fkey"
+            columns: ["patient_id"]
+            isOneToOne: false
+            referencedRelation: "patients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_journey_message_log_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "comms_whatsapp_templates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      comms_journey_schedules: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          day_of_month: number | null
+          days_of_week: number[] | null
+          execution_date: string | null
+          execution_time: string | null
+          frequency: string | null
+          id: string
+          journey_id: string
+          month_of_quarter: number | null
+          next_run_at: string | null
+          timezone: string
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          day_of_month?: number | null
+          days_of_week?: number[] | null
+          execution_date?: string | null
+          execution_time?: string | null
+          frequency?: string | null
+          id?: string
+          journey_id: string
+          month_of_quarter?: number | null
+          next_run_at?: string | null
+          timezone?: string
+          type: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          day_of_month?: number | null
+          days_of_week?: number[] | null
+          execution_date?: string | null
+          execution_time?: string | null
+          frequency?: string | null
+          id?: string
+          journey_id?: string
+          month_of_quarter?: number | null
+          next_run_at?: string | null
+          timezone?: string
+          type?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_journey_schedules_journey_id_fkey"
+            columns: ["journey_id"]
+            isOneToOne: true
+            referencedRelation: "comms_journeys"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_journey_schedules_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      comms_journeys: {
+        Row: {
+          approval_notes: string | null
+          approval_status: string
+          approved_at: string | null
+          approver_id: string | null
+          audience_config: Json | null
+          canvas_data: Json
+          created_at: string
+          created_by: string | null
+          description: string | null
+          id: string
+          name: string
+          rejection_reason: string | null
+          status: string
+          submitted_at: string | null
+          submitted_by: string | null
+          updated_at: string
+        }
+        Insert: {
+          approval_notes?: string | null
+          approval_status?: string
+          approved_at?: string | null
+          approver_id?: string | null
+          audience_config?: Json | null
+          canvas_data?: Json
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          name: string
+          rejection_reason?: string | null
+          status?: string
+          submitted_at?: string | null
+          submitted_by?: string | null
+          updated_at?: string
+        }
+        Update: {
+          approval_notes?: string | null
+          approval_status?: string
+          approved_at?: string | null
+          approver_id?: string | null
+          audience_config?: Json | null
+          canvas_data?: Json
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          name?: string
+          rejection_reason?: string | null
+          status?: string
+          submitted_at?: string | null
+          submitted_by?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_journeys_approver_id_fkey"
+            columns: ["approver_id"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_journeys_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_journeys_submitted_by_fkey"
+            columns: ["submitted_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       comms_whatsapp_templates: {
         Row: {
           body: string

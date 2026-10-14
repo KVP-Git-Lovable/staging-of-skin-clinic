@@ -53,6 +53,7 @@ const WhatsAppCenter = lazyWithReload(() => import("./pages/communications/Whats
 const WhatsAppConfig = lazyWithReload(() => import("./pages/communications/WhatsAppConfig"));
 const WhatsAppTemplates = lazyWithReload(() => import("./pages/communications/WhatsAppTemplates"));
 const WhatsAppConversations = lazyWithReload(() => import("./pages/communications/WhatsAppConversations"));
+const JourneyCanvas = lazyWithReload(() => import("./pages/communications/JourneyCanvas"));
 const VoiceCenter = lazyWithReload(() => import("./pages/communications/VoiceCenter"));
 const EmailCenter = lazyWithReload(() => import("./pages/communications/EmailCenter"));
 const JourneyBuilder = lazyWithReload(() => import("./pages/communications/JourneyBuilder"));
@@ -214,6 +215,7 @@ const App = () => (
                     <Route path="/communications/whatsapp/config" element={<ProtectedRoute moduleKey="communications"><WhatsAppConfig /></ProtectedRoute>} />
                     <Route path="/communications/whatsapp/templates" element={<ProtectedRoute moduleKey="communications"><WhatsAppTemplates /></ProtectedRoute>} />
                     <Route path="/communications/whatsapp/conversations" element={<ProtectedRoute moduleKey="communications"><WhatsAppConversations /></ProtectedRoute>} />
+                    <Route path="/communications/journeys/:id" element={<ProtectedRoute moduleKey="communications"><JourneyCanvas /></ProtectedRoute>} />
                     <Route path="/communications/voice" element={<ProtectedRoute moduleKey="communications"><VoiceCenter /></ProtectedRoute>} />
                     <Route path="/communications/email" element={<ProtectedRoute moduleKey="communications"><EmailCenter /></ProtectedRoute>} />
                     <Route path="/communications/journeys" element={<ProtectedRoute moduleKey="communications"><JourneyBuilder /></ProtectedRoute>} />
