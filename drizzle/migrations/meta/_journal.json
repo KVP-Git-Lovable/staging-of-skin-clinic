@@ -15,6 +15,13 @@
       "when": 1791960115053,
       "tag": "0001_create_comms_journeys",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791974400480,
+      "tag": "0002_create_comms_email_marketing",
+      "breakpoints": true
     }
   ]
 }
