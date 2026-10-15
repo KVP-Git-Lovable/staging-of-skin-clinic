@@ -58,15 +58,14 @@ Deno.serve(async (req) => {
 
       const approverId = String(body.approver_id ?? "");
       if (!approverId) return json({ error: "Choose an approver" }, 400);
-      if (approverId === me) return json({ error: "Choose someone other than yourself to approve" }, 400);
-      const { data: approver } = await admin
-        .from("staff")
-        .select("id, is_active, user_roles_config(name)")
-        .eq("id", approverId)
-        .maybeSingle();
-      const roleName = (approver?.user_roles_config as { name?: string } | null)?.name ?? "";
-      if (!approver || approver.is_active === false || !APPROVER_ROLE.test(roleName)) {
-        return json({ error: "That person cannot approve journeys" }, 400);
+      const { data: staffRows } = await admin.from("staff").select("id, is_active, user_roles_config(name)");
+      const eligible = (staffRows ?? [])
+        .filter((r) => r.is_active !== false && APPROVER_ROLE.test((r.user_roles_config as { name?: string } | null)?.name ?? ""))
+        .map((r) => r.id as string);
+      if (!eligible.includes(approverId)) return json({ error: "That person cannot approve journeys" }, 400);
+      // Self-approval is only a fallback for a clinic with no other admin or manager to ask.
+      if (approverId === me && eligible.some((id) => id !== me)) {
+        return json({ error: "Choose someone other than yourself to approve" }, 400);
       }
 
       validateAudienceConfig(journey.audience_config);

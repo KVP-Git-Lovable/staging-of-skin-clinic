@@ -35,7 +35,11 @@ export function SubmitApprovalDialog({
 
   const problems = journey ? validateCanvas(parseCanvas(journey.canvas_data)) : [];
   const noAudience = !journey?.audience_config?.segments?.length;
-  const options = approvers.filter((a) => a.id !== staffProfile?.id).map((a) => ({ id: a.id, name: `${a.name} · ${a.roleName}` }));
+  const others = approvers.filter((a) => a.id !== staffProfile?.id);
+  const me = approvers.find((a) => a.id === staffProfile?.id);
+  // With no other admin or manager, the submitter (if eligible) may approve their own journey.
+  const selfOnly = others.length === 0 && !!me;
+  const options = (selfOnly ? [me!] : others).map((a) => ({ id: a.id, name: `${a.name} · ${a.roleName}${a.id === staffProfile?.id ? " (you)" : ""}` }));
 
   const submit = useMutation({
     mutationFn: () => invokeJourneyActions({ action: "submit-for-approval", journey_id: journey!.id, approver_id: approverId, notes }),
@@ -77,6 +81,11 @@ export function SubmitApprovalDialog({
               </ul>
             )}
 
+            {selfOnly && (
+              <p className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                There is no other admin or manager, so you can be the approver. After submitting, open View Approvals to approve it.
+              </p>
+            )}
             <div>
               <Label>Approver</Label>
               <div className="mt-1.5">
@@ -86,7 +95,7 @@ export function SubmitApprovalDialog({
                   options={options}
                   placeholder="Select an approver"
                   searchPlaceholder="Search staff…"
-                  emptyText="No other admin or manager is available"
+                  emptyText="No admin or manager is available to approve"
                 />
               </div>
             </div>
