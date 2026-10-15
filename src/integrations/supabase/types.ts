@@ -2203,6 +2203,82 @@ export type Database = {
           },
         ]
       }
+      leads: {
+        Row: {
+          city: string | null
+          converted_patient_id: string | null
+          created_at: string
+          created_by: string | null
+          email: string | null
+          id: string
+          interest: string | null
+          name: string
+          notes: string | null
+          owner_id: string | null
+          phone: string
+          source: string | null
+          source_ref: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          city?: string | null
+          converted_patient_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          email?: string | null
+          id?: string
+          interest?: string | null
+          name: string
+          notes?: string | null
+          owner_id?: string | null
+          phone: string
+          source?: string | null
+          source_ref?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          city?: string | null
+          converted_patient_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          email?: string | null
+          id?: string
+          interest?: string | null
+          name?: string
+          notes?: string | null
+          owner_id?: string | null
+          phone?: string
+          source?: string | null
+          source_ref?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "leads_converted_patient_id_fkey"
+            columns: ["converted_patient_id"]
+            isOneToOne: false
+            referencedRelation: "patients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "leads_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "leads_owner_id_fkey"
+            columns: ["owner_id"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       leave_applications: {
         Row: {
           approved_by: string | null
@@ -2294,82 +2370,6 @@ export type Database = {
         }
         Relationships: []
       }
-      leads: {
-        Row: {
-          city: string | null
-          converted_patient_id: string | null
-          created_at: string
-          created_by: string | null
-          email: string | null
-          id: string
-          interest: string | null
-          name: string
-          notes: string | null
-          owner_id: string | null
-          phone: string
-          source: string | null
-          source_ref: string | null
-          status: string
-          updated_at: string
-        }
-        Insert: {
-          city?: string | null
-          converted_patient_id?: string | null
-          created_at?: string
-          created_by?: string | null
-          email?: string | null
-          id?: string
-          interest?: string | null
-          name: string
-          notes?: string | null
-          owner_id?: string | null
-          phone: string
-          source?: string | null
-          source_ref?: string | null
-          status?: string
-          updated_at?: string
-        }
-        Update: {
-          city?: string | null
-          converted_patient_id?: string | null
-          created_at?: string
-          created_by?: string | null
-          email?: string | null
-          id?: string
-          interest?: string | null
-          name?: string
-          notes?: string | null
-          owner_id?: string | null
-          phone?: string
-          source?: string | null
-          source_ref?: string | null
-          status?: string
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "leads_converted_patient_id_fkey"
-            columns: ["converted_patient_id"]
-            isOneToOne: false
-            referencedRelation: "patients"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "leads_created_by_fkey"
-            columns: ["created_by"]
-            isOneToOne: false
-            referencedRelation: "staff"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "leads_owner_id_fkey"
-            columns: ["owner_id"]
-            isOneToOne: false
-            referencedRelation: "staff"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       list_views: {
         Row: {
           charts: Json
@@ -2424,6 +2424,96 @@ export type Database = {
           updated_at?: string
           user_id?: string
           visibility?: string
+        }
+        Relationships: []
+      }
+      meta_api_diagnostic_test_objects: {
+        Row: {
+          ad_account_id: string | null
+          cleaned_up_at: string | null
+          connection_id: string | null
+          created_at: string
+          external_id: string
+          id: string
+          name: string | null
+          object_type: string
+          user_id: string | null
+        }
+        Insert: {
+          ad_account_id?: string | null
+          cleaned_up_at?: string | null
+          connection_id?: string | null
+          created_at?: string
+          external_id: string
+          id?: string
+          name?: string | null
+          object_type: string
+          user_id?: string | null
+        }
+        Update: {
+          ad_account_id?: string | null
+          cleaned_up_at?: string | null
+          connection_id?: string | null
+          created_at?: string
+          external_id?: string
+          id?: string
+          name?: string | null
+          object_type?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      meta_api_diagnostics: {
+        Row: {
+          ad_account_id: string | null
+          connection_id: string | null
+          created_at: string
+          duration_ms: number | null
+          endpoint: string | null
+          http_method: string
+          http_status: number | null
+          id: string
+          meta_error_code: string | null
+          meta_error_message: string | null
+          records_returned: number | null
+          status: string
+          test_category: string
+          test_name: string
+          user_id: string | null
+        }
+        Insert: {
+          ad_account_id?: string | null
+          connection_id?: string | null
+          created_at?: string
+          duration_ms?: number | null
+          endpoint?: string | null
+          http_method?: string
+          http_status?: number | null
+          id?: string
+          meta_error_code?: string | null
+          meta_error_message?: string | null
+          records_returned?: number | null
+          status: string
+          test_category: string
+          test_name: string
+          user_id?: string | null
+        }
+        Update: {
+          ad_account_id?: string | null
+          connection_id?: string | null
+          created_at?: string
+          duration_ms?: number | null
+          endpoint?: string | null
+          http_method?: string
+          http_status?: number | null
+          id?: string
+          meta_error_code?: string | null
+          meta_error_message?: string | null
+          records_returned?: number | null
+          status?: string
+          test_category?: string
+          test_name?: string
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -4244,98 +4334,6 @@ export type Database = {
         }
         Relationships: []
       }
-      meta_api_diagnostic_test_objects: {
-        Row: {
-          ad_account_id: string | null
-          cleaned_up_at: string | null
-          connection_id: string | null
-          created_at: string
-          external_id: string
-          id: string
-          name: string | null
-          object_type: string
-          user_id: string | null
-        }
-        Insert: {
-          ad_account_id?: string | null
-          cleaned_up_at?: string | null
-          connection_id?: string | null
-          created_at?: string
-          external_id: string
-          id?: string
-          name?: string | null
-          object_type: string
-          user_id?: string | null
-        }
-        Update: {
-          ad_account_id?: string | null
-          cleaned_up_at?: string | null
-          connection_id?: string | null
-          created_at?: string
-          external_id?: string
-          id?: string
-          name?: string | null
-          object_type?: string
-          user_id?: string | null
-        }
-        Relationships: []
-      }
-
-      meta_api_diagnostics: {
-        Row: {
-          ad_account_id: string | null
-          connection_id: string | null
-          created_at: string
-          duration_ms: number | null
-          endpoint: string | null
-          http_method: string
-          http_status: number | null
-          id: string
-          meta_error_code: string | null
-          meta_error_message: string | null
-          records_returned: number | null
-          status: string
-          test_category: string
-          test_name: string
-          user_id: string | null
-        }
-        Insert: {
-          ad_account_id?: string | null
-          connection_id?: string | null
-          created_at?: string
-          duration_ms?: number | null
-          endpoint?: string | null
-          http_method?: string
-          http_status?: number | null
-          id?: string
-          meta_error_code?: string | null
-          meta_error_message?: string | null
-          records_returned?: number | null
-          status: string
-          test_category: string
-          test_name: string
-          user_id?: string | null
-        }
-        Update: {
-          ad_account_id?: string | null
-          connection_id?: string | null
-          created_at?: string
-          duration_ms?: number | null
-          endpoint?: string | null
-          http_method?: string
-          http_status?: number | null
-          id?: string
-          meta_error_code?: string | null
-          meta_error_message?: string | null
-          records_returned?: number | null
-          status?: string
-          test_category?: string
-          test_name?: string
-          user_id?: string | null
-        }
-        Relationships: []
-      }
-
       social_ad_accounts: {
         Row: {
           account_status: string | null
@@ -4383,7 +4381,6 @@ export type Database = {
           },
         ]
       }
-
       social_ad_sets: {
         Row: {
           bid_amount: number | null
@@ -4480,7 +4477,6 @@ export type Database = {
           },
         ]
       }
-
       social_ads: {
         Row: {
           ad_set_id: string
@@ -4570,7 +4566,6 @@ export type Database = {
           },
         ]
       }
-
       social_campaigns: {
         Row: {
           ad_account_id: string | null
@@ -4657,7 +4652,6 @@ export type Database = {
           },
         ]
       }
-
       social_connections: {
         Row: {
           access_token_enc: string | null
@@ -4724,7 +4718,6 @@ export type Database = {
         }
         Relationships: []
       }
-
       social_custom_audiences: {
         Row: {
           ad_account_id: string
@@ -4794,7 +4787,6 @@ export type Database = {
         }
         Relationships: []
       }
-
       social_insights: {
         Row: {
           clicks: number
@@ -4855,7 +4847,6 @@ export type Database = {
         }
         Relationships: []
       }
-
       social_lead_forms: {
         Row: {
           block_display_for_non_targeted_viewer: boolean
@@ -4931,7 +4922,6 @@ export type Database = {
         }
         Relationships: []
       }
-
       social_lead_submissions: {
         Row: {
           ad_external_id: string | null
@@ -4972,9 +4962,16 @@ export type Database = {
           lead_id?: string | null
           platform?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "social_lead_submissions_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
       }
-
       social_pages: {
         Row: {
           category: string | null
@@ -5028,7 +5025,6 @@ export type Database = {
           },
         ]
       }
-
       social_posts: {
         Row: {
           connection_id: string | null
