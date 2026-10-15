@@ -34,6 +34,9 @@ import {
   Phone,
   Mail,
   Workflow,
+  Target,
+  Share2,
+  Link2,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Link, useLocation } from "react-router-dom";
@@ -77,6 +80,7 @@ const mainItems = [
   { title: "Reports", url: "/reports", icon: BarChart3, moduleKey: "reports" },
   { title: "Report Builder", url: "/report-builder", icon: FileBarChart, moduleKey: "report_builder" },
   { title: "Dashboards", url: "/dashboards", icon: LayoutDashboard, moduleKey: "dashboards" },
+  { title: "Leads", url: "/leads", icon: Target, moduleKey: "leads" },
   { title: "Campaigns", url: "/campaigns", icon: Megaphone, moduleKey: "campaigns" },
 ];
 
@@ -86,6 +90,8 @@ const communicationsItems = [
   { title: "Email", url: "/communications/email", icon: Mail },
   { title: "Journey Builder", url: "/communications/journeys", icon: Workflow },
   { title: "Calendar", url: "/communications/calendar", icon: CalendarDays },
+  { title: "Meta", url: "/communications/meta", icon: Share2, moduleKey: "meta" },
+  { title: "Meta Connection", url: "/communications/meta/connection", icon: Link2, moduleKey: "meta_connection" },
 ];
 
 const employeesSubItems = [
@@ -227,7 +233,12 @@ export function AppSidebar() {
                           <SidebarMenuSubItem key={sub.url}>
                             <SidebarMenuSubButton
                               asChild
-                              isActive={isActive(sub.url)}
+                              isActive={
+                                // The Meta hub owns every /communications/meta/* page except its Connection page.
+                                sub.url === "/communications/meta"
+                                  ? isActive(sub.url) && !currentPath.startsWith("/communications/meta/connection")
+                                  : isActive(sub.url)
+                              }
                             >
                               <Link to={sub.url}>
                                 <sub.icon className="mr-2 h-3.5 w-3.5" />

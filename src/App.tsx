@@ -47,6 +47,7 @@ const TaxMaster = lazyWithReload(() => import("./pages/TaxMaster"));
 const Expenses = lazyWithReload(() => import("./pages/Expenses"));
 const StaffManagement = lazyWithReload(() => import("./pages/StaffManagement"));
 const StaffDetail = lazyWithReload(() => import("./pages/StaffDetail"));
+const Leads = lazyWithReload(() => import("./pages/Leads"));
 const Campaigns = lazyWithReload(() => import("./pages/Campaigns"));
 const CampaignDetail = lazyWithReload(() => import("./pages/CampaignDetail"));
 const WhatsAppCenter = lazyWithReload(() => import("./pages/communications/WhatsAppCenter"));
@@ -60,6 +61,16 @@ const VoiceCenter = lazyWithReload(() => import("./pages/communications/VoiceCen
 const EmailCenter = lazyWithReload(() => import("./pages/communications/EmailCenter"));
 const JourneyBuilder = lazyWithReload(() => import("./pages/communications/JourneyBuilder"));
 const CommunicationsCalendar = lazyWithReload(() => import("./pages/communications/CommunicationsCalendar"));
+const MetaHub = lazyWithReload(() => import("./pages/communications/meta/MetaHub"));
+const MetaConnection = lazyWithReload(() => import("./pages/communications/meta/MetaConnection"));
+const MetaMarketing = lazyWithReload(() => import("./pages/communications/meta/MetaMarketing"));
+const MetaCampaigns = lazyWithReload(() => import("./pages/communications/meta/MetaCampaigns"));
+const MetaAdSets = lazyWithReload(() => import("./pages/communications/meta/MetaAdSets"));
+const MetaAds = lazyWithReload(() => import("./pages/communications/meta/MetaAds"));
+const AdPerformance = lazyWithReload(() => import("./pages/communications/meta/AdPerformance"));
+const MetaOrganicPosts = lazyWithReload(() => import("./pages/communications/meta/MetaOrganicPosts"));
+const MetaDiagnostics = lazyWithReload(() => import("./pages/communications/meta/MetaDiagnostics"));
+const OAuthResult = lazyWithReload(() => import("./pages/auth/OAuthResult"));
 const PortalLanding = lazyWithReload(() => import("./pages/portal/PortalLanding"));
 const PortalLogin = lazyWithReload(() => import("./pages/portal/PortalLogin"));
 const Portal = lazyWithReload(() => import("./pages/portal/Portal"));
@@ -174,6 +185,8 @@ const App = () => (
             {/* Auth pages */}
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
+            {/* Popup landing for the Meta connect flow; reads the result from the URL fragment */}
+            <Route path="/oauth/result" element={<OAuthResult />} />
 
             {/* Public Shop — own layout */}
             <Route path="/shop" element={<ShopLayout />}>
@@ -211,6 +224,7 @@ const App = () => (
                     <Route path="/dashboards" element={<ProtectedRoute moduleKey="dashboards"><Dashboards /></ProtectedRoute>} />
                     <Route path="/dashboards/:id" element={<ProtectedRoute moduleKey="dashboards"><DashboardView /></ProtectedRoute>} />
                     <Route path="/dashboard-explore" element={<ProtectedRoute moduleKey="dashboard"><DashboardExplore /></ProtectedRoute>} />
+                    <Route path="/leads" element={<ProtectedRoute moduleKey="leads"><Leads /></ProtectedRoute>} />
                     <Route path="/campaigns" element={<ProtectedRoute moduleKey="campaigns"><Campaigns /></ProtectedRoute>} />
                     <Route path="/campaigns/:id" element={<ProtectedRoute moduleKey="campaigns"><CampaignDetail /></ProtectedRoute>} />
                     <Route path="/communications/whatsapp" element={<ProtectedRoute moduleKey="communications"><WhatsAppCenter /></ProtectedRoute>} />
@@ -224,6 +238,15 @@ const App = () => (
                     <Route path="/communications/email" element={<ProtectedRoute moduleKey="communications"><EmailCenter /></ProtectedRoute>} />
                     <Route path="/communications/journeys" element={<ProtectedRoute moduleKey="communications"><JourneyBuilder /></ProtectedRoute>} />
                     <Route path="/communications/calendar" element={<ProtectedRoute moduleKey="communications"><CommunicationsCalendar /></ProtectedRoute>} />
+                    <Route path="/communications/meta" element={<ProtectedRoute moduleKey="meta"><MetaHub /></ProtectedRoute>} />
+                    <Route path="/communications/meta/connection" element={<ProtectedRoute moduleKey="meta_connection"><MetaConnection /></ProtectedRoute>} />
+                    <Route path="/communications/meta/marketing" element={<ProtectedRoute moduleKey="meta"><MetaMarketing /></ProtectedRoute>} />
+                    <Route path="/communications/meta/campaigns" element={<ProtectedRoute moduleKey="meta"><MetaCampaigns /></ProtectedRoute>} />
+                    <Route path="/communications/meta/ad-sets" element={<ProtectedRoute moduleKey="meta"><MetaAdSets /></ProtectedRoute>} />
+                    <Route path="/communications/meta/ads" element={<ProtectedRoute moduleKey="meta"><MetaAds /></ProtectedRoute>} />
+                    <Route path="/communications/meta/ads/:id/performance" element={<ProtectedRoute moduleKey="meta"><AdPerformance /></ProtectedRoute>} />
+                    <Route path="/communications/meta/organic" element={<ProtectedRoute moduleKey="meta"><MetaOrganicPosts /></ProtectedRoute>} />
+                    <Route path="/communications/meta/diagnostics" element={<ProtectedRoute moduleKey="meta"><MetaDiagnostics /></ProtectedRoute>} />
                     <Route path="/procedures" element={<ProtectedRoute moduleKey="procedures"><Procedures /></ProtectedRoute>} />
                     <Route path="/procedures/new" element={<ProtectedRoute moduleKey="procedures"><ProcedureNew /></ProtectedRoute>} />
                     <Route path="/pharma" element={<ProtectedRoute moduleKey="pharmacy"><Pharma /></ProtectedRoute>} />
