@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
   ArrowLeft,
+  BarChart3,
   CalendarIcon,
   GitBranch,
   Inbox,
@@ -354,6 +355,7 @@ export default function JourneyBuilder() {
                           <Button size="sm" variant="ghost" title="Resume" disabled={a !== "approved"} onClick={() => setStatus.mutate({ id: j.id, action: "resume" })}><Play className="h-4 w-4" /></Button>
                         )}
                         <Button size="sm" variant="ghost" title="Schedule" onClick={() => setScheduleJourney(j)}><CalendarIcon className="h-4 w-4" /></Button>
+                        <Button size="sm" variant="ghost" title="Analytics" onClick={() => navigate(`/communications/journeys/${j.id}/analytics`)}><BarChart3 className="h-4 w-4" /></Button>
                         <Button
                           size="sm"
                           variant="ghost"
