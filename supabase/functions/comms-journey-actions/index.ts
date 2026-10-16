@@ -1,7 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders, json, requireStaffId } from "../_shared/comms-auth.ts";
 import { resolveAudience, validateAudienceConfig } from "../_shared/comms-audience.ts";
-import { parseCanvas, validateCanvas } from "../_shared/comms-journey-graph.ts";
+import { parseCanvas, validateCanvas, findEntry, nextNodeId } from "../_shared/comms-journey-graph.ts";
 
 const JOURNEYS = "comms_journeys";
 const APPROVER_ROLE = /admin|manager/i;
@@ -112,7 +112,37 @@ Deno.serve(async (req) => {
     if (action === "activate") {
       if (journey.approval_status !== "approved") return json({ error: "A journey must be approved before it can be activated" }, 409);
       if (journey.status === "active") return json({ error: "Journey is already active" }, 409);
-      return json({ error: "The journey engine is not enabled yet" }, 501);
+
+      const canvas = parseCanvas(journey.canvas_data);
+      const entry = findEntry(canvas);
+      const firstStep = entry ? nextNodeId(canvas, entry.id) : null;
+      if (!firstStep) return json({ error: "Connect the Audience step to the first step before activating" }, 409);
+
+      const { patients } = await resolveAudience(admin, journey.audience_config);
+      if (patients.length) {
+        const now = new Date().toISOString();
+        const rows = patients.map((p) => ({ journey_id: journey.id, patient_id: p.id, current_node_id: firstStep, next_action_at: now }));
+        // A patient already enrolled from a previous activation (unique(journey_id, patient_id))
+        // is left exactly where they are, not restarted.
+        const { error: enrollErr } = await admin
+          .from("comms_journey_enrollments")
+          .upsert(rows, { onConflict: "journey_id,patient_id", ignoreDuplicates: true });
+        if (enrollErr) throw new Error(enrollErr.message);
+      }
+
+      const { error } = await admin.from(JOURNEYS).update({ status: "active" }).eq("id", journey.id);
+      if (error) throw new Error(error.message);
+
+      // Run the first batch now instead of waiting for the next scheduled tick.
+      const cronSecret = Deno.env.get("LOVABLE_CRON_SECRET");
+      if (cronSecret) {
+        fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/comms-process-journeys`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${cronSecret}` },
+        }).catch((e) => console.error("comms-journey-actions: could not trigger an immediate run", e instanceof Error ? e.message : e));
+      }
+
+      return json({ ok: true, enrolled: patients.length });
     }
 
     if (action === "pause" || action === "resume") {
