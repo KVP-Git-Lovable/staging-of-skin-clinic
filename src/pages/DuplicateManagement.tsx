@@ -339,21 +339,9 @@ function RuleEditor({ rule, onClose }: { rule: DuplicateRule; onClose: () => voi
                         <SelectItem value="starts_with">Starts with</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Select
-                      value={f.severity || "alert"}
-                      onValueChange={(v) => updateField(f.id, { severity: v as any })}
-                    >
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="alert">Alert only (can still save)</SelectItem>
-                        <SelectItem value="block">Block save (stop the user)</SelectItem>
-                      </SelectContent>
-                    </Select>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {(f.severity || "alert") === "block"
-                      ? "If this field matches an existing record, the user cannot save."
-                      : "If this field matches, the user is warned but may continue."}
+                    If this field matches an existing record, the user is warned and may continue.
                   </p>
 
                 </Card>
@@ -369,19 +357,11 @@ function RuleEditor({ rule, onClose }: { rule: DuplicateRule; onClose: () => voi
           <TabsContent value="notification" className="space-y-3 pt-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <Label>Default severity</Label>
-                <Select
-                  value={draft.notification.severity}
-                  onValueChange={(v) => patch({ notification: { ...draft.notification, severity: v as any } })}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="alert">Alert (allow save)</SelectItem>
-                    <SelectItem value="error">Error (block save)</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label>Severity</Label>
+                <p className="text-sm mt-1.5">Warning</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Individual fields set to "Block save" always stop the user, whatever this is set to.
+                  A duplicate always warns and never stops a save. Two patients often do share a
+                  phone number - a family on one mobile - so the person entering the record decides.
                 </p>
               </div>
               <div>

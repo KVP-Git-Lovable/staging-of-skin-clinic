@@ -16,3 +16,16 @@ export function shortPatientId(id?: string | null): string {
   const hex = id.replace(/-/g, "");
   return `P-${hex.slice(-5).toUpperCase()}`;
 }
+
+/**
+ * The same idea for an appointment, so one can be read out or searched for.
+ *
+ * Appointments have no number of their own - only the UUID and a raw
+ * Salesforce id like "a08OW00000AXUfvYAH", which nobody is going to say over
+ * the phone. This mirrors shortPatientId so the two read as a pair.
+ */
+export function shortAppointmentId(id?: string | null): string {
+  if (!id) return "";
+  const hex = id.replace(/-/g, "");
+  return `A-${hex.slice(-5).toUpperCase()}`;
+}

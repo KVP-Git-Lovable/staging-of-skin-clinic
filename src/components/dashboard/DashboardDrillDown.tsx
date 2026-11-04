@@ -4,6 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
 import { useNavigate } from "react-router-dom";
+import { appointmentPatientName } from "@/lib/appointmentPatientName";
 
 export type DrillKind = "invoices" | "appointments" | "patients";
 
@@ -102,7 +103,7 @@ export function DashboardDrillDown({ open, onOpenChange, title, records, kind }:
               {records.map((r: any) => (
                 <TableRow key={r.id} className="cursor-pointer hover:bg-muted/50" onClick={() => go(`/appointments/${r.id}`)}>
                   <TableCell className="text-xs text-primary underline font-medium">
-                    {r.patients ? `${r.patients.first_name} ${r.patients.last_name}` : r.patient_name || "Walk-in"}
+                    {appointmentPatientName(r, "Walk-in")}
                   </TableCell>
                   <TableCell className="text-xs">{r.service}</TableCell>
                   <TableCell className="text-xs">{r._staffName || "—"}</TableCell>

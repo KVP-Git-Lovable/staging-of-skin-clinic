@@ -1,13 +1,16 @@
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "./AppSidebar";
-import { Search, User, LogOut } from "lucide-react";
+import { Search, User, LogOut, CalendarCheck } from "lucide-react";
 import { NotificationsBell } from "@/components/layout/NotificationsBell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
-import { useNavigate, Navigate, useLocation } from "react-router-dom";
+import { ChangePasswordRequired } from "@/components/auth/ChangePasswordRequired";
+import { ImpersonationBanner } from "@/components/auth/ImpersonationBanner";
+import { useNavigate, Navigate, useLocation, useSearchParams } from "react-router-dom";
 import { AppointmentsModal } from "@/components/modals/AppointmentsModal";
 import { AppointmentDetailModal } from "@/components/modals/AppointmentDetailModal";
+import { ReturnToAppointmentBar } from "@/components/appointments/ReturnToAppointmentBar";
 import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
@@ -41,10 +44,14 @@ interface AppLayoutProps {
 }
 
 export function AppLayout({ children }: AppLayoutProps) {
-  const { staffProfile, user, loading, signOut } = useAuth();
+  const { staffProfile, user, loading, signOut, mustChangePassword } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { openModal, closeModal } = useModal();
+  const [searchParams] = useSearchParams();
+  // The appointment overlay lives in the address now, so the clamp below has to
+  // read it from there - reading only the context left the overlay unclamped.
+  const overlayOpen = !!openModal || !!searchParams.get("appointmentDetail");
   const lastPathRef = useRef(location.pathname);
 
   // Close any full-screen overlay modal when the route changes, so the
@@ -82,6 +89,13 @@ export function AppLayout({ children }: AppLayoutProps) {
     navigate("/login");
   };
 
+
+  // An admin-issued password is one-time. The gate lives here rather than in
+  // ProtectedRoute because /trash and /profile have no route guard at all, but
+  // they are inside this layout - and /login and /signup are outside it, so
+  // signing out still works.
+  if (mustChangePassword) return <ChangePasswordRequired />;
+
   return (
     <SidebarProvider>
       {/* While a full-screen overlay is open the shell is clamped to the viewport.
@@ -89,19 +103,23 @@ export function AppLayout({ children }: AppLayoutProps) {
           this they stretch to the height of the still-mounted page behind them -
           an appointments list is ~11,000px, which is the blank area you could
           scroll through forever after opening an appointment. */}
-      <div className={cn("flex w-full", openModal ? "h-screen overflow-hidden" : "min-h-screen")}>
+      <div className={cn("flex w-full", overlayOpen ? "h-[100dvh] overflow-hidden" : "min-h-[100dvh]")}>
         <AppSidebar />
         <div className="flex-1 flex flex-col min-w-0 relative">
           {/* Modals */}
           <AppointmentsModal />
           <AppointmentDetailModal />
 
-          <header className="h-14 md:h-16 flex items-center justify-between border-b bg-card px-3 md:px-4 gap-2 md:gap-4 shrink-0">
+          <ImpersonationBanner />
+
+          <header className="app-glass-header safe-inset-top sticky top-0 z-40 h-14 md:h-16 box-content flex items-center justify-between border-b px-3 md:px-4 gap-2 md:gap-4 shrink-0">
             <div className="flex items-center gap-2 md:gap-3 min-w-0">
               <SidebarTrigger className="shrink-0 md:hidden" />
               <GlobalSearch className="hidden md:block" />
             </div>
             <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+              {/* Only ever visible when a new build is genuinely waiting. */}
+
               <NotificationsBell />
 
               <ThemeSelector />
@@ -124,6 +142,9 @@ export function AppLayout({ children }: AppLayoutProps) {
                     </div>
                   </div>
                   <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => navigate("/attendance")}>
+                    <CalendarCheck className="h-4 w-4 mr-2" />My Attendance
+                  </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => navigate("/profile")}>
                     <User className="h-4 w-4 mr-2" />My Profile
                   </DropdownMenuItem>
@@ -137,7 +158,10 @@ export function AppLayout({ children }: AppLayoutProps) {
           </header>
           <main className="flex-1 p-3 md:p-6 overflow-auto">
             <BackToReportBar />
-            {children}
+            <ReturnToAppointmentBar />
+            <div key={location.pathname} className="animate-page-reveal motion-reduce:animate-none">
+              {children}
+            </div>
           </main>
         </div>
       </div>

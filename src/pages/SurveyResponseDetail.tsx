@@ -9,6 +9,7 @@ import { format } from "date-fns";
 import { approveSurveyResponse } from "@/lib/surveyApproval";
 import { toast } from "sonner";
 import { useState } from "react";
+import { patientAgeLabel } from "@/lib/patientIdentity";
 
 function getStatusVariant(status: string | null): "default" | "secondary" | "outline" {
   if (status === "approved") return "default";
@@ -22,12 +23,9 @@ function getStatusLabel(status: string | null) {
   return "⏳ Pending Review";
 }
 
-function calcAge(dob: string | null): string {
-  if (!dob) return "—";
-  const d = new Date(dob);
-  const diff = Date.now() - d.getTime();
-  return `${Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25))} yrs`;
-}
+/** A dash where this page has always shown one for an unknown date of birth. */
+const surveyAge = (dob: string | null): string => patientAgeLabel(dob) || "—";
+
 
 export default function SurveyResponseDetail() {
   const { id } = useParams<{ id: string }>();
@@ -170,7 +168,7 @@ export default function SurveyResponseDetail() {
               </p>
               {patient.phone && <p className="text-muted-foreground text-xs">{patient.phone}</p>}
               <p className="text-muted-foreground text-xs">
-                {calcAge(patient.date_of_birth)}{patient.gender ? ` • ${patient.gender}` : ""}
+                {surveyAge(patient.date_of_birth)}{patient.gender ? ` • ${patient.gender}` : ""}
               </p>
             </div>
           ) : (

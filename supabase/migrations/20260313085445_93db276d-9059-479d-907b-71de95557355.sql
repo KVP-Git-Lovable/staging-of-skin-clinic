@@ -1,0 +1,1 @@
+ALTER TABLE public.product_prices ADD COLUMN gst_percent numeric NOT NULL DEFAULT 0;

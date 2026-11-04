@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { DateInput } from "@/components/shared/DateInput";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -98,10 +99,9 @@ export function FilterRow({ filter, allFields, fieldKeyFn, onChange, onRemove, i
     }
     if (fieldType === "date") {
       return (
-        <Input
-          type="date"
+        <DateInput
           value={(filter.value || "").slice(0, 10)}
-          onChange={(e) => onChange({ value: e.target.value })}
+          onChange={(isoDate) => onChange({ value: isoDate })}
           className="h-6 text-[11px] flex-1"
         />
       );

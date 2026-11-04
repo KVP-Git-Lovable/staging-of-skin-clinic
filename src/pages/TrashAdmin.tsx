@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { numVal } from "@/lib/numberInput";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
@@ -110,7 +111,7 @@ export default function TrashAdmin() {
                 id="retention"
                 type="number"
                 min={0}
-                value={retention}
+                value={numVal(retention)}
                 onChange={(e) => setRetention(Math.max(0, Number(e.target.value) || 0))}
               />
               <p className="text-xs text-muted-foreground">

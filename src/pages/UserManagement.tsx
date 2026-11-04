@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { edgeFunctionErrorMessage } from "@/lib/edgeFunctionError";
+import { PASSWORD_RULE_TEXT, passwordProblem } from "@/lib/passwordRules";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -15,7 +17,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ShieldCheck, Plus, Save, Search, UserPlus, KeyRound, Trash2, Pencil } from "lucide-react";
+import { ShieldCheck, Plus, Save, Search, UserPlus, KeyRound, Trash2, Pencil, UserCog, History } from "lucide-react";
+import { canImpersonate, startImpersonation } from "@/lib/impersonation";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import CreateUserDialog from "@/components/users/CreateUserDialog";
 import EditUserDialog from "@/components/users/EditUserDialog";
@@ -32,11 +35,11 @@ const ALL_MODULES = [
   { key: "leave", label: "Leave" },
   { key: "assets", label: "Assets" },
   { key: "portal_orders", label: "Portal Orders" },
+  { key: "campaigns", label: "Campaigns" },
   { key: "leads", label: "Leads" },
   { key: "communications", label: "Communications Center" },
-  { key: "meta", label: "Meta (Facebook & Instagram)" },
+  { key: "meta", label: "Meta" },
   { key: "meta_connection", label: "Meta Connection" },
-  { key: "campaigns", label: "Campaigns" },
   { key: "expenses", label: "Expenses" },
   { key: "staff", label: "Staff" },
   { key: "problem_areas", label: "Primary Concern" },
@@ -56,7 +59,7 @@ type PermMap = Record<string, { can_view: boolean; can_create: boolean; can_edit
 
 export default function UserManagement() {
   const queryClient = useQueryClient();
-  const { isAdmin } = useAuth();
+  const { isAdmin, staffProfile, user } = useAuth();
   const [search, setSearch] = useState("");
   const [selectedRoleId, setSelectedRoleId] = useState<string>("");
   const [dirtyPerms, setDirtyPerms] = useState<PermMap | null>(null);
@@ -75,6 +78,8 @@ export default function UserManagement() {
   const [deleteStaff, setDeleteStaff] = useState<any>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editStaff, setEditStaff] = useState<any>(null);
+  const [impersonateStaff, setImpersonateStaff] = useState<any>(null);
+  const [impersonating, setImpersonating] = useState(false);
 
   // Fetch roles
   const { data: roles = [] } = useQuery({
@@ -99,6 +104,29 @@ export default function UserManagement() {
         status: s.is_active ? "Active" : "Inactive",
       }));
     },
+  });
+
+  // May this account log in as someone else? Decided on the server against a
+  // backend allow-list secret - the answer here only hides or shows the button.
+  const { data: mayImpersonate = false } = useQuery({
+    queryKey: ["can-impersonate"],
+    queryFn: canImpersonate,
+    enabled: isAdmin,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Audit trail. Readable only by admins (enforced by the database).
+  const { data: loginAsLog = [] } = useQuery({
+    queryKey: ["impersonation-log"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("impersonation_log")
+        .select("id, actor_email, target_name, target_email, started_at, ended_at")
+        .order("started_at", { ascending: false })
+        .limit(50);
+      return data || [];
+    },
+    enabled: isAdmin,
   });
 
   // Fetch permissions for selected role
@@ -207,8 +235,8 @@ export default function UserManagement() {
     mutationFn: async () => {
       if (!resetPwStaff) throw new Error("No user selected");
       if (resetPwMode === "manual") {
-        if (resetPwValue !== resetPwConfirm) throw new Error("Passwords don't match");
-        if (resetPwValue.length < 6) throw new Error("Password must be at least 6 characters");
+        const problem = passwordProblem(resetPwValue, resetPwConfirm);
+        if (problem) throw new Error(problem);
       }
 
       // Staff with no login yet (e.g. doctors added to the roster who were
@@ -228,7 +256,7 @@ export default function UserManagement() {
             force_password_change: true,
           },
         });
-        if (error) throw error;
+        if (error) throw new Error(await edgeFunctionErrorMessage(error));
         if (data?.error) throw new Error(data.error);
         return;
       }
@@ -240,8 +268,16 @@ export default function UserManagement() {
           password: resetPwMode === "manual" ? resetPwValue : undefined,
         },
       });
-      if (error) throw error;
+      if (error) throw new Error(await edgeFunctionErrorMessage(error));
       if (data?.error) throw new Error(data.error);
+
+      // The password an admin just typed is known to two people, so it is
+      // one-time: the user is asked for their own on next sign-in. Done here
+      // rather than in the edge function so this needs no redeploy - the
+      // function's reset branch only ever touched the auth user.
+      const { error: flagError } = await supabase
+        .from("staff").update({ force_password_change: true } as never).eq("id", resetPwStaff.id);
+      if (flagError) throw flagError;
     },
     onSuccess: () => {
       toast({ title: resetPwStaff?.auth_user_id ? "Password reset successfully" : "Login account created" });
@@ -267,7 +303,7 @@ export default function UserManagement() {
           auth_user_id: deleteStaff.auth_user_id || null,
         },
       });
-      if (error) throw error;
+      if (error) throw new Error(await edgeFunctionErrorMessage(error));
       if (data?.error) throw new Error(data.error);
     },
     onSuccess: () => {
@@ -387,6 +423,16 @@ export default function UserManagement() {
                       </TableCell>
                       {isAdmin && (
                         <TableCell className="flex gap-1">
+                          {mayImpersonate && s.auth_user_id && s.is_active && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="Log in as this user"
+                              onClick={() => setImpersonateStaff(s)}
+                            >
+                              <UserCog className="h-4 w-4" />
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="icon"
@@ -439,6 +485,45 @@ export default function UserManagement() {
               </Table>
             </CardContent>
           </Card>
+
+          {isAdmin && (
+            <Card className="mt-4">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <History className="h-4 w-4" />Login-as History
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Who</TableHead>
+                      <TableHead>Acted as</TableHead>
+                      <TableHead>Started</TableHead>
+                      <TableHead>Ended</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {loginAsLog.map((l: any) => (
+                      <TableRow key={l.id}>
+                        <TableCell className="font-medium">{l.actor_email || "—"}</TableCell>
+                        <TableCell>{l.target_name || l.target_email || "—"}</TableCell>
+                        <TableCell>{new Date(l.started_at).toLocaleString()}</TableCell>
+                        <TableCell>{l.ended_at ? new Date(l.ended_at).toLocaleString() : "Still active"}</TableCell>
+                      </TableRow>
+                    ))}
+                    {loginAsLog.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
+                          Never used yet
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="roles">
@@ -607,6 +692,18 @@ export default function UserManagement() {
                 {resetPwStaff?.name} doesn't have an app login yet{resetPwStaff?.email ? ` - one will be created using ${resetPwStaff.email}.` : "."}
               </p>
             )}
+            {/* Always on for both paths - force_password_change is set whether a
+                login is being created or a password reset. There is no toggle,
+                so say so rather than leaving the operator looking for one. */}
+            <p className="text-sm flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
+              <KeyRound className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+              {/* The whole name, not the first word: "Dr Ashwini Ashokan"
+                  splits to "Dr", which reads as nonsense. */}
+              <span>
+                {resetPwStaff?.name || "This user"} will be asked to choose their own password the
+                next time they sign in, so the one you set here is temporary.
+              </span>
+            </p>
             <RadioGroup value={resetPwMode} onValueChange={(v) => setResetPwMode(v as "auto" | "manual")}>
               <div className="flex items-center space-x-2">
                 <RadioGroupItem value="auto" id="reset-auto" />
@@ -628,6 +725,7 @@ export default function UserManagement() {
                   <Label>Confirm Password</Label>
                   <Input type="password" value={resetPwConfirm} onChange={(e) => setResetPwConfirm(e.target.value)} />
                 </div>
+                <p className="text-xs text-muted-foreground">{PASSWORD_RULE_TEXT}</p>
               </div>
             )}
 
@@ -660,6 +758,44 @@ export default function UserManagement() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {deleteUser.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Log in as another staff member */}
+      <AlertDialog open={!!impersonateStaff} onOpenChange={(o) => !o && setImpersonateStaff(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Log in as {impersonateStaff?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You will see and use the app exactly as <strong>{impersonateStaff?.name}</strong>. Everything
+              you do will be recorded as that person, and this switch is logged. You can return to your own
+              account at any time using the banner at the top.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={impersonating}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={impersonating}
+              onClick={async (e) => {
+                e.preventDefault();
+                const target = impersonateStaff;
+                if (!target) return;
+                setImpersonating(true);
+                try {
+                  const actorName = staffProfile
+                    ? `${staffProfile.firstName} ${staffProfile.lastName}`.trim()
+                    : user?.email || "Admin";
+                  await startImpersonation(target.auth_user_id, actorName);
+                  window.location.href = "/";
+                } catch (err: any) {
+                  setImpersonating(false);
+                  toast({ title: err?.message || "Could not log in as that user", variant: "destructive" });
+                }
+              }}
+            >
+              {impersonating ? "Switching..." : "Log in as user"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

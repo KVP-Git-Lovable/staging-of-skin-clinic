@@ -20,8 +20,15 @@ function score(photo: any): number {
 }
 
 /**
- * Best recognisable photo per patient, keyed by patient id.
- * Deterministic: best score first, then the most recent photo, then the lowest id.
+ * The patient's picture, keyed by patient id.
+ *
+ * An explicitly chosen one (patients.avatar_url) wins outright. Everything
+ * below it is the guess for patients nobody has chosen for: best score first,
+ * then the most recent photo, then the lowest id.
+ *
+ * The guess is only ever a guess - it scores photo_type and notes for words
+ * like "front" and against "close-up" - so a chosen picture has to beat it
+ * everywhere, or "set as profile picture" would mean "set on one screen".
  */
 export function usePatientAvatars(patientIds: string[]) {
   const ids = [...new Set(patientIds.filter(Boolean))].sort();
@@ -62,6 +69,23 @@ export function usePatientAvatars(patientIds: string[]) {
           }
         }
       }
+      // The explicit choice last, so it overwrites whatever was guessed.
+      for (let i = 0; i < ids.length; i += 100) {
+        const chunk = ids.slice(i, i + 100);
+        const { data, error } = await supabase
+          .from("patients")
+          .select("id, avatar_url")
+          .in("id", chunk)
+          .not("avatar_url", "is", null);
+        if (error) throw error;
+        // Cast for the same reason as the editor: the column exists, the
+        // generated types are refreshed on sync.
+        for (const p of (data || []) as unknown as { id: string; avatar_url: string | null }[]) {
+          const chosen = String(p.avatar_url ?? "").trim();
+          if (chosen) map[p.id] = chosen;
+        }
+      }
+
       return map;
     },
   });

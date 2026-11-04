@@ -4,6 +4,8 @@
 import GenericListKanban from "@/components/listViews/ListKanban";
 import { PATIENT_FIELDS, rawValue, type KanbanConfig } from "@/lib/patientFields";
 import { PatientAvatar } from "@/components/patients/PatientAvatar";
+import { VipBadge } from "@/components/shared/VipBadge";
+import { isVipPatient } from "@/lib/vipPatient";
 
 interface Option { value: string; label: string }
 
@@ -33,6 +35,7 @@ export default function PatientKanban({ avatars = {}, ...rest }: Props) {
           className="h-8 w-8"
         />
       )}
+      renderTitleAfter={(row) => (isVipPatient(row) ? <VipBadge /> : null)}
     />
   );
 }

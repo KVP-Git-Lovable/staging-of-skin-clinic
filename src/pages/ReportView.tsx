@@ -8,9 +8,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { useMoneyFormat } from "@/lib/currency";
 import { ReportFilterBar, type FilterState } from "@/components/reports/ReportFilterBar";
 import { DEFAULT_REPORT_PRESET, getReportDateRange, loadReportPin } from "@/lib/reportDateRange";
+import { reportFiltersFromUrl } from "@/lib/reportUrlFilters";
+import type { ReportColumn } from "@/lib/reportsCatalog";
 import { SortableDataTable } from "@/components/reports/SortableDataTable";
 import { ReportChart } from "@/components/reports/ReportChart";
-import { downloadReportPdf } from "@/lib/reportPdf";
+import { downloadReportPdf, exportColumns } from "@/lib/reportPdf";
+import { toCSV } from "@/lib/reportCsv";
 import { toast } from "sonner";
 import NotFound from "./NotFound";
 import { endOfDay } from "date-fns";
@@ -21,33 +24,34 @@ function startOfToday(): Date {
   return d;
 }
 
-function toCSV(columns: { key: string; label: string; accessor?: (r: any) => any }[], rows: any[]) {
-  const header = columns.map((c) => `"${c.label}"`).join(",");
-  const body = rows
-    .map((r) =>
-      columns
-        .map((c) => {
-          const v = c.accessor ? c.accessor(r) : r[c.key];
-          if (v == null) return "";
-          return `"${String(v).replace(/"/g, '""')}"`;
-        })
-        .join(","),
-    )
-    .join("\n");
-  return `${header}\n${body}`;
-}
-
 const ReportView = () => {
   const { key } = useParams<{ key: string }>();
   const report = key ? getReport(key) : undefined;
+
+  // Billing is the one thing still scoped per doctor - every other clinical
+  // table is shared, so a doctor filter works everywhere else and is worth
+  // keeping. On these two the rows are already limited to the viewer, so the
+  // filter would offer choices that change nothing.
+  const INVOICE_SCOPED_REPORTS = ["invoices", "cancelled_invoices"];
+  const { dataScope } = useAuth();
+  const hideDoctorFilter = dataScope === "own" && !!key && INVOICE_SCOPED_REPORTS.includes(key);
 
   const { reportPeriodLimit } = useAuth();
   useMoneyFormat(); // keeps currency formatting in step with admin settings
   const dayOnly = reportPeriodLimit === "day";
 
   const [filterState, setFilterState] = useState<FilterState>(() => {
+    // A link can open the report already filtered - the dashboard's feedback
+    // card sends the NPS band and its own dates. Narrow on purpose: see
+    // reportUrlFilters.ts.
+    const fromUrl = reportFiltersFromUrl(new URLSearchParams(window.location.search), report?.filters ?? []);
     if (reportPeriodLimit === "day") {
-      return { search: "", dateFrom: startOfToday(), dateTo: startOfToday(), selects: {} };
+      return {
+        search: "",
+        dateFrom: startOfToday(),
+        dateTo: startOfToday(),
+        selects: fromUrl?.selects ?? {},
+      };
     }
     // Reports start on the pinned period (current month by default) so a first run
     // never scans the whole history.
@@ -61,9 +65,12 @@ const ReportView = () => {
       customEnd: pin?.customEnd,
       dateFrom: start,
       dateTo: end,
+      // A link beats the pinned period it was opened from.
+      ...fromUrl,
       selects: {
         ...(pin?.doctor ? { doctor: pin.doctor } : {}),
         ...(pin?.service ? { service: pin.service } : {}),
+        ...(fromUrl?.selects ?? {}),
       },
     };
   });
@@ -159,10 +166,14 @@ const ReportView = () => {
     for (const f of report.filters) {
       const v = filterState.selects[f.key];
       if (!v) continue;
-      if (f.type === "doctor" || f.type === "service") {
-        if (f.matches) rows = rows.filter((r) => f.matches!(r, v));
+      // A filter that brings its own matcher always wins - a select whose
+      // stored values need normalising (payment modes) needs one just as much
+      // as a doctor or service picker does.
+      if (f.matches) {
+        rows = rows.filter((r) => f.matches!(r, v));
         continue;
       }
+      if (f.type === "doctor" || f.type === "service") continue;
       if (f.type !== "select") continue;
       const field = f.field || f.key;
       rows = rows.filter((r) => String(r[field] ?? "") === v);
@@ -206,10 +217,33 @@ const ReportView = () => {
     }
   };
 
-  const downloadCsv = async () => {
+  /**
+   * What the two exports actually write.
+   *
+   * A report may shape its own sheet - the invoices report splits a bill across
+   * its services and adds a totals line - and when it does, its rows are
+   * already resolved, so the columns are read plainly by key.
+   */
+  const exportSheet = async () => {
     const rows = await rowsForExport();
-    const csv = toCSV(report.columns, rows);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    if (!report.exportRows) return { columns: report.columns, rows, totals: null, count: rows.length };
+    const shaped = report.exportRows(rows);
+    return {
+      columns: exportColumns(report.columns),
+      rows: shaped,
+      totals: report.exportTotals?.(shaped) ?? null,
+      // A bill split across its services is still one bill.
+      count: rows.length,
+    };
+  };
+
+  const downloadCsv = async () => {
+    const { columns, rows, totals } = await exportSheet();
+    const csv = toCSV(columns, rows, totals);
+    // The byte order mark is what tells Excel the file is UTF-8. Without it
+    // Excel reads a downloaded .csv in the machine's own codepage, so a split
+    // payment's rupee sign arrived as "Card â‚¹13,450 + UPI â‚¹500".
+    const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -221,8 +255,19 @@ const ReportView = () => {
   const downloadPdf = async () => {
     try {
       setExportingPdf(true);
-      const rows = await rowsForExport();
-      await downloadReportPdf({ report, rows, summary, filterState, dayOnly });
+      const { columns, rows, totals, count } = await exportSheet();
+      await downloadReportPdf({
+        report: { ...report, columns },
+        rows,
+        summary,
+        filterState,
+        dayOnly,
+        totals,
+        recordCount: count,
+        // A bill's second line is blank under Date and Patient because they
+        // are on the line above, not because nothing was recorded.
+        emptyCell: report.exportRows ? "" : undefined,
+      });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not create the PDF");
     } finally {
@@ -240,7 +285,8 @@ const ReportView = () => {
           <h1 className="page-title">{report.title}</h1>
           <p className="page-subtitle">{report.description}</p>
         </div>
-        <div className="flex items-center gap-2">
+        {/* flex-wrap: on a phone this row wraps rather than overflowing. */}
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" onClick={downloadCsv} disabled={noRows || busy}>
             {exporting ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Download className="h-4 w-4 mr-1.5" />}
             Export CSV
@@ -257,14 +303,22 @@ const ReportView = () => {
         state={filterState}
         onChange={setFilterState}
         singleDay={dayOnly}
+        hideDoctorFilter={hideDoctorFilter}
       />
 
       {summary.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           {summary.map((s) => (
-            <div key={s.label} className="data-table p-3">
+            <div key={s.label} className="data-table p-3 min-w-0">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</div>
               <div className="text-lg font-semibold mt-0.5">{s.value}</div>
+              {/* A label that cannot say enough on its own - "Other" naming the
+                  payment modes inside it. Truncated, with the full list on hover. */}
+              {s.hint && (
+                <div className="text-[10px] text-muted-foreground truncate" title={s.hint}>
+                  {s.hint}
+                </div>
+              )}
             </div>
           ))}
         </div>

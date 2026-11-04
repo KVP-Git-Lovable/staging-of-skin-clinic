@@ -1,0 +1,1 @@
+ALTER TABLE public.staff ADD COLUMN role_id uuid REFERENCES public.user_roles_config(id) ON DELETE SET NULL;

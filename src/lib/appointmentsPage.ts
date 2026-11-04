@@ -20,6 +20,12 @@ export interface FetchAppointmentsPageParams {
 export interface AppointmentsPageResult {
   rows: any[];
   total: number;
+  /**
+   * True when at least one more row exists after this page. Derived by asking
+   * for one row beyond the page, so it comes back in the same snapshot as the
+   * rows rather than being inferred from the count.
+   */
+  hasMore: boolean;
 }
 
 /**
@@ -41,9 +47,17 @@ export async function fetchAppointmentsPage({
   sortDirection,
 }: FetchAppointmentsPageParams): Promise<AppointmentsPageResult> {
   const ascending = sortDirection === "asc";
+  // A real count. This asked for "planned"/"estimated" back when exact counts
+  // over 56k appointments were being cancelled - but those answer from
+  // Postgres's table statistics, which read 56,530 against 56,776 real rows and
+  // drift after every bulk change, so the All view disagreed with every saved
+  // view. Measured on the live data: counting every appointment is 13ms, 16ms
+  // with the two left joins embedded here, and under a millisecond for the
+  // date-bounded views the clinic actually works in all day.
   let q = supabase
     .from("appointments")
-    .select("*, patients(first_name, last_name, phone, gender), staff(first_name, last_name)", { count: "exact" });
+    .select("*, patients(first_name, last_name, phone, gender, is_vip), staff:staff!appointments_staff_id_fkey(first_name, last_name)", { count: "exact" });
+
 
   if (dateRange) {
     q = q.gte("start_time", dateRange.start.toISOString()).lte("start_time", dateRange.end.toISOString());
@@ -70,7 +84,13 @@ export async function fetchAppointmentsPage({
       .ilike("phone", `%${term}%`)
       .limit(500);
     const phoneMatchIds = (phoneMatches || []).map((p: any) => p.id);
-    const orParts = [`service.ilike.%${term}%`, `patient_name.ilike.%${term}%`];
+    // reason_for_consultation is what the Investigation column shows, so it has to
+    // be searchable - otherwise you cannot search for the text on screen.
+    const orParts = [
+      `service.ilike.%${term}%`,
+      `reason_for_consultation.ilike.%${term}%`,
+      `patient_name.ilike.%${term}%`,
+    ];
     if (phoneMatchIds.length > 0) {
       orParts.push(`patient_id.in.(${phoneMatchIds.join(",")})`);
     }
@@ -78,9 +98,13 @@ export async function fetchAppointmentsPage({
   }
 
   switch (sortColumn) {
+    // reason_for_consultation is what the Investigation column sorts on; without
+    // it here the sort would fall through to the default and silently order by
+    // date instead.
     case "status":
     case "visit_status":
     case "service":
+    case "reason_for_consultation":
       q = q.order(sortColumn, { ascending });
       break;
     case "patient":
@@ -89,16 +113,34 @@ export async function fetchAppointmentsPage({
     case "doctor":
       q = q.order("first_name", { referencedTable: "staff", ascending });
       break;
+    // The stored name, not a join onto staff: therapist_name is kept after a
+    // therapist leaves the clinic, so ordering on the join would scatter
+    // their visits among the unassigned ones.
+    case "therapist":
+      q = q.order("therapist_name", { ascending });
+      break;
+    case "phone":
+      q = q.order("phone", { referencedTable: "patients", ascending });
+      break;
     case "start_time":
+    // Bill Amount and Payment Mode have no column here to order by - both come
+    // from an invoice lookup done after these rows arrive, keyed on the ids of
+    // the page in hand. They keep the date order from the server and are sorted
+    // within the page by sortAppointmentsByPageColumn.
     case "bill":
+    case "payment_mode":
     default:
       q = q.order("start_time", { ascending });
       break;
   }
 
   const from = (page - 1) * pageSize;
-  const to = from + pageSize - 1;
+  // One row past the page: its presence is what tells the caller a next page
+  // exists, from the same snapshot as the rows.
+  const to = from + pageSize;
   const { data, error, count } = await q.range(from, to);
   if (error) throw error;
-  return { rows: data || [], total: count || 0 };
+  const fetched = data || [];
+  const hasMore = fetched.length > pageSize;
+  return { rows: fetched.slice(0, pageSize), total: count || 0, hasMore };
 }

@@ -37,7 +37,11 @@ const CARRY_GROUPS = [
   {
     key: "clinical",
     label: "Clinical records (procedures, prescriptions, photos, surveys)",
-    tables: ["procedures", "prescriptions", "patient_photos", "survey_responses", "therapy_notes"],
+    // therapy_notes was retired in 20260918060000; its notes now live in
+    // appointment_sticky_notes, which has no patient_id to re-stamp - a note
+    // hangs off an appointment, and appointments are carried by the group
+    // above, so visit notes follow their appointment automatically.
+    tables: ["procedures", "prescriptions", "patient_photos", "survey_responses"],
   },
 ] as const;
 

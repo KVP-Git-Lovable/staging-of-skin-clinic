@@ -29,7 +29,11 @@ interface Props {
   onNew: () => void;
   onEdit: (v: ListView) => void;
   onDelete: (v: ListView) => void;
-  onPin: (v: ListView | null) => void;
+  /** Pin this view as where you land when you open the app. */
+  onPin: (v: ListView) => void;
+  /** Clear your pin. Separate from onPin(null), which used to mean both this
+      and "pin a standard view" - and announced the wrong one. */
+  onUnpin: () => void;
   onClone: (v: ListView) => void;
   /** Omit to hide "Select Fields to Display" - for pages with no meaningful column set (e.g. Photos' fixed card layout). */
   onFields?: () => void;
@@ -40,6 +44,8 @@ interface Props {
   /** Hide the "Display As" switcher entirely - for pages (like Appointments) that already have their own view toggle. Defaults to true. */
   showDisplaySwitcher?: boolean;
   count: number;
+  /** True while the rows behind `count` are still being fetched. */
+  countLoading?: boolean;
   search: string;
   onSearchChange: (v: string) => void;
   chartsOpen?: boolean;
@@ -68,6 +74,7 @@ export default function ViewBar({
   onEdit,
   onDelete,
   onPin,
+  onUnpin,
   onClone,
   onFields,
   onRefresh,
@@ -75,6 +82,7 @@ export default function ViewBar({
   onDisplayChange,
   onKanbanSettings,
   count,
+  countLoading,
   search,
   onSearchChange,
   chartsOpen,
@@ -85,6 +93,31 @@ export default function ViewBar({
   displayModes,
   showDisplaySwitcher = true,
 }: Props) {
+  // `is_default` means "pinned by me" (see useModuleListViews.ts), so the
+  // filled pin is only ever your own.
+  const pinButton = (v: ListView) => (
+    <button
+      type="button"
+      title={v.is_default ? "Unpin this view" : "Pin as default view"}
+      aria-label={v.is_default ? `Unpin ${v.name}` : `Pin ${v.name} as default view`}
+      className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-primary"
+      onClick={(e) => {
+        // Without both of these the click would also select the view.
+        e.preventDefault();
+        e.stopPropagation();
+        if (v.is_default) return onUnpin();
+        // Through the page's own onSelect, not just onPin: on Appointments
+        // picking a view also moves the quick-date chips to the date that view
+        // filters on, and a pin that switched you there without them read
+        // "0 items" over a full day.
+        onSelect(v.id);
+        onPin(v);
+      }}
+    >
+      {v.is_default ? <PinOff className="h-3.5 w-3.5 text-primary" /> : <Pin className="h-3.5 w-3.5" />}
+    </button>
+  );
+
   const isStandard = !!activeView?.is_standard;
   const canManage = !!activeView && !isStandard && activeView.owner_id === currentUserId;
   const standardViews = views.filter((v) => v.is_standard);
@@ -104,11 +137,14 @@ export default function ViewBar({
               <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="z-50 w-64 bg-popover">
+          <DropdownMenuContent align="start" className="z-50 w-72 bg-popover">
             <DropdownMenuLabel className="text-xs">Standard Views</DropdownMenuLabel>
             {standardViews.map((v) => (
               <DropdownMenuItem key={v.id} onClick={() => onSelect(v.id)} className="flex items-center gap-2">
                 <span className="flex-1 truncate">{v.name}</span>
+                {/* A standard view could not be pinned from here at all, and
+                    pinning it from the gear menu wrote nothing that lasted. */}
+                {pinButton(v)}
                 <Lock className="h-3 w-3 opacity-50" />
               </DropdownMenuItem>
             ))}
@@ -117,29 +153,59 @@ export default function ViewBar({
             {savedViews.length === 0 && (
               <div className="px-2 py-1.5 text-xs text-muted-foreground">No saved views yet.</div>
             )}
-            {savedViews.map((v) => (
-              <DropdownMenuItem key={v.id} onClick={() => onSelect(v.id)} className="flex items-center gap-2">
+            {savedViews.map((v) => {
+              // Edit and Delete used to live only in the gear menu, and only ever
+              // acted on the ACTIVE view - so removing a view meant switching to
+              // it first. The clinic looked for them here, beside the pin, which
+              // is where a list of views should carry its own controls.
+              const canManageThis = !v.is_standard && !!currentUserId && v.owner_id === currentUserId;
+              return (
+              <DropdownMenuItem key={v.id} onClick={() => onSelect(v.id)} className="flex items-center gap-1.5">
                 <span className="flex-1 truncate">{v.name}</span>
-                <button
-                  type="button"
-                  title={v.is_default ? "Unpin this view" : "Pin as default view"}
-                  aria-label={v.is_default ? "Unpin this view" : "Pin as default view"}
-                  className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-primary"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onPin(v.is_default ? null : v);
-                  }}
-                >
-                  {v.is_default ? <PinOff className="h-3.5 w-3.5 text-primary" /> : <Pin className="h-3.5 w-3.5" />}
-                </button>
+                {pinButton(v)}
+                {/* Only on views this person owns - the same rule canManage uses
+                    for the gear menu. Someone else's shared view stays listed and
+                    selectable, just not editable. */}
+                {canManageThis && (
+                  <>
+                    <button
+                      type="button"
+                      title="Edit this view"
+                      aria-label={`Edit ${v.name}`}
+                      className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-primary"
+                      onClick={(e) => {
+                        // Without both of these the click would also select the
+                        // view, so editing one would silently switch you to it.
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onEdit(v);
+                      }}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Delete this view"
+                      aria-label={`Delete ${v.name}`}
+                      className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-destructive"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onDelete(v);
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                )}
                 {v.visibility !== "private" && (
                   <Badge variant="secondary" className="px-1 py-0 text-[9px]">
                     {v.visibility === "everyone" ? "All" : "Shared"}
                   </Badge>
                 )}
               </DropdownMenuItem>
-            ))}
+              );
+            })}
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={onNew} className="gap-2">
               <Plus className="h-3.5 w-3.5" />
@@ -148,7 +214,12 @@ export default function ViewBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <span className="shrink-0 text-xs text-muted-foreground">{count} items</span>
+        {/* "0 items" while the fetch is still running reads as "this view is
+            empty", which is exactly how the clinic reported it. Say nothing
+            until there is something true to say. */}
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {countLoading ? "Loading…" : `${count.toLocaleString("en-IN")} items`}
+        </span>
         {isStandard && (
           <Badge variant="secondary" className="shrink-0 gap-1 text-[10px]">
             <Lock className="h-3 w-3" /> Filters locked
@@ -187,7 +258,12 @@ export default function ViewBar({
               </DropdownMenuItem>
             )}
             <DropdownMenuItem
-              onClick={() => onPin(activeView?.is_default ? null : activeView)}
+              disabled={!activeView}
+              onClick={() => {
+                if (!activeView) return;
+                if (activeView.is_default) onUnpin();
+                else onPin(activeView);
+              }}
               className="gap-2"
             >
               {activeView?.is_default ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}

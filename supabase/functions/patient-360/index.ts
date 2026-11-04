@@ -38,7 +38,18 @@ serve(async (req) => {
     // Build a data summary for the AI
     const totalSpend = invoices.reduce((s: number, i: any) => s + Number(i.total_amount), 0);
     const totalPaid = invoices.reduce((s: number, i: any) => s + Number(i.paid_amount), 0);
-    const visitDates = appointments.map((a: any) => a.start_time).concat(procedures.map((p: any) => p.procedure_date)).sort();
+    // Visits the patient attended. This used to be every appointment row PLUS
+    // every procedure row, which double-counted a normal visit (the consultation
+    // and its prescription are the same attendance) and counted cancellations
+    // and future bookings as history. patients.total_visits is the one number
+    // recalc_patient_visit_rollups maintains, and it credits a past appointment
+    // with a paid invoice that Salesforce left marked "Confirmed".
+    const VISIT_STATUSES = ["Completed", "Checked-in", "In Progress"];
+    const attended = appointments.filter(
+      (a: any) => VISIT_STATUSES.includes(a.status) && new Date(a.start_time) <= new Date(),
+    );
+    const visitDates = attended.map((a: any) => a.start_time).sort();
+    const totalVisits = Number(patient?.total_visits ?? visitDates.length);
     const uniqueServices = [...new Set(procedures.map((p: any) => p.service_name))];
     const statuses = appointments.map((a: any) => a.status);
     const noShowCount = statuses.filter((s: string) => s.toLowerCase().includes("no") || s.toLowerCase().includes("cancel")).length;
@@ -53,7 +64,7 @@ PATIENT PROFILE:
 - Status: ${patient?.status}
 - Registered: ${patient?.created_at}
 
-VISIT HISTORY (${visitDates.length} total visits):
+VISIT HISTORY (${totalVisits} total visits):
 - First visit: ${visitDates[0] || "None"}
 - Last visit: ${visitDates[visitDates.length - 1] || "None"}
 - Visit dates: ${visitDates.slice(-10).join(", ")}
@@ -142,7 +153,7 @@ Rules:
     
     const analysis = JSON.parse(text);
 
-    return new Response(JSON.stringify({ analysis, rawStats: { totalVisits: visitDates.length, totalProcedures: procedures.length, totalSpend, totalPaid, uniqueServices: uniqueServices.length, noShowCount } }), {
+    return new Response(JSON.stringify({ analysis, rawStats: { totalVisits, totalProcedures: procedures.length, totalSpend, totalPaid, uniqueServices: uniqueServices.length, noShowCount } }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

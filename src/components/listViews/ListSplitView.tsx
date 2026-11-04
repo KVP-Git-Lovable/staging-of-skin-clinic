@@ -29,11 +29,20 @@ interface Props {
   renderLeading?: (row: any, size: "sm" | "lg") => React.ReactNode;
   /** Optional extra meta under the detail title (e.g. phone/email). */
   renderHeaderMeta?: (row: any) => React.ReactNode;
+  /**
+   * Optional mark after the title (e.g. the patients list's VIP crown).
+   *
+   * Drawn at BOTH titles, and deliberately with no way to tell them apart: the
+   * selected row and the detail heading are the same record, side by side on
+   * one screen, so two different-looking marks would read as two different
+   * things.
+   */
+  renderTitleAfter?: (row: any) => React.ReactNode;
 }
 
 export default function ListSplitView({
   rows, columns, fields, rawValue = defaultRawValue, onOpen,
-  titleField, detailFields, renderLeading, renderHeaderMeta,
+  titleField, detailFields, renderLeading, renderHeaderMeta, renderTitleAfter,
 }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(rows[0]?.id ?? null);
   const title = titleField ?? columns[0] ?? "id";
@@ -62,7 +71,10 @@ export default function ListSplitView({
             <div className="flex items-center gap-2.5">
               {renderLeading?.(row, "sm")}
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{formatCell(row, title)}</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="truncate text-sm font-medium">{formatCell(row, title)}</p>
+                  {renderTitleAfter?.(row)}
+                </div>
                 <p className="truncate text-xs text-muted-foreground">
                   {secondary.map((k) => formatCell(row, k)).filter((v) => v !== "—").join(" · ") || "—"}
                 </p>
@@ -81,8 +93,13 @@ export default function ListSplitView({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 {renderLeading?.(selected, "lg")}
-                <div>
-                  <h3 className="text-lg font-semibold">{formatCell(selected, title)}</h3>
+                <div className="min-w-0">
+                  {/* The heading does not truncate, so a long single-word name
+                      would otherwise push the mark out of the pane. */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-lg font-semibold">{formatCell(selected, title)}</h3>
+                    {renderTitleAfter?.(selected)}
+                  </div>
                   {renderHeaderMeta && (
                     <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">{renderHeaderMeta(selected)}</div>
                   )}

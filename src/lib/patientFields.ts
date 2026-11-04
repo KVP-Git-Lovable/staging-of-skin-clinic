@@ -23,6 +23,7 @@ import {
   formatCell as formatCellGeneric,
   computeChartData as computeChartDataGeneric,
 } from "@/lib/listViews/engine";
+import { daysSinceVisit } from "@/lib/visitStats";
 
 export type {
   FieldType, FieldDef, FilterCondition, ViewFilters, ChartType, AggregateType,
@@ -35,6 +36,7 @@ export const PATIENT_FIELDS: FieldDef[] = [
   { key: "first_name", label: "First Name", type: "text" },
   { key: "last_name", label: "Last Name", type: "text" },
   { key: "phone", label: "Phone", type: "text" },
+  { key: "alternate_phone", label: "Alternate Phone", type: "text" },
   { key: "email", label: "Email", type: "text" },
   { key: "gender", label: "Gender", type: "picklist", optionsSource: "gender" },
   { key: "age", label: "Age", type: "number" },
@@ -69,11 +71,23 @@ export const PATIENT_FIELDS: FieldDef[] = [
   { key: "engagement_retention_signal", label: "Engagement - Retention Signal", type: "number" },
   { key: "engagement_compliance", label: "Engagement - Compliance", type: "number" },
   { key: "engagement_updated_at", label: "Engagement Updated", type: "date" },
+  // What the clinic means by "when did this person become a patient". created_at
+  // answers a different question - when the row was loaded here - and for 98% of
+  // patients that is one of three bulk-import dates.
+  { key: "registered_at", label: "Registered", type: "date" },
   { key: "created_at", label: "Created Date", type: "date" },
   { key: "updated_at", label: "Last Modified", type: "date" },
 ];
 
-export const DEFAULT_VIEW_COLUMNS = ["full_name", "phone", "skin_type", "status", "created_at"];
+// Ordered and dated by last visit, not by when the record was created. A
+// newest-first list shows the least-complete records first - a patient who
+// registered today has nothing filled in yet - which is why Skin Type, then the
+// visit count, then Email each looked blank at the top in turn. Leading with the
+// most recently seen patients puts established records first instead: across the
+// top 100 rows that moves Email from 3% filled to 39%, and every row has a real
+// visit history. Skin Type and Created Date both stay in PATIENT_FIELDS above,
+// so a saved view can add either back.
+export const DEFAULT_VIEW_COLUMNS = ["full_name", "phone", "email", "status", "last_visit_date"];
 
 export function fieldDef(key: string): FieldDef | undefined {
   return fieldDefIn(PATIENT_FIELDS, key);
@@ -113,6 +127,9 @@ export function rawValue(row: any, key: string): unknown {
   if (!row) return null;
   if (key === "full_name") return `${row.first_name || ""} ${row.last_name || ""}`.trim();
   if (key === "age") return patientAge(row.date_of_birth);
+  // Worked out on read, like age: the stored column is a snapshot of a figure
+  // that changes daily, so it is wrong for all but a handful of patients.
+  if (key === "days_since_last_visit") return daysSinceVisit(row.last_visit_date);
   return row[key];
 }
 

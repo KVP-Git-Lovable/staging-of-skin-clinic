@@ -139,7 +139,7 @@ export function PinnedReports({ start, end, staffId }: Props) {
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.18 }}
+        transition={{ delay: 0.46 }}
         className="data-table p-5 mb-6 flex items-center gap-3 text-sm text-muted-foreground"
       >
         <Pin className="h-4 w-4 shrink-0" />
@@ -158,7 +158,7 @@ export function PinnedReports({ start, end, staffId }: Props) {
     <motion.section
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.18 }}
+      transition={{ delay: 0.46 }}
       className="mb-6"
     >
       <div className="flex items-center gap-2 mb-3">

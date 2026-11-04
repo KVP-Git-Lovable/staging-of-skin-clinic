@@ -32,13 +32,39 @@ export function setCurrencySettingsCache(next: Partial<CurrencySettings> | null)
 
 const digits = (s: CurrencySettings) => (s.show_decimals ? Math.min(Math.max(s.decimal_digits, 0), 6) : 0);
 
+/** Every digit, grouped the configured way. The one place the locale and the
+ *  decimal clamp are decided, so the formatters below cannot drift. */
+const grouped = (n: number, s: CurrencySettings, fractionDigits = digits(s)) =>
+  n.toLocaleString(s.number_style === "indian" ? "en-IN" : "en-US", {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  });
+
+/**
+ * Decimal places for a figure that gets reconciled against another system.
+ *
+ * The clinic has chosen whole rupees, and for almost every amount that is
+ * right. But a total carrying paise is then rounded, and the two systems round
+ * the same half-rupee in opposite directions: 21 September took
+ * Rs 1,66,322.50, which printed as Rs 1,66,323 on the report against
+ * Salesforce's Rs 1,66,322. Neither was wrong and neither could be reconciled.
+ *
+ * So: the configured digits when decimals are switched on, and otherwise two
+ * only when the amount actually has paise to show. A whole amount stays whole,
+ * which is what the setting was chosen for.
+ */
+const reconcilableDigits = (n: number, s: CurrencySettings) => {
+  if (s.show_decimals) return digits(s);
+  // Judged at paise resolution: summing a column of numerics can land on
+  // 166322.49999999, which is a half-rupee and must not read as a whole one.
+  return Math.round(n * 100) % 100 === 0 ? 0 : 2;
+};
+
 /** Plain grouped number, honouring Indian vs US grouping and decimal settings. */
 export function formatNumber(value: number | string | null | undefined): string {
   const n = typeof value === "string" ? Number(value) : value;
   if (n == null || Number.isNaN(n)) return "—";
   const s = cache;
-  const d = digits(s);
-  const locale = s.number_style === "indian" ? "en-IN" : "en-US";
   if (s.abbreviate) {
     const abs = Math.abs(n);
     const sign = n < 0 ? "-" : "";
@@ -52,7 +78,7 @@ export function formatNumber(value: number | string | null | undefined): string 
       if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)}K`;
     }
   }
-  return n.toLocaleString(locale, { minimumFractionDigits: d, maximumFractionDigits: d });
+  return grouped(n, s);
 }
 
 /** Currency string using the admin-configured symbol, decimals and grouping style. */
@@ -60,6 +86,71 @@ export function formatMoney(value: number | string | null | undefined): string {
   const n = typeof value === "string" ? Number(value) : value;
   if (n == null || Number.isNaN(n)) return `${cache.symbol}0`;
   return `${cache.symbol}${formatNumber(n)}`;
+}
+
+/**
+ * Currency with every digit shown - never Lakh/Crore/K, whatever `abbreviate`
+ * says.
+ *
+ * The report KPI cards use this. A total on one of those cards is read off and
+ * reconciled against a bank statement or the cash drawer, and "Rs 1.95 L"
+ * cannot be reconciled against anything. formatMoney is not enough on its own
+ * because it inherits the abbreviate setting through formatNumber.
+ */
+export function formatMoneyExact(value: number | string | null | undefined): string {
+  const n = typeof value === "string" ? Number(value) : value;
+  if (n == null || Number.isNaN(n)) return `${cache.symbol}0`;
+  // Sign outside the symbol - "-₹2,000", the way formatMoneyCompact writes the
+  // negatives it shortens, rather than formatMoney's "₹-2,000".
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  // Paise shown only when there are paise - see reconcilableDigits.
+  return `${sign}${cache.symbol}${grouped(abs, cache, reconcilableDigits(abs, cache))}`;
+}
+
+/**
+ * The same number `formatMoneyExact` prints, without the currency symbol.
+ *
+ * The report PDF's table cells need this: `reportColumnHeader` already puts
+ * "(Rs)" in the column heading, so the cells carry the figure alone. They used
+ * to go through `formatNumber`, which rounds to whole rupees while decimals are
+ * off - so a day whose summary card read Rs 1,66,322.50 printed rows adding up
+ * to Rs 1,66,324.00, and the document could not be reconciled against itself.
+ * Three half-rupee bills, each rounded up.
+ *
+ * Shares `reconcilableDigits` with formatMoneyExact rather than restating the
+ * rule, so the printed document and the screen cannot drift apart.
+ */
+export function formatAmountExact(value: number | string | null | undefined): string {
+  const n = typeof value === "string" ? Number(value) : value;
+  if (n == null || Number.isNaN(n)) return "0";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  return `${sign}${grouped(abs, cache, reconcilableDigits(abs, cache))}`;
+}
+
+/**
+ * Currency with two decimals always, whatever `show_decimals` says.
+ *
+ * For a GST invoice this is not a display preference. The clinic has chosen
+ * whole rupees for the app generally, and that is fine everywhere except a tax
+ * document, where rounding stops the figures reconciling: a ₹4,000 bill at 5%
+ * inclusive is ₹3,809.52 + ₹190.48, and rounding it prints CGST ₹95 + SGST ₹95
+ * = ₹190 against a tax line of ₹190.48. The printed PDF already shows the exact
+ * figures, so rounding on screen also made the two disagree about the same bill.
+ *
+ * Used for amounts and tax heads on invoices. Everything else keeps the
+ * configured setting.
+ */
+export function formatMoneyPrecise(value: number | string | null | undefined): string {
+  const n = typeof value === "string" ? Number(value) : value;
+  if (n == null || Number.isNaN(n)) return `${cache.symbol}0.00`;
+  const sign = n < 0 ? "-" : "";
+  const body = Math.abs(n).toLocaleString(
+    cache.number_style === "indian" ? "en-IN" : "en-US",
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 },
+  );
+  return `${sign}${cache.symbol}${body}`;
 }
 
 /** Currency string that always shortens large amounts (Lakh/Crore or K/M),

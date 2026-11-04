@@ -1,12 +1,22 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-IN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <!-- viewport-fit=cover is REQUIRED by the apple-mobile-web-app-status-bar-style
+         below: black-translucent draws the page under the status bar, and without
+         cover the safe-area insets all resolve to 0px, so the header sat under the
+         clock and the notch in the installed app.
+
+         maximum-scale=1.0 and user-scalable=no were here and are gone: they block
+         pinch zoom, which fails WCAG 1.4.4 and stops staff zooming a photo or a
+         small figure on a phone. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>The Skin Clinic</title>
     <meta name="description" content="The Skin Clinic — clinic management made simple" />
     <meta name="author" content="The Skin Clinic" />
-    <meta name="theme-color" content="#1e293b" />
+    <meta name="theme-color" content="#f5f7fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1e293b" media="(prefers-color-scheme: dark)" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="The Skin Clinic" />

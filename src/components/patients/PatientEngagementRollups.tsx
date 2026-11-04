@@ -1,4 +1,5 @@
 import { formatMoney } from "@/lib/currency";
+import { daysSinceVisit } from "@/lib/visitStats";
 import { CalendarDays, IndianRupee, Repeat, Timer } from "lucide-react";
 
 interface Props {
@@ -42,7 +43,14 @@ export function PatientEngagementRollups({ patient, visitsOverride, lifetimeValu
     {
       icon: Timer,
       label: "Days Since Last Visit",
-      value: patient.days_since_last_visit != null ? String(patient.days_since_last_visit) : "—",
+      // Worked out from the last visit rather than read from the stored column:
+      // that column is only rewritten when something recalculates, so it drifts
+      // by a day every day - 18,886 of 19,000 patients disagreed with their own
+      // last-visit date, and one read "-32".
+      value: (() => {
+        const d = daysSinceVisit(patient.last_visit_date);
+        return d != null ? String(d) : "—";
+      })(),
     },
     {
       icon: CalendarDays,

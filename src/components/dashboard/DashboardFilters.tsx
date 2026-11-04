@@ -1,4 +1,5 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DateInput } from "@/components/shared/DateInput";
 import { Input } from "@/components/ui/input";
 import type { DashboardTab } from "@/lib/dashboardTabs";
 
@@ -110,17 +111,15 @@ export function DashboardFilters({
 
       {selectedDateRange === "custom" && (
         <div className="flex items-center gap-2">
-          <Input
-            type="date"
+          <DateInput
             value={customStart}
-            onChange={(e) => onCustomStartChange(e.target.value)}
+            onChange={(isoDate) => onCustomStartChange(isoDate)}
             className="h-8 w-[140px] text-xs"
           />
           <span className="text-xs text-muted-foreground">to</span>
-          <Input
-            type="date"
+          <DateInput
             value={customEnd}
-            onChange={(e) => onCustomEndChange(e.target.value)}
+            onChange={(isoDate) => onCustomEndChange(isoDate)}
             className="h-8 w-[140px] text-xs"
           />
         </div>

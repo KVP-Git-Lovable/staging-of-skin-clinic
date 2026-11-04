@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { optionMatchScore } from "@/lib/optionSearch";
 
 export interface SearchableSelectOption {
   id: string;
@@ -32,8 +33,13 @@ export function SearchableSelect({
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
 
+  // The dropdown is portalled to the body, so when it opens inside a Dialog or
+  // Sheet that container's scroll lock swallows wheel events over the list -
+  // clicks work, the mouse wheel does nothing. `modal` gives the popover its own
+  // lock, which restores scrolling. Verified in a browser; dropping it silently
+  // breaks scrolling on long lists.
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover modal open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           type="button"
@@ -47,7 +53,7 @@ export function SearchableSelect({
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-        <Command>
+        <Command filter={optionMatchScore}>
           <CommandInput placeholder={searchPlaceholder} />
           <CommandList>
             <CommandEmpty>{emptyText}</CommandEmpty>

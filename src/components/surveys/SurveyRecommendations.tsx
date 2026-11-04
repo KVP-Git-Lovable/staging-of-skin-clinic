@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { withDrPrefix } from "@/lib/staffName";
 import { Check, X, Pencil, Bot, Pill, Stethoscope, Shield, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -180,7 +181,7 @@ export function SurveyRecommendations({ appointmentId, patientId }: Props) {
                     <SelectTrigger className="w-40"><SelectValue placeholder="Reviewed by" /></SelectTrigger>
                     <SelectContent>
                       {staffList.filter((s: any) => s.role === "Doctor").map((s: any) => (
-                        <SelectItem key={s.id} value={s.id}>Dr. {s.first_name} {s.last_name}</SelectItem>
+                        <SelectItem key={s.id} value={s.id}>{withDrPrefix(`${s.first_name} ${s.last_name}`)}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -221,7 +222,7 @@ export function SurveyRecommendations({ appointmentId, patientId }: Props) {
                 <p className="text-sm">{resp.dr_notes}</p>
                 {resp.staff && (
                   <p className="text-[10px] text-muted-foreground mt-1">
-                    Reviewed by Dr. {resp.staff.first_name} {resp.staff.last_name}
+                    Reviewed by {withDrPrefix(`${resp.staff.first_name} ${resp.staff.last_name}`)}
                   </p>
                 )}
               </div>

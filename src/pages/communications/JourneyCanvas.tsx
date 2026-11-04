@@ -37,6 +37,7 @@ import {
   type JourneyNodeData,
   type JourneyNodeType,
 } from "@/lib/comms/journeyGraph";
+import { onlyClinicTemplates } from "@/lib/comms/templateFilter";
 import {
   approvalBadgeClass,
   approvalLabel,
@@ -100,7 +101,9 @@ function Canvas({ journey }: { journey: Journey }) {
         .eq("status", "approved")
         .order("name");
       if (error) throw error;
-      return (data || []) as unknown as ApprovedTemplate[];
+      // Same rule as the Templates page: a template the clinic cannot see there must not be
+      // pickable here either, or the two screens disagree about what exists.
+      return onlyClinicTemplates((data || []) as unknown as ApprovedTemplate[]);
     },
   });
 

@@ -1,5 +1,13 @@
-import { useState, useEffect, useRef } from "react";
-import { Plus, Pill, Wrench, Check, Sparkles, Loader2, Mic, MicOff, ChevronsUpDown, HeartPulse, ClipboardCheck, CalendarClock, Repeat, StickyNote } from "lucide-react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { MAX_DATETIME, MIN_DATETIME, displayDate, isPlausibleIso } from "@/lib/dateInput";
+import { dedupeByName } from "@/lib/serviceLineSave";
+import { reservedVisits } from "@/lib/reservedVisits";
+import { clearVisitAt, joinVisitDateTime, removeVisitAt, splitVisitDateTime } from "@/lib/recurringVisits";
+import { DateInput } from "@/components/shared/DateInput";
+import { TimePicker12h } from "@/components/shared/TimePicker12h";
+import { capitaliseFirstWord } from "@/lib/sentenceCase";
+import { numVal } from "@/lib/numberInput";
+import { Plus, Pill, Wrench, Check, Sparkles, Loader2, Mic, MicOff, ChevronsUpDown, HeartPulse, ClipboardCheck, CalendarClock, Repeat, StickyNote, Stethoscope, Trash2, BookOpen } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -18,7 +26,7 @@ import {
 } from "@/components/ui/command";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SurveyHistoryPanel } from "@/components/surveys/SurveyHistoryPanel";
-import { ProcedureStickyNotes, type DraftNote } from "@/components/procedures/ProcedureStickyNotes";
+import { StickyNotes, type DraftNote } from "@/components/shared/StickyNotes";
 import { ClipboardList } from "lucide-react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { supabase } from "@/integrations/supabase/client";
@@ -32,30 +40,37 @@ import { toast } from "sonner";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { MicButton } from "@/components/shared/MicButton";
 import { OTHERS_VALUE } from "@/lib/othersOption";
+import { droppedMedicineNotice, knownProductIds, losesCatalogueLink, productIdForSave } from "@/lib/prescriptionProducts";
+import { APPOINTMENT_REMOVED_NOTICE, appointmentDayMismatch, appointmentLinkForSave } from "@/lib/procedureAppointment";
+import { applyMedicineDefaults } from "@/lib/medicineDefaults";
+import { usePharmaLookup } from "@/hooks/usePharmaLookup";
+import { ServicePicker } from "@/components/procedures/ServicePicker";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { type ServiceOption } from "@/lib/servicePicker";
+import { blankServiceLine } from "@/lib/procedureFormSeed";
+import { patientIdentityLine } from "@/lib/patientIdentity";
+import { ClinicalGuidelines } from "@/components/knowledge/ClinicalGuidelines";
+import { appendCare } from "@/lib/knowledge";
 
-const MEDICAL_FIELDS: [string, string][] = [
-  ["symptoms", "Symptoms"],
-  ["diagnosis", "Diagnosis"],
-  ["lab_tests", "Lab Tests"],
-  ["medical_history", "Medical History"],
-  ["current_medications", "Current Medications"],
-  ["allergies", "Allergies"],
-  ["previous_treatments", "Previous Treatments"],
-  ["skin_type", "Skin Type"],
-  ["skin_concerns", "Skin Concerns"],
-];
-
-/** Visit-specific clinical fields: stored on the procedure, not on the patient record. */
-const PROCEDURE_MEDICAL_FIELDS = ["symptoms", "diagnosis", "lab_tests"];
-
-// patients.skin_type has a DB check constraint restricting it to these
-// exact values - must stay a dropdown, not free text, or saving fails.
-const SKIN_TYPE_OPTIONS = ["Normal", "Dry", "Oily", "Combination", "Sensitive"];
-// Skin Type is a constrained dropdown, not free text, so it's excluded from
-// AI elaboration (which would turn it into a sentence and break the constraint).
-const ELABORATABLE_MEDICAL_FIELDS = MEDICAL_FIELDS.filter(([field]) => field !== "skin_type");
+import {
+  MEDICAL_FIELDS,
+  ELABORATABLE_MEDICAL_FIELDS,
+  SKIN_TYPE_OPTIONS,
+} from "@/lib/medicalFields";
 
 interface PrescriptionInput {
+  /**
+   * Identity of this row, stable for as long as it exists.
+   *
+   * These rows were keyed by their array index. Removing the second of four
+   * medicines then left React re-using the same component instances for what
+   * was now different data - the Radix Selects kept the state of the row that
+   * had been in that position, so Remove looked as though it had deleted the
+   * wrong medicine or done nothing at all, and the section re-rendered on its
+   * own as the values shuffled up. A key that belongs to the row rather than
+   * its position is what makes a removal remove that row.
+   */
+  key: string;
   product_id: string;
   medicine_name: string;
   frequency: string;
@@ -64,12 +79,19 @@ interface PrescriptionInput {
   quantity: number;
 }
 
+let rxSeq = 0;
+const newRxKey = () => `rx-${Date.now()}-${rxSeq++}`;
+let assetSeq = 0;
+const newAssetKey = () => `asset-${Date.now()}-${assetSeq++}`;
+
 interface StockInfo {
   available: number;
   loading: boolean;
 }
 
 interface AssetInput {
+  /** Same reason as PrescriptionInput.key - this list also removes rows. */
+  key: string;
   asset_id: string;
   asset_name: string;
   usage_guideline: string;
@@ -93,16 +115,42 @@ interface ProcedureFormDialogProps {
   defaultPatientId?: string;
   defaultAppointmentId?: string;
   defaultStaffId?: string | null;
-  defaultServiceName?: string;
+  // No defaultServiceName / defaultInvestigation: see procedureFormSeed.ts.
+  // The form takes no service from anybody, and leaving the props off is what
+  // stops the next caller offering one.
   defaultProblemAreaIds?: string[];
   /** Render inline (full page) instead of inside a modal dialog */
   asPage?: boolean;
   onSaved?: (procedureId: string) => void;
 }
 
-export function ProcedureFormDialog({
+/**
+ * A new prescription opens blank, every time.
+ *
+ * The form holds everything the doctor types in component state, and on the
+ * patient's own page this dialog was mounted whether it was open or not - so
+ * closing it and starting the next prescription found the last one's Symptoms,
+ * Diagnosis and Lab Tests still in the boxes. Only sometimes, which is what
+ * made it hard to place: the Procedures page and the appointment sheet already
+ * mount it only while it is open, and the medical fields that live on the
+ * patient are re-read whenever the patient changes - so it needed the same
+ * patient twice in a row, from their own page, to show.
+ *
+ * Unmounting it when it closes is what resets it, rather than a list of
+ * setters that the next field added to this form would quietly fall off the
+ * end of. Every caller gets this, including ones not written yet.
+ *
+ * asPage is the full-page route, which is mounted only when navigated to and
+ * is never passed open={false}.
+ */
+export function ProcedureFormDialog(props: ProcedureFormDialogProps) {
+  if (!props.open && !props.asPage) return null;
+  return <ProcedureForm {...props} />;
+}
+
+function ProcedureForm({
   open, onOpenChange,
-  defaultPatientId, defaultAppointmentId, defaultStaffId, defaultServiceName, defaultProblemAreaIds,
+  defaultPatientId, defaultAppointmentId, defaultStaffId, defaultProblemAreaIds,
   asPage = false, onSaved,
 }: ProcedureFormDialogProps) {
   const queryClient = useQueryClient();
@@ -113,26 +161,75 @@ export function ProcedureFormDialog({
   const [medical, setMedical] = useState<Record<string, string>>({});
   const [medicalDirty, setMedicalDirty] = useState(false);
   const [appointmentId] = useState(defaultAppointmentId || "");
-  const [serviceLines, setServiceLines] = useState<ServiceLine[]>([
-    { key: `svc-${Date.now()}`, service_id: "", name: defaultServiceName || "", procedure_notes: "", recommendations: "", material_percent: "", price: 0 },
-  ]);
+
+  /**
+   * The visit this will be filed under.
+   *
+   * The form carried an appointment id and never showed it, so a prescription
+   * started from an out-of-date row on the Appointments list was filed on an
+   * out-of-date visit with nothing to give it away - 13 times in the last 90
+   * days, each time passing over an appointment the patient had that same day.
+   * Now it is named on screen before a word is written.
+   */
+  const { data: linkedAppointment } = useQuery({
+    queryKey: ["procedure-form-appointment", defaultAppointmentId],
+    enabled: !!defaultAppointmentId,
+    refetchOnMount: "always",
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("appointments")
+        .select("id, start_time, service")
+        .eq("id", defaultAppointmentId!)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+  const visitDay = appointmentDayMismatch(linkedAppointment?.start_time, new Date());
+
+  // One empty line, whatever the visit was booked as. See procedureFormSeed.ts.
+  const [serviceLines, setServiceLines] = useState<ServiceLine[]>([blankServiceLine()]);
 
   const [nextAppointmentAt, setNextAppointmentAt] = useState("");
   const [visitType, setVisitType] = useState<"Single" | "Recurring">("Single");
   const [recurringCount, setRecurringCount] = useState(2);
   const [recurringDates, setRecurringDates] = useState<string[]>(["", ""]);
+  /**
+   * What the reserved visits are for, in the doctor's own words.
+   *
+   * A reserved appointment used to be created with no investigation at all -
+   * 56 of the 60 recurring visits in the clinic have none. The Investigation
+   * column falls back to the appointment's service when it is empty
+   * (investigationText.ts), and the service is copied from the procedure just
+   * written, so the next visit showed the last visit's treatment as its
+   * investigation. Typed here it wins over that fallback, because a recorded
+   * answer beats a guess.
+   */
+  // One investigation per reserved visit, indexed like recurringDates. A
+  // course's visits are not the same investigation - the second session and
+  // the review that follows it read differently on the appointment, in the
+  // Investigation column and in the patient's reminder.
+  const [followUpInvestigations, setFollowUpInvestigations] = useState<string[]>(["", ""]);
+  const setInvestigationAt = (index: number, text: string) =>
+    setFollowUpInvestigations((prev) => {
+      const next = [...prev];
+      while (next.length <= index) next.push("");
+      next[index] = text;
+      return next;
+    });
   const [prescriptions, setPrescriptions] = useState<PrescriptionInput[]>([]);
-  const [stockMap, setStockMap] = useState<Record<number, StockInfo>>({});
+  const [stockMap, setStockMap] = useState<Record<string, StockInfo>>({});
   const [procedureAssets, setProcedureAssets] = useState<AssetInput[]>([]);
   // Notes typed before the procedure exists. procedure_sticky_notes.procedure_id is NOT NULL,
   // so these are buffered here and flushed once the procedure row has an id.
   const [draftNotes, setDraftNotes] = useState<DraftNote[]>([]);
-  const [autoFilled, setAutoFilled] = useState(false);
 
   // Unified AI bar state
   const [dictation, setDictation] = useState("");
   const [parsing, setParsing] = useState(false);
   const [elaboratingAll, setElaboratingAll] = useState(false);
+  // Which single field is being elaborated, as "<lineKey>:<field>".
+  const [elaborating, setElaborating] = useState<string | null>(null);
   const [elaboratingMedical, setElaboratingMedical] = useState(false);
   const [recentlyFilled, setRecentlyFilled] = useState<Record<string, boolean>>({});
   const [unmatchedHints, setUnmatchedHints] = useState<{
@@ -285,7 +382,10 @@ export function ProcedureFormDialog({
       }
       if (Array.isArray(data.prescriptions) && data.prescriptions.length > 0) {
         const newRx = data.prescriptions.map((p: any) => ({
-          product_id: "",
+          key: newRxKey(),
+          // Read out of free text, so there is a name but no catalogue row.
+          // "Others" keeps that name visible and editable; "" hid it.
+          product_id: p.medicine_name ? OTHERS_VALUE : "",
           medicine_name: p.medicine_name || "",
           frequency: p.frequency || "",
           duration: p.duration || "",
@@ -364,6 +464,34 @@ export function ProcedureFormDialog({
     }
   };
 
+  // One field at a time, as the saved-prescription editor has always offered.
+  // Same edge function it calls (elaborate-text), so a doctor gets the same
+  // wording whether they are writing the prescription or correcting it later.
+  const elaborateLine = async (lineKey: string, fieldType: "procedure_notes" | "recommendations") => {
+    const line = serviceLines.find((l) => l.key === lineKey);
+    if (!line) return;
+    const currentText = fieldType === "procedure_notes" ? line.procedure_notes : line.recommendations;
+    setElaborating(`${lineKey}:${fieldType}`);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/elaborate-text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
+        body: JSON.stringify({ serviceName: (line.name || "Consultation").trim(), fieldType, currentText }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "AI request failed" }));
+        throw new Error(err.error || "AI request failed");
+      }
+      const { text } = await res.json();
+      setServiceLines((prev) => prev.map((l) => (l.key === lineKey ? { ...l, [fieldType]: text } : l)));
+      toast.success("Text elaborated");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to elaborate");
+    } finally {
+      setElaborating(null);
+    }
+  };
+
   const elaborateMedical = async () => {
     if (ELABORATABLE_MEDICAL_FIELDS.every(([field]) => !medical[field])) {
       toast.info("Fill in a medical information field first, then Elaborate.");
@@ -436,7 +564,7 @@ export function ProcedureFormDialog({
     queryFn: async () => {
       const { data, error } = await supabase
         .from("patients")
-        .select("id, medical_history, current_medications, allergies, skin_type, skin_concerns, previous_treatments")
+        .select("id, date_of_birth, gender, medical_history, current_medications, dietary_advice, skin_type, previous_treatments")
         .eq("id", patientId)
         .maybeSingle();
       if (error) throw error;
@@ -449,9 +577,8 @@ export function ProcedureFormDialog({
     setMedical({
       medical_history: patientRecord.medical_history || "",
       current_medications: patientRecord.current_medications || "",
-      allergies: patientRecord.allergies || "",
+      dietary_advice: patientRecord.dietary_advice || "",
       skin_type: patientRecord.skin_type || "",
-      skin_concerns: patientRecord.skin_concerns || "",
       previous_treatments: patientRecord.previous_treatments || "",
     });
     setMedicalDirty(false);
@@ -495,17 +622,7 @@ export function ProcedureFormDialog({
     },
   });
 
-  const { data: products = [] } = useQuery({
-    queryKey: ["pharma-products-lookup"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("pharma_products")
-        .select("id, name, default_frequency, default_duration, default_instructions")
-        .order("name");
-      if (error) throw error;
-      return data;
-    },
-  });
+  const { data: products = [] } = usePharmaLookup();
 
   const { data: allAssets = [] } = useQuery({
     queryKey: ["assets-lookup"],
@@ -517,13 +634,33 @@ export function ProcedureFormDialog({
   });
 
   const addServiceLine = () =>
-    setServiceLines((prev) => [
-      ...prev,
-      { key: `svc-${Date.now()}-${prev.length}`, service_id: "", name: "", procedure_notes: "", recommendations: "", material_percent: "", price: 0 },
-    ]);
+    setServiceLines((prev) => [...prev, blankServiceLine(`svc-${Date.now()}-${prev.length}`)]);
+
+  /**
+   * Whether each service line's picker is open, keyed by the line's own key.
+   *
+   * The popover used to be uncontrolled, so nothing could close it when a
+   * service was chosen - Radix only closes on an outside click or Escape, and
+   * CommandItem's onSelect is neither.
+   */
+  const [serviceMenuOpen, setServiceMenuOpen] = useState<Record<string, boolean>>({});
+  const closeServiceMenu = (key: string) => setServiceMenuOpen((m) => ({ ...m, [key]: false }));
 
   const removeServiceLine = (key: string) =>
-    setServiceLines((prev) => (prev.length === 1 ? prev : prev.filter((l) => l.key !== key)));
+    setServiceLines((prev) => {
+      // Drop the removed line's flag with it, so a later line reusing nothing
+      // of its identity cannot inherit an open menu.
+      setServiceMenuOpen((m) => {
+        const next = { ...m };
+        delete next[key];
+        return next;
+      });
+      // Removing the only service empties it rather than leaving the section
+      // with nothing in it: the form is back to how it opens, with one blank
+      // line ready for the right service.
+      if (prev.length === 1) return [blankServiceLine(`svc-${Date.now()}`)];
+      return prev.filter((l) => l.key !== key);
+    });
 
   const updateServiceLine = (key: string, patch: Partial<ServiceLine>) =>
     setServiceLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
@@ -553,7 +690,8 @@ export function ProcedureFormDialog({
         for (const m of meds as any[]) {
           if (next.some((rx) => rx.product_id && rx.product_id === m.product_id)) continue;
           next.push({
-            product_id: m.product_id,
+            key: newRxKey(),
+            product_id: m.product_id || (m.pharma_products?.name ? OTHERS_VALUE : ""),
             medicine_name: m.pharma_products?.name || "",
             frequency: m.frequency || "",
             duration: m.duration || "",
@@ -576,6 +714,7 @@ export function ProcedureFormDialog({
         for (const a of assetLinksData as any[]) {
           if (next.some((x) => x.asset_id === a.asset_id)) continue;
           next.push({
+            key: newAssetKey(),
             asset_id: a.asset_id,
             asset_name: a.assets?.name || "",
             usage_guideline: a.usage_guideline || "",
@@ -585,23 +724,23 @@ export function ProcedureFormDialog({
         return next;
       });
     }
-    setAutoFilled(true);
     toast.info("Procedure & recommendations auto-filled from Service Master — you can edit them.");
   };
 
   // When a service is selected from dropdown
+  // The product list plus the manual-entry escape hatch, as one option list.
+  const medicineOptions = useMemo(
+    () => [
+      ...(products as { id: string; name: string }[]).map((p) => ({ id: p.id, name: p.name })),
+      { id: OTHERS_VALUE, name: "Others (type manually)" },
+    ],
+    [products],
+  );
+
   const handleServiceSelect = async (svcId: string, lineKey: string) => {
     const svc = services.find((s: any) => s.id === svcId);
     if (svc) await applyServiceData(svc, svcId, lineKey);
   };
-
-  // Auto-match defaultServiceName on first load
-  if (defaultServiceName && services.length > 0 && !autoFilled && !serviceLines[0]?.service_id) {
-    const match = services.find((s: any) => s.name === defaultServiceName);
-    if (match) {
-      applyServiceData(match, match.id, serviceLines[0].key);
-    }
-  }
 
 
   // A ref, not a plain local: a re-render between mutationFn and onSuccess would
@@ -623,7 +762,10 @@ export function ProcedureFormDialog({
 
       // Warn about zero stock for prescribed medicines (don't block)
       for (const rx of prescriptions) {
-        if (!rx.product_id) continue;
+        // "__others__" is not a product id. Querying stock with it returns
+        // nothing and would warn that every typed-in medicine is out of
+        // stock - and rows loaded from Salesforce now carry it.
+        if (!rx.product_id || rx.product_id === OTHERS_VALUE) continue;
         const { data: invData } = await supabase.from("pharma_inventory").select("quantity").eq("product_id", rx.product_id);
         const { data: rxData } = await supabase.from("prescriptions").select("quantity").eq("product_id", rx.product_id);
         const totalStock = (invData || []).reduce((s, i) => s + Number(i.quantity), 0);
@@ -633,15 +775,59 @@ export function ProcedureFormDialog({
         }
       }
 
-      const cleanLines = serviceLines.filter((l) => (l.name || "").trim());
-      const effectiveLines = cleanLines.length
-        ? cleanLines
-        : [{ key: "default", service_id: "", name: "Consultation", procedure_notes: "", recommendations: "", material_percent: "", price: 0 }];
+      // A visit where nobody picked a service is saved with no service, not
+      // with an invented one.
+      //
+      // This used to substitute a line called "Consultation" whenever the form
+      // was saved without one, which then read back as though a service had
+      // been chosen - and it is why "Consultation" is the service on 24,610
+      // procedures. A blank service says "none recorded", which is true and
+      // can be corrected; a made-up one cannot be told apart from a real
+      // consultation afterwards.
+      //
+      // Only new saves are affected: nothing already stored is rewritten.
+      // One service, once. A visit holds a service a single time - the
+      // database enforces it - and what was entered once must read once on
+      // the prescription and on the printed document.
+      const effectiveLines = dedupeByName(
+        serviceLines.filter((l) => (l.name || "").trim()).map((l) => ({ ...l, service_name: l.name })),
+      );
       const combine = (field: "procedure_notes" | "recommendations") =>
         effectiveLines
           .filter((l) => (l[field] || "").trim())
           .map((l) => (effectiveLines.length > 1 ? `${l.name}: ${l[field]}` : l[field]))
           .join("\n\n");
+
+      // The appointment is checked the same way and for the same reason: the
+      // front desk deletes appointments all day, and one deleted while a
+      // consultation was being written up rejected the whole save. See
+      // procedureAppointment.ts.
+      const appointmentLink = await appointmentLinkForSave(appointmentId);
+
+      // The medicines are built and checked here, before a single row is
+      // written. They used to be built last, after the procedure and its
+      // services were already in - so one medicine id the catalogue no longer
+      // had rejected the insert and left a saved visit with no medicines on
+      // it and a raw Postgres message on screen. An id that is not in the
+      // catalogue is dropped and the medicine saved by name instead; see
+      // prescriptionProducts.ts for why that loses nothing.
+      const catalogue = knownProductIds(products as { id: string }[]);
+      const droppedMedicines = prescriptions
+        .filter((rx) => losesCatalogueLink(rx.product_id, catalogue))
+        .map((rx) => rx.medicine_name);
+      const rxToSave = prescriptions
+        .map((rx) => ({
+          product_id: productIdForSave(rx.product_id, catalogue),
+          medicine_name: rx.medicine_name,
+          dosage: "",
+          frequency: rx.frequency,
+          duration: rx.duration,
+          instructions: rx.instructions,
+          quantity: rx.quantity,
+        }))
+        // A row with neither a catalogue medicine nor a typed name is an
+        // empty line the doctor never filled in.
+        .filter((row) => row.product_id || (row.medicine_name || "").trim());
 
       const { data: proc, error } = await supabase
         .from("procedures")
@@ -653,7 +839,7 @@ export function ProcedureFormDialog({
           symptoms: medical.symptoms || null,
           diagnosis: medical.diagnosis || null,
           lab_tests: medical.lab_tests || null,
-          appointment_id: appointmentId || null,
+          appointment_id: appointmentLink.id,
           service_name: effectiveLines.map((l) => l.name).join(", "),
           procedure_notes: combine("procedure_notes"),
           recommendations: combine("recommendations") || null,
@@ -668,7 +854,8 @@ export function ProcedureFormDialog({
         .single();
       if (error) throw error;
 
-      const { error: svcErr } = await supabase.from("procedure_services").insert(
+      // No service lines means no service rows - not one placeholder row.
+      const { error: svcErr } = effectiveLines.length === 0 ? { error: null } : await supabase.from("procedure_services").insert(
         effectiveLines.map((l, i) => ({
           procedure_id: proc.id,
           service_id: l.service_id && l.service_id !== OTHERS_VALUE ? l.service_id : null,
@@ -682,25 +869,15 @@ export function ProcedureFormDialog({
       if (svcErr) throw svcErr;
 
 
-      if (prescriptions.length > 0) {
-
-        const rxRows = prescriptions
-          .filter((rx) => rx.medicine_name || (rx.product_id && rx.product_id !== OTHERS_VALUE))
-          .map((rx) => ({
-            procedure_id: proc.id,
-            product_id: rx.product_id === OTHERS_VALUE ? null : (rx.product_id || null),
-            medicine_name: rx.medicine_name,
-            dosage: "",
-            frequency: rx.frequency,
-            duration: rx.duration,
-            instructions: rx.instructions,
-            quantity: rx.quantity,
-          }));
-        if (rxRows.length > 0) {
-          const { error: rxErr } = await supabase.from("prescriptions").insert(rxRows);
-          if (rxErr) throw rxErr;
-        }
+      if (rxToSave.length > 0) {
+        const { error: rxErr } = await supabase
+          .from("prescriptions")
+          .insert(rxToSave.map((row) => ({ ...row, procedure_id: proc.id })));
+        if (rxErr) throw rxErr;
+        const notice = droppedMedicineNotice(droppedMedicines);
+        if (notice) toast.warning(notice);
       }
+      if (appointmentLink.removed) toast.warning(APPOINTMENT_REMOVED_NOTICE);
 
       notesFlushFailedRef.current = false;
       if (draftNotes.length > 0) {
@@ -736,28 +913,40 @@ export function ProcedureFormDialog({
       if (medicalDirty && patientId) {
         const { error: medErr } = await supabase
           .from("patients")
+          // Only the columns this form shows. Allergies and Skin Concerns are
+          // deliberately absent: they are no longer on the form, so
+          // `medical.allergies` is undefined and writing `|| null` would blank
+          // every patient's stored value on the next save - 5,365 of them for
+          // skin_concerns alone. Leaving a column out of the update keeps it.
           .update({
             medical_history: medical.medical_history || null,
             current_medications: medical.current_medications || null,
-            allergies: medical.allergies || null,
+            dietary_advice: medical.dietary_advice || null,
             skin_type: medical.skin_type || null,
-            skin_concerns: medical.skin_concerns || null,
             previous_treatments: medical.previous_treatments || null,
           })
           .eq("id", patientId);
         if (medErr) throw medErr;
       }
 
-      // Follow-up appointment(s) picked by the doctor
-      const followUpDates =
+      // Follow-up appointment(s) picked by the doctor, each with the
+      // investigation written beside its own date - see reservedVisits for why
+      // the pairing happens before the undated visits are dropped.
+      const followUps =
         visitType === "Recurring"
-          ? recurringDates.filter(Boolean)
-          : nextAppointmentAt
-            ? [nextAppointmentAt]
-            : [];
-      if (followUpDates.length > 0 && patientId) {
+          ? reservedVisits(recurringDates, followUpInvestigations)
+          : reservedVisits([nextAppointmentAt], followUpInvestigations);
+      const followUpDates = followUps.map((v) => v.date);
+      if (followUps.length > 0 && patientId) {
+        // A browser's min/max only discourages a bad year, it does not stop
+        // one reaching here - which is how an appointment came to be reserved
+        // in February of the year 268.
+        const wrongYear = followUpDates.find((d) => !isPlausibleIso(d));
+        if (wrongYear) {
+          throw new Error("Check the follow-up date - that year looks wrong.");
+        }
         const p = (patients as any[]).find((x) => x.id === patientId);
-        const rows = followUpDates.map((d) => {
+        const rows = followUps.map(({ date: d, investigation }) => {
           const start = new Date(d);
           const end = new Date(start.getTime() + 30 * 60 * 1000);
           return {
@@ -768,6 +957,11 @@ export function ProcedureFormDialog({
             start_time: start.toISOString(),
             end_time: end.toISOString(),
             status: "Reserved",
+            // Blank stays blank rather than becoming an empty string: the
+            // Investigation column treats an empty value as "nothing recorded"
+            // and falls through to the service, which is the behaviour this
+            // field exists to let the doctor override, not to fake.
+            reason_for_consultation: investigation || null,
             visit_status: visitType === "Recurring" ? "Recurring visit" : "Follow-up visit",
             problem_area_ids: selectedProblemAreas.length ? selectedProblemAreas : null,
             source: "Procedure",
@@ -780,6 +974,9 @@ export function ProcedureFormDialog({
     },
     onSuccess: (proc: any) => {
       queryClient.invalidateQueries({ queryKey: ["procedures"] });
+      // The visit's service rows, so opening it next does not read a list
+      // fetched before they were written and invent them a second time.
+      queryClient.invalidateQueries({ queryKey: ["procedure-services"] });
       queryClient.invalidateQueries({ queryKey: ["appointment-procedures"] });
       queryClient.invalidateQueries({ queryKey: ["patient", patientId] });
       if (nextAppointmentAt || (visitType === "Recurring" && recurringDates.some(Boolean))) {
@@ -798,54 +995,70 @@ export function ProcedureFormDialog({
   });
 
   const addPrescription = () => {
-    setPrescriptions([...prescriptions, { product_id: "", medicine_name: "", frequency: "", duration: "", instructions: "", quantity: 1 }]);
+    setPrescriptions((prev) => [...prev, { key: newRxKey(), product_id: "", medicine_name: "", frequency: "", duration: "", instructions: "", quantity: 1 }]);
   };
 
-  const fetchStock = async (productId: string, index: number) => {
-    setStockMap((prev) => ({ ...prev, [index]: { available: 0, loading: true } }));
+  const fetchStock = async (productId: string, key: string) => {
+    setStockMap((prev) => ({ ...prev, [key]: { available: 0, loading: true } }));
     // Inventory rows are decremented at the point of sale, so they already reflect live stock.
     const { data: invData } = await supabase
       .from("pharma_inventory")
       .select("quantity")
       .eq("product_id", productId);
     const totalStock = (invData || []).reduce((s, i) => s + Number(i.quantity), 0);
-    setStockMap((prev) => ({ ...prev, [index]: { available: Math.max(0, totalStock), loading: false } }));
+    setStockMap((prev) => ({ ...prev, [key]: { available: Math.max(0, totalStock), loading: false } }));
   };
 
-  const updatePrescription = (index: number, field: keyof PrescriptionInput, value: string | number) => {
-    const updated = [...prescriptions];
-    if (field === "product_id") {
-      if (value === OTHERS_VALUE) {
-        updated[index].product_id = OTHERS_VALUE;
-        updated[index].medicine_name = "";
-      } else {
-        const prod = products.find((p) => p.id === value) as any;
-        updated[index].product_id = value as string;
-        updated[index].medicine_name = prod?.name || "";
-        // Always populate prescription defaults from the product master when medicine is selected
-        updated[index].frequency = prod?.default_frequency || "";
-        updated[index].duration = prod?.default_duration || "";
-        updated[index].instructions = prod?.default_instructions || "";
-        fetchStock(value as string, index);
-      }
-    } else {
-      (updated[index] as any)[field] = value;
-    }
-    setPrescriptions(updated);
+  // Addressed by the row's own key, not its position, and the row object is
+  // replaced rather than written into. `[...prescriptions]` copies the array
+  // but not the rows inside it, so assigning to updated[index].field wrote
+  // straight into the object React was already holding - the state changed
+  // without React being told, which is how an edit could land on screen only
+  // after some other keystroke forced a render.
+  const updatePrescription = (key: string, field: keyof PrescriptionInput, value: string | number) => {
+    setPrescriptions((prev) =>
+      prev.map((rx) => {
+        if (rx.key !== key) return rx;
+        if (field !== "product_id") return { ...rx, [field]: value };
+        if (value === OTHERS_VALUE) return { ...rx, product_id: OTHERS_VALUE, medicine_name: "" };
+        const prod = products.find((p) => p.id === value);
+        const previous = products.find((p) => p.id === rx.product_id);
+        fetchStock(value as string, key);
+        return {
+          ...rx,
+          product_id: value as string,
+          medicine_name: prod?.name || "",
+          // The pharmacy's defaults for this medicine, without overwriting
+          // anything the doctor has typed into the row already.
+          ...applyMedicineDefaults(rx, prod, previous),
+        };
+      }),
+    );
   };
 
-  const removePrescription = (index: number) => {
-    setPrescriptions(prescriptions.filter((_, i) => i !== index));
+  const removePrescription = (key: string) => {
+    setPrescriptions((prev) => prev.filter((rx) => rx.key !== key));
+    // The stock note belongs to the row that has gone, not to whatever row
+    // slides up into its place.
+    setStockMap((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
 
-  const addAsset = () => setProcedureAssets([...procedureAssets, { asset_id: "", asset_name: "", usage_guideline: "", time_taken: "" }]);
-  const updateAsset = (index: number, field: keyof AssetInput, value: string) => {
-    const updated = [...procedureAssets];
-    (updated[index] as any)[field] = value;
-    if (field === "asset_id") { updated[index].asset_name = allAssets.find((a) => a.id === value)?.name || ""; }
-    setProcedureAssets(updated);
+  const addAsset = () => setProcedureAssets((prev) => [...prev, { key: newAssetKey(), asset_id: "", asset_name: "", usage_guideline: "", time_taken: "" }]);
+  const updateAsset = (key: string, field: keyof AssetInput, value: string) => {
+    setProcedureAssets((prev) =>
+      prev.map((a) => {
+        if (a.key !== key) return a;
+        const next = { ...a, [field]: value } as AssetInput;
+        if (field === "asset_id") next.asset_name = allAssets.find((x) => x.id === value)?.name || "";
+        return next;
+      }),
+    );
   };
-  const removeAsset = (index: number) => setProcedureAssets(procedureAssets.filter((_, i) => i !== index));
+  const removeAsset = (key: string) => setProcedureAssets((prev) => prev.filter((a) => a.key !== key));
 
   const isFromAppointment = !!defaultAppointmentId;
 
@@ -858,6 +1071,13 @@ export function ProcedureFormDialog({
     const c = Math.max(1, Math.min(24, n || 1));
     setRecurringCount(c);
     setRecurringDates((prev) => {
+      const next = [...prev];
+      while (next.length < c) next.push("");
+      return next.slice(0, c);
+    });
+    // The investigations are indexed by visit, so they grow and shrink with
+    // the dates or the two fall out of step.
+    setFollowUpInvestigations((prev) => {
       const next = [...prev];
       while (next.length < c) next.push("");
       return next.slice(0, c);
@@ -916,7 +1136,11 @@ export function ProcedureFormDialog({
                   rows={3}
                   className={`mt-1 text-sm transition-all ${recentlyFilled[field] ? "ring-2 ring-primary/40" : ""} ${elaboratingMedical ? "opacity-60" : ""}`}
                   value={medical[field] || ""}
-                  onChange={(e) => { setMedical((m) => ({ ...m, [field]: e.target.value })); setMedicalDirty(true); }}
+                  // The first letter is capitalised as it is typed, unless the
+                  // word is one the clinic writes in lower case - see
+                  // sentenceCase.ts. Dictation and AI Elaborate set these
+                  // fields by their own paths and are untouched.
+                  onChange={(e) => { setMedical((m) => ({ ...m, [field]: capitaliseFirstWord(e.target.value, e.target.selectionStart) })); setMedicalDirty(true); }}
                 />
               </>
             )}
@@ -932,16 +1156,16 @@ export function ProcedureFormDialog({
             <PatientToolsBar patientId={patientId} patientName={selectedPatientName} context="patient" />
           )}
           <Tabs defaultValue="procedure" className="w-full">
-            <TabsList>
+            <TabsList className="h-auto flex flex-wrap justify-start gap-1">
               <TabsTrigger value="procedure">Procedure</TabsTrigger>
-              <TabsTrigger value="surveys" className="gap-1.5">
-                <ClipboardList className="h-3.5 w-3.5" /> Surveys
-              </TabsTrigger>
               <TabsTrigger value="medical" className="gap-1.5">
                 <HeartPulse className="h-3.5 w-3.5" /> Medical Information
               </TabsTrigger>
-              <TabsTrigger value="notes" className="gap-1.5">
-                <StickyNote className="h-3.5 w-3.5" /> Notes
+              <TabsTrigger value="surveys" className="gap-1.5">
+                <ClipboardList className="h-3.5 w-3.5" /> Surveys
+              </TabsTrigger>
+              <TabsTrigger value="knowledge" className="gap-1.5">
+                <BookOpen className="h-3.5 w-3.5" /> Knowledge Article
               </TabsTrigger>
             </TabsList>
             <TabsContent value="procedure" className="space-y-4 mt-4">
@@ -1016,6 +1240,23 @@ export function ProcedureFormDialog({
                 className="mt-1.5"
                 disabled={isFromAppointment}
               />
+              {/* Age and gender, in front of the doctor while they write: both
+                  bear on dosage, and looking them up meant leaving the form. */}
+              {patientIdentityLine(patientRecord) && (
+                <p className="text-xs text-muted-foreground mt-1">{patientIdentityLine(patientRecord)}</p>
+              )}
+              {/* Which visit this is going onto. Plain when it is today's;
+                  called out when it is not, which is the case that was
+                  quietly filing consultations onto months-old appointments. */}
+              {visitDay.dayLabel && (
+                <p
+                  data-testid="filing-under"
+                  className={`text-xs mt-1 ${visitDay.mismatched ? "text-destructive font-medium" : "text-muted-foreground"}`}
+                >
+                  {visitDay.mismatched ? "⚠ Filing under an older visit: " : "Filing under visit: "}
+                  {visitDay.dayLabel}
+                </p>
+              )}
               {unmatchedHints.patient && (
                 <p className="text-xs text-amber-600 mt-1">Couldn't match "{unmatchedHints.patient}" — please select manually.</p>
               )}
@@ -1036,7 +1277,7 @@ export function ProcedureFormDialog({
             </div>
             <div>
               <Label>Primary Concern</Label>
-              <Popover>
+              <Popover modal>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="w-full mt-1.5 justify-start font-normal h-10">
                     {selectedProblemAreas.length === 0
@@ -1087,69 +1328,80 @@ export function ProcedureFormDialog({
               <div key={line.key} className="rounded-lg border bg-background p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground">Service {i + 1}</span>
-                  {serviceLines.length > 1 && (
-                    <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => removeServiceLine(line.key)}>
-                      Remove
-                    </Button>
-                  )}
+                  {/* Offered on the first service too. A service picked by
+                      mistake had to be typed over, because Remove only
+                      appeared once a second service existed. */}
+                  <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => removeServiceLine(line.key)}>
+                    Remove
+                  </Button>
                 </div>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" role="combobox" className="w-full justify-between font-normal">
-                      <span className="truncate">{line.name || "Select service"}</span>
-                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-                    <Command>
-                      <CommandInput placeholder="Search service..." />
-                      <CommandList>
-                        <CommandEmpty>No service found.</CommandEmpty>
-                        <CommandGroup>
-                          {services.map((s: any) => (
-                            <CommandItem key={s.id} value={s.name} onSelect={() => handleServiceSelect(s.id, line.key)}>
-                              <Check className={`mr-2 h-4 w-4 ${line.service_id === s.id ? "opacity-100" : "opacity-0"}`} />
-                              {s.name}
-                            </CommandItem>
-                          ))}
-                          <CommandItem value="Others" onSelect={() => updateServiceLine(line.key, { service_id: OTHERS_VALUE, name: "" })}>
-                            <Check className={`mr-2 h-4 w-4 ${line.service_id === OTHERS_VALUE ? "opacity-100" : "opacity-0"}`} />
-                            Others (type manually)
-                          </CommandItem>
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
-                {line.service_id === OTHERS_VALUE && (
-                  <Input
-                    placeholder="Service / procedure name"
-                    value={line.name}
-                    onChange={(e) => updateServiceLine(line.key, { name: e.target.value })}
-                  />
-                )}
+                <ServicePicker
+                  services={services as ServiceOption[]}
+                  serviceId={line.service_id}
+                  serviceName={line.name}
+                  open={!!serviceMenuOpen[line.key]}
+                  onOpenChange={(open) => setServiceMenuOpen((m) => ({ ...m, [line.key]: open }))}
+                  onPickMaster={(svcId) => handleServiceSelect(svcId, line.key)}
+                  onChooseOthers={() => updateServiceLine(line.key, { service_id: OTHERS_VALUE, name: "" })}
+                  onNameChange={(name) => updateServiceLine(line.key, { name })}
+                />
+                {/* Material Cost % used to sit here. It is a billing figure, not a
+                    clinical one, and the clinic asked for it in one place only.
+                    Billing owns it (55,884 material_cost_lines rows against 9
+                    here, all of those auto-filled from the Service Master rather
+                    than typed). The column and its data stay: the Material Cost
+                    report still reads the Service Master default and any value
+                    already recorded, it just cannot be entered from a
+                    prescription any more. */}
                 <div>
-                  <Label className="text-xs text-muted-foreground">Procedure Notes</Label>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-muted-foreground">Procedure Notes</Label>
+                    <div className="flex items-center gap-1">
+                      <MicButton value={line.procedure_notes} onChange={(v) => updateServiceLine(line.key, { procedure_notes: v })} />
+                      <Button type="button" variant="ghost" size="sm" className="h-7 text-xs gap-1 text-primary"
+                        onClick={() => elaborateLine(line.key, "procedure_notes")} disabled={elaborating !== null || elaboratingAll}>
+                        {elaborating === `${line.key}:procedure_notes` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Elaborate AI
+                      </Button>
+                    </div>
+                  </div>
                   <Textarea
                     rows={3}
                     className={`mt-1 transition-all ${recentlyFilled.procedure_notes ? "ring-2 ring-primary/40" : ""} ${elaboratingAll ? "opacity-60" : ""}`}
                     placeholder="Details of the procedure performed..."
                     value={line.procedure_notes}
-                    onChange={(e) => updateServiceLine(line.key, { procedure_notes: e.target.value })}
+                    onChange={(e) => updateServiceLine(line.key, { procedure_notes: capitaliseFirstWord(e.target.value, e.target.selectionStart) })}
                   />
                 </div>
                 <div>
-                  <Label className="text-xs text-muted-foreground">Recommendations</Label>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-muted-foreground">Recommendations</Label>
+                    <div className="flex items-center gap-1">
+                      <MicButton value={line.recommendations} onChange={(v) => updateServiceLine(line.key, { recommendations: v })} />
+                      <Button type="button" variant="ghost" size="sm" className="h-7 text-xs gap-1 text-primary"
+                        onClick={() => elaborateLine(line.key, "recommendations")} disabled={elaborating !== null || elaboratingAll}>
+                        {elaborating === `${line.key}:recommendations` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Elaborate AI
+                      </Button>
+                    </div>
+                  </div>
                   <Textarea
                     rows={3}
                     className={`mt-1 transition-all ${recentlyFilled.recommendations ? "ring-2 ring-primary/40" : ""} ${elaboratingAll ? "opacity-60" : ""}`}
                     placeholder="Post-procedure recommendations..."
                     value={line.recommendations}
-                    onChange={(e) => updateServiceLine(line.key, { recommendations: e.target.value })}
+                    onChange={(e) => updateServiceLine(line.key, { recommendations: capitaliseFirstWord(e.target.value, e.target.selectionStart) })}
                   />
                 </div>
               </div>
             ))}
+            {/* The same action again at the foot of the list. With three
+                services filled in, the button at the top of the card is a
+                screen and a half away, and adding a fourth meant scrolling up
+                to find it and back down to type. */}
+            {serviceLines.length > 0 && (
+              <Button type="button" variant="outline" size="sm" className="w-full border-dashed" onClick={addServiceLine}>
+                <Plus className="h-3.5 w-3.5 mr-1" /> Add another service
+              </Button>
+            )}
           </div>
 
 
@@ -1172,7 +1424,7 @@ export function ProcedureFormDialog({
                         )}
                       </span>
                       <span className="text-[11px] text-muted-foreground">
-                        {new Date(s.created_at).toLocaleDateString()} · {s.dr_status || "pending"}
+                        {displayDate(s.created_at)} · {s.dr_status || "pending"}
                       </span>
                     </div>
                     {s.ai_summary && <p className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap">{s.ai_summary}</p>}
@@ -1197,43 +1449,44 @@ export function ProcedureFormDialog({
           <div className="rounded-lg border-2 border-primary/25 bg-primary/5 p-4">
             <div className="flex items-center justify-between mb-3">
               <Label className="text-base font-display font-semibold flex items-center gap-2 text-primary">
-                <Pill className="h-4 w-4" /> Pharmacy — Prescriptions
+                <Pill className="h-4 w-4" /> Products/Medications
               </Label>
               <Button type="button" variant="outline" size="sm" onClick={addPrescription}>
                 <Plus className="h-3 w-3 mr-1" /> Add Medicine
               </Button>
             </div>
             {prescriptions.map((rx, i) => (
-              <div key={i} className="border rounded-lg p-3 mb-3 space-y-2 bg-background">
+              <div key={rx.key} className="border rounded-lg p-3 mb-3 space-y-2 bg-background">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground">Medicine {i + 1}</span>
-                  <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => removePrescription(i)}>Remove</Button>
+                  <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => removePrescription(rx.key)}>Remove</Button>
                 </div>
                 <div>
-                  <Select value={rx.product_id} onValueChange={(v) => updatePrescription(i, "product_id", v)}>
-                    <SelectTrigger><SelectValue placeholder="Select medicine *" /></SelectTrigger>
-                    <SelectContent>
-                      {products.map((p) => (
-                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                      ))}
-                      <SelectItem value={OTHERS_VALUE}>Others (type manually)</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  {/* Searchable: 239 products is too many to scroll, and the
+                      clinic needs a medicine found by any word of its name. */}
+                  <SearchableSelect
+                    value={rx.product_id}
+                    onChange={(v) => updatePrescription(rx.key, "product_id", v)}
+                    options={medicineOptions}
+                    placeholder="Select medicine *"
+                    searchPlaceholder="Search medicine..."
+                    emptyText="No medicine found."
+                  />
                   {rx.product_id === OTHERS_VALUE && (
                     <Input
                       className="mt-1"
                       placeholder="Medicine name"
                       value={rx.medicine_name}
-                      onChange={(e) => updatePrescription(i, "medicine_name", e.target.value)}
+                      onChange={(e) => updatePrescription(rx.key, "medicine_name", e.target.value)}
                     />
                   )}
-                  {rx.product_id && rx.product_id !== OTHERS_VALUE && stockMap[i] && (
-                    stockMap[i].loading ? (
+                  {rx.product_id && rx.product_id !== OTHERS_VALUE && stockMap[rx.key] && (
+                    stockMap[rx.key].loading ? (
                       <p className="text-xs text-muted-foreground mt-1">Checking stock...</p>
-                    ) : stockMap[i].available <= 0 ? (
+                    ) : stockMap[rx.key].available <= 0 ? (
                       <p className="text-xs text-amber-600 mt-1">⚠️ This medicine is currently out of stock</p>
                     ) : (
-                      <p className="text-xs text-green-600 mt-1">Available stock: {stockMap[i].available} units</p>
+                      <p className="text-xs text-green-600 mt-1">Available stock: {stockMap[rx.key].available} units</p>
                     )
                   )}
                 </div>
@@ -1242,38 +1495,43 @@ export function ProcedureFormDialog({
                     <div>
                       <label className="text-xs font-medium text-muted-foreground mb-1 block">Frequency</label>
                       <div className="relative">
-                        <Input placeholder="e.g. Twice a day" value={rx.frequency} onChange={(e) => updatePrescription(i, "frequency", e.target.value)} className="pr-9" />
+                        <Input placeholder="e.g. Twice a day" value={rx.frequency} onChange={(e) => updatePrescription(rx.key, "frequency", capitaliseFirstWord(e.target.value, e.target.selectionStart))} className="pr-9" />
                         <div className="absolute right-1 top-1/2 -translate-y-1/2">
-                          <MicButton value={rx.frequency} onChange={(v) => updatePrescription(i, "frequency", v)} mode="replace" />
+                          <MicButton value={rx.frequency} onChange={(v) => updatePrescription(rx.key, "frequency", v)} mode="replace" />
                         </div>
                       </div>
                     </div>
                     <div>
                       <label className="text-xs font-medium text-muted-foreground mb-1 block">Duration</label>
                       <div className="relative">
-                        <Input placeholder="e.g. 7 days" value={rx.duration} onChange={(e) => updatePrescription(i, "duration", e.target.value)} className="pr-9" />
+                        <Input placeholder="e.g. 7 days" value={rx.duration} onChange={(e) => updatePrescription(rx.key, "duration", capitaliseFirstWord(e.target.value, e.target.selectionStart))} className="pr-9" />
                         <div className="absolute right-1 top-1/2 -translate-y-1/2">
-                          <MicButton value={rx.duration} onChange={(v) => updatePrescription(i, "duration", v)} mode="replace" />
+                          <MicButton value={rx.duration} onChange={(v) => updatePrescription(rx.key, "duration", v)} mode="replace" />
                         </div>
                       </div>
                     </div>
                     <div>
                       <label className="text-xs font-medium text-muted-foreground mb-1 block">Qty</label>
-                      <Input type="number" placeholder="1" value={rx.quantity || ""} onChange={(e) => updatePrescription(i, "quantity", e.target.value === "" ? 0 : Math.max(1, parseInt(e.target.value) || 1))} />
+                      <Input type="number" placeholder="1" value={rx.quantity || ""} onChange={(e) => updatePrescription(rx.key, "quantity", e.target.value === "" ? 0 : Math.max(1, parseInt(e.target.value) || 1))} />
                     </div>
                   </div>
                   <div>
                     <label className="text-xs font-medium text-muted-foreground mb-1 block">Special Instructions</label>
                     <div className="relative">
-                      <Input placeholder="e.g. Apply after cleansing" value={rx.instructions} onChange={(e) => updatePrescription(i, "instructions", e.target.value)} className="pr-9" />
+                      <Input placeholder="e.g. Apply after cleansing" value={rx.instructions} onChange={(e) => updatePrescription(rx.key, "instructions", capitaliseFirstWord(e.target.value, e.target.selectionStart))} className="pr-9" />
                       <div className="absolute right-1 top-1/2 -translate-y-1/2">
-                        <MicButton value={rx.instructions} onChange={(v) => updatePrescription(i, "instructions", v)} />
+                        <MicButton value={rx.instructions} onChange={(v) => updatePrescription(rx.key, "instructions", v)} />
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
             ))}
+            {prescriptions.length > 0 && (
+              <Button type="button" variant="outline" size="sm" className="w-full border-dashed" onClick={addPrescription}>
+                <Plus className="h-3.5 w-3.5 mr-1" /> Add another medicine
+              </Button>
+            )}
           </div>
 
           {/* Required Assets */}
@@ -1290,12 +1548,12 @@ export function ProcedureFormDialog({
               <p className="text-xs text-muted-foreground mb-2">No assets linked. Select a service to auto-populate or add manually.</p>
             )}
             {procedureAssets.map((asset, i) => (
-              <div key={i} className="border rounded-lg p-3 mb-3 space-y-2 bg-background">
+              <div key={asset.key} className="border rounded-lg p-3 mb-3 space-y-2 bg-background">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground">Asset {i + 1}</span>
-                  <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => removeAsset(i)}>Remove</Button>
+                  <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => removeAsset(asset.key)}>Remove</Button>
                 </div>
-                <Select value={asset.asset_id} onValueChange={(v) => updateAsset(i, "asset_id", v)}>
+                <Select value={asset.asset_id} onValueChange={(v) => updateAsset(asset.key, "asset_id", v)}>
                   <SelectTrigger><SelectValue placeholder="Select asset" /></SelectTrigger>
                   <SelectContent>
                     {allAssets.map((a) => (
@@ -1304,11 +1562,28 @@ export function ProcedureFormDialog({
                   </SelectContent>
                 </Select>
                 <div className="grid grid-cols-2 gap-2">
-                  <Input placeholder="Usage guideline" value={asset.usage_guideline} onChange={(e) => updateAsset(i, "usage_guideline", e.target.value)} />
-                  <Input type="number" placeholder="Time taken (mins)" value={asset.time_taken} onChange={(e) => updateAsset(i, "time_taken", e.target.value)} />
+                  <Input placeholder="Usage guideline" value={asset.usage_guideline} onChange={(e) => updateAsset(asset.key, "usage_guideline", e.target.value)} />
+                  <Input type="number" placeholder="Time taken (mins)" value={numVal(asset.time_taken)} onChange={(e) => updateAsset(asset.key, "time_taken", e.target.value)} />
                 </div>
               </div>
             ))}
+            {procedureAssets.length > 0 && (
+              <Button type="button" variant="outline" size="sm" className="w-full border-dashed" onClick={addAsset}>
+                <Plus className="h-3.5 w-3.5 mr-1" /> Add another asset
+              </Button>
+            )}
+          </div>
+
+          {/* Notes — inline rather than a tab of its own: staff jot an observation
+              while filling the form, and a whole tab for one card meant leaving
+              the form to do it. StickyNotes still buffers into
+              draftNotes here, because procedure_sticky_notes.procedure_id is NOT
+              NULL and the procedure does not exist yet. */}
+          <div className="space-y-2">
+            <Label className="text-base font-display font-semibold text-primary flex items-center gap-1.5">
+              <StickyNote className="h-4 w-4" /> Notes
+            </Label>
+            <StickyNotes notes={draftNotes} onNotesChange={setDraftNotes} />
           </div>
 
           {/* Visit plan */}
@@ -1341,6 +1616,8 @@ export function ProcedureFormDialog({
                 </p>
                 <Input
                   type="datetime-local"
+                  min={MIN_DATETIME}
+                  max={MAX_DATETIME}
                   value={nextAppointmentAt}
                   onChange={(e) => setNextAppointmentAt(e.target.value)}
                   className="mt-2 bg-background"
@@ -1359,31 +1636,129 @@ export function ProcedureFormDialog({
                     type="number"
                     min={1}
                     max={24}
-                    value={recurringCount}
+                    value={numVal(recurringCount)}
                     onChange={(e) => setRecurringCountSafe(parseInt(e.target.value, 10))}
                     className="mt-1.5 bg-background"
                   />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {Array.from({ length: recurringCount }).map((_, i) => (
-                    <div key={i}>
-                      <Label className="text-xs text-muted-foreground">Visit # {i + 1}</Label>
-                      <Input
-                        type="datetime-local"
-                        value={recurringDates[i] || ""}
-                        onChange={(e) => {
-                          const next = [...recurringDates];
-                          next[i] = e.target.value;
-                          setRecurringDates(next);
-                        }}
+                  {Array.from({ length: recurringCount }).map((_, i) => {
+                    const { date: visitDate, time: visitTime } = splitVisitDateTime(recurringDates[i]);
+                    const hasSomething = Boolean(visitDate || (followUpInvestigations[i] || "").trim());
+                    const setVisit = (date: string, time: string) => {
+                      const next = [...recurringDates];
+                      next[i] = joinVisitDateTime(date, time);
+                      setRecurringDates(next);
+                    };
+                    return (
+                    <div key={i} className="rounded-lg border bg-background/60 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <Label className="text-xs text-muted-foreground">Visit # {i + 1}</Label>
+                        <div className="flex items-center gap-1">
+                          {hasSomething && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-[11px]"
+                              onClick={() => {
+                                const next = clearVisitAt(
+                                  { dates: recurringDates, investigations: followUpInvestigations },
+                                  i,
+                                );
+                                setRecurringDates(next.dates);
+                                setFollowUpInvestigations(next.investigations);
+                              }}
+                            >
+                              Clear
+                            </Button>
+                          )}
+                          {recurringCount > 1 && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                              title="Remove this visit"
+                              aria-label={`Remove visit ${i + 1}`}
+                              onClick={() => {
+                                // Both lists spliced together, or the visit
+                                // below inherits this one's investigation.
+                                const next = removeVisitAt(
+                                  { dates: recurringDates, investigations: followUpInvestigations },
+                                  i,
+                                );
+                                setRecurringDates(next.dates);
+                                setFollowUpInvestigations(next.investigations);
+                                setRecurringCount(next.dates.length);
+                              }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      {/* A date box and a 12-hour clock rather than
+                          datetime-local, which renders in whatever format the
+                          browser's locale picks - 24-hour on the clinic's
+                          machines. Same two controls the Appointments page
+                          books with. */}
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <DateInput
+                          value={visitDate}
+                          onChange={(iso) => setVisit(iso, visitTime)}
+                          withCalendar
+                          className="w-[150px]"
+                        />
+                        <TimePicker12h
+                          value={visitTime}
+                          onChange={(next) => setVisit(visitDate, next)}
+                          compact
+                        />
+                      </div>
+                      {/* This visit's own investigation. A course is not one
+                          investigation repeated - the third session and the
+                          review that follows it read differently on the
+                          appointment and in the patient's reminder. */}
+                      <Label className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Stethoscope className="h-3.5 w-3.5" /> Investigation
+                      </Label>
+                      <Textarea
+                        value={followUpInvestigations[i] || ""}
+                        onChange={(e) => setInvestigationAt(i, e.target.value)}
+                        placeholder="e.g. 3rd of 6 laser toning sessions"
+                        rows={2}
                         className="mt-1 bg-background"
                       />
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Each date creates a <span className="font-medium">Reserved</span> appointment. Dates left blank can be added later during billing.
+                  An investigation left blank stays blank on the appointment.
                 </p>
+              </div>
+            )}
+
+            {/* A single follow-up is one visit, so it keeps one box. A
+                recurring course has one beside each of its dates above. */}
+            {visitType === "Single" && nextAppointmentAt && (
+              <div>
+                <Label className="flex items-center gap-2 text-sm">
+                  <Stethoscope className="h-4 w-4" /> Investigation for this visit
+                </Label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  What the visit is for. Left blank, the appointment shows this
+                  procedure&apos;s services instead.
+                </p>
+                <Textarea
+                  value={followUpInvestigations[0] || ""}
+                  onChange={(e) => setInvestigationAt(0, e.target.value)}
+                  placeholder="e.g. 3rd of 6 laser toning sessions, review pigmentation"
+                  rows={2}
+                  className="mt-2 bg-background"
+                />
               </div>
             )}
           </div>
@@ -1408,12 +1783,41 @@ export function ProcedureFormDialog({
               )}
             </TabsContent>
 
-            <TabsContent value="notes" className="space-y-3 mt-4">
-              <ProcedureStickyNotes notes={draftNotes} onNotesChange={setDraftNotes} />
+            <TabsContent value="knowledge" className="mt-4">
+              {patientId ? (
+                <ClinicalGuidelines
+                  patientId={patientId}
+                  serviceIds={serviceLines.map((line) => line.service_id)}
+                  serviceNames={linkedAppointment?.service ? [linkedAppointment.service] : []}
+                  onCopyCare={(text, serviceId) => {
+                    const line = serviceLines.find((item) => item.service_id === serviceId);
+                    if (line) updateServiceLine(line.key, { recommendations: appendCare(line.recommendations, text) });
+                  }}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">Select a patient to see knowledge articles.</p>
+              )}
             </TabsContent>
+
           </Tabs>
 
-          <Button className="w-full" onClick={() => createMutation.mutate()} disabled={!patientId || createMutation.isPending}>
+          <Button
+            className="w-full"
+            onClick={() => {
+              // Asked, not refused: writing up last night's clinic this
+              // morning is ordinary and has to stay possible.
+              if (
+                visitDay.mismatched &&
+                !window.confirm(
+                  `This prescription will be filed under the visit on ${visitDay.dayLabel}, not today.\n\nSave it there anyway?`,
+                )
+              ) {
+                return;
+              }
+              createMutation.mutate();
+            }}
+            disabled={!patientId || createMutation.isPending}
+          >
             {createMutation.isPending ? "Saving..." : "Save Procedure"}
           </Button>
         </div>
@@ -1425,11 +1829,11 @@ export function ProcedureFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-none w-screen h-screen sm:rounded-none overflow-y-auto p-6">
+      <DialogContent className="max-w-none w-screen h-screen sm:rounded-none overflow-y-auto p-6 grid-cols-[minmax(0,1fr)] content-start">
         <DialogHeader>
-          <DialogTitle className="font-display">New Procedure / Prescription</DialogTitle>
+          <DialogTitle className="font-display">New Prescription</DialogTitle>
         </DialogHeader>
-        <div className="mx-auto w-full max-w-5xl">{body}</div>
+        <div className="mx-auto w-full min-w-0 max-w-5xl">{body}</div>
       </DialogContent>
     </Dialog>
   );

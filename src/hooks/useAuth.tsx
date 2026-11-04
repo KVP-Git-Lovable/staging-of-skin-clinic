@@ -39,6 +39,12 @@ interface AuthContextType {
   staffProfile: StaffProfile | null;
   permissions: PermMap;
   isAdmin: boolean;
+  /** Signed in, and a staff record exists, but it has been deactivated. */
+  staffDeactivated: boolean;
+  /** Issued a password by an administrator; must set their own before using the app. */
+  mustChangePassword: boolean;
+  /** Re-reads the staff row, so a gate can lift without a full reload. */
+  refreshStaffProfile: () => Promise<void>;
   dataScope: DataScope;
   reportPeriodLimit: ReportPeriodLimit;
   loading: boolean;
@@ -53,6 +59,9 @@ const AuthContext = createContext<AuthContextType>({
   staffProfile: null,
   permissions: {},
   isAdmin: false,
+  staffDeactivated: false,
+  mustChangePassword: false,
+  refreshStaffProfile: async () => {},
   dataScope: "all",
   reportPeriodLimit: "none",
   loading: true,
@@ -76,6 +85,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [staffProfile, setStaffProfile] = useState<StaffProfile | null>(null);
   const [permissions, setPermissions] = useState<PermMap>({});
   const [isAdmin, setIsAdmin] = useState(false);
+  const [staffDeactivated, setStaffDeactivated] = useState(false);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [dataScope, setDataScope] = useState<DataScope>("all");
   const [reportPeriodLimit, setReportPeriodLimit] = useState<ReportPeriodLimit>("none");
   const [loading, setLoading] = useState(true);
@@ -126,7 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // permission they have.
     const { data: staffData, error: staffErr } = await supabase
       .from("staff")
-      .select("id, first_name, last_name, email, phone, role_id, user_roles_config(id, name)")
+      .select("id, first_name, last_name, email, phone, role_id, is_active, force_password_change, user_roles_config(id, name)")
       .eq("auth_user_id", u.id)
       .maybeSingle();
 
@@ -138,10 +149,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStaffProfile(null);
       setPermissions({});
       setIsAdmin(false);
+      setStaffDeactivated(false);
+      setMustChangePassword(false);
       setDataScope("all");
       setReportPeriodLimit("none");
       return;
     }
+
+    // Deactivated has to be its own state, not "no staff row". Filtering the
+    // query on is_active would be worse than the bug: an empty permissions map
+    // is treated as "allow every module" (see ProtectedRoute), so a deactivated
+    // admin would have kept full access by a different route.
+    if (staffData.is_active === false) {
+      setStaffProfile(null);
+      setPermissions({});
+      setIsAdmin(false);
+      setStaffDeactivated(true);
+      setMustChangePassword(false);
+      setDataScope("all");
+      setReportPeriodLimit("none");
+      return;
+    }
+    setStaffDeactivated(false);
+    // Written by User Management when a login is created or a password reset,
+    // and until now read by nothing - the flag reached the database and the
+    // user was never asked for anything.
+    setMustChangePassword(staffData.force_password_change === true);
 
     const role = staffData.user_roles_config as any;
     const roleName = role?.name || null;
@@ -269,8 +302,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Re-read the staff row on demand, so a gate driven by it can lift without a
+  // full page reload - the must-change-password screen uses this once the new
+  // password is saved.
+  const refreshStaffProfile = async () => {
+    if (!user) return;
+    await loadStaffProfile(user);
+  };
+
   const signOut = async () => {
     await supabase.auth.signOut();
+    // Clinic machines are shared, and the per-list preferences below are kept
+    // per browser rather than per user. Left behind, one person's remembered
+    // view and pinned filters became the next person's - which is how a login
+    // that had never chosen "Todays Appointments" landed on it, filtered to a
+    // date somebody else had pinned, and read 0 items. Signing out forgets
+    // them; nothing stored on the server is touched.
+    try {
+      for (const key of Object.keys(localStorage)) {
+        if (key.endsWith(".activeListView") || key.endsWith(".pinnedFilters")) {
+          localStorage.removeItem(key);
+        }
+      }
+    } catch {
+      // Private windows and blocked site data: nothing to forget.
+    }
     setSession(null);
     setUser(null);
     setPatientId(null);
@@ -281,7 +337,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ session, user, patientId, patientName, staffProfile, permissions, isAdmin, dataScope, reportPeriodLimit, loading, signOut }}>
+    <AuthContext.Provider value={{ session, user, patientId, patientName, staffProfile, permissions, isAdmin, staffDeactivated, mustChangePassword, refreshStaffProfile, dataScope, reportPeriodLimit, loading, signOut }}>
       {children}
     </AuthContext.Provider>
   );

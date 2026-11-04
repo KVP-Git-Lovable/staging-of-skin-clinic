@@ -1,6 +1,22 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+/**
+ * Mirror of displayDate in src/lib/dateInput.ts - the app and the edge
+ * functions do not share a module path (same arrangement as
+ * generate-prescription-pdf/prescriptionText.ts).
+ *
+ * The model echoes whatever date shape it is handed, so feeding it raw
+ * timestamps is why the case analysis read "April 6, 2026" and "2026-04-06"
+ * while every other date in the clinic is dd/mm/yyyy.
+ */
+const ddmmyyyy = (value: string | null | undefined): string => {
+  if (!value) return "N/A";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+};
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
@@ -37,19 +53,19 @@ serve(async (req) => {
 
     const dataSummary = `
 PATIENT: ${patient?.first_name} ${patient?.last_name}
-Gender: ${patient?.gender || "N/A"}, DOB: ${patient?.date_of_birth || "N/A"}
+Gender: ${patient?.gender || "N/A"}, DOB: ${ddmmyyyy(patient?.date_of_birth)}
 Skin Type: ${patient?.skin_type || "N/A"}, Skin Concerns: ${patient?.skin_concerns || "N/A"}
 Medical History: ${patient?.medical_history || "None"}
 Allergies: ${patient?.allergies || "None"}
 Current Medications: ${patient?.current_medications || "None"}
 Previous Treatments: ${patient?.previous_treatments || "None"}
-Registered: ${patient?.created_at}
+Registered: ${ddmmyyyy(patient?.created_at)}
 
 APPOINTMENTS (${appointments.length}):
-${appointments.map((a: any) => `- ${a.start_time}: ${a.service} [${a.status}]`).join("\n")}
+${appointments.map((a: any) => `- ${ddmmyyyy(a.start_time)}: ${a.service} [${a.status}]`).join("\n")}
 
 PROCEDURES (${procedures.length}):
-${procedures.map((p: any) => `- ${p.procedure_date}: ${p.service_name} [${p.status}]
+${procedures.map((p: any) => `- ${ddmmyyyy(p.procedure_date)}: ${p.service_name} [${p.status}]
   Diagnosis: ${p.diagnosis || "N/A"}
   Notes: ${p.procedure_notes || "N/A"}
   Recommendations: ${p.recommendations || "N/A"}`).join("\n")}
@@ -58,7 +74,7 @@ PRESCRIPTIONS (${prescriptions.length}):
 ${prescriptions.map((rx: any) => `- ${rx.medicine_name} (${rx.pharma_products?.name || ""}) | Dosage: ${rx.dosage || "N/A"} | Freq: ${rx.frequency || "N/A"} | Duration: ${rx.duration || "N/A"} | Qty: ${rx.quantity}`).join("\n")}
 
 PHOTOS (${photos.length}):
-${photos.map((p: any) => `- ${p.taken_at}: ${p.photo_type} ${p.notes ? "- " + p.notes : ""}`).join("\n")}
+${photos.map((p: any) => `- ${ddmmyyyy(p.taken_at)}: ${p.photo_type} ${p.notes ? "- " + p.notes : ""}`).join("\n")}
 
 ATTACHMENTS (${attachments.length}):
 ${attachments.map((a: any) => `- ${a.file_name} ${a.notes ? "- " + a.notes : ""}`).join("\n")}
@@ -83,7 +99,7 @@ FINANCIAL:
             content: `You are a senior dermatologist AI assistant. Analyse the complete patient case history including all appointments, procedures, diagnoses, prescriptions, photos, and attachments. Return a comprehensive case analysis as JSON (no markdown, no code fences):
 {
   "summary": "<2-3 paragraph comprehensive case summary covering the patient's journey, conditions treated, and overall progress>",
-  "timeline": [{"date": "<date>", "event": "<procedure/appointment>", "details": "<key details>"}],
+  "timeline": [{"date": "<dd/mm/yyyy>", "event": "<procedure/appointment>", "details": "<key details>"}],
   "diagnosisHistory": ["<diagnosis 1 with context>", "<diagnosis 2>"],
   "treatmentPatterns": "<analysis of treatment approaches used, frequency, and effectiveness>",
   "medicationSummary": "<summary of all medications prescribed, patterns, changes over time>",
@@ -98,7 +114,10 @@ Rules:
 - Note any treatment changes or escalations
 - Identify patterns in visit frequency and treatment response
 - If limited data, note that and provide what analysis is possible
-- Timeline should cover the most significant events (max 10)`
+- Timeline should cover the most significant events (max 10)
+- Write every date as dd/mm/yyyy, in the prose as well as the timeline. Never
+  "April 6, 2026" or "2026-04-06" - the clinic reads dd/mm/yyyy everywhere else,
+  and a mixed format is how 10/09 gets read as the 10th of September`
           },
           { role: "user", content: dataSummary },
         ],
@@ -108,7 +127,13 @@ Rules:
     if (!aiResponse.ok) {
       if (aiResponse.status === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded. Try again shortly." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       if (aiResponse.status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      throw new Error("AI gateway error");
+      if (aiResponse.status === 403) {
+        let message = "AI is blocked for this workspace (credit limit or AI disabled). A workspace admin needs to add credits or raise the AI limit.";
+        try { const b = await aiResponse.json(); if (b?.message || b?.error?.message) message = b.message || b.error.message; } catch { /* keep default */ }
+        return new Response(JSON.stringify({ error: message }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      console.error("case-analysis AI gateway error:", aiResponse.status, (await aiResponse.text()).slice(0, 500));
+      return new Response(JSON.stringify({ error: "The AI service is temporarily unavailable. Please try again later." }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const result = await aiResponse.json();

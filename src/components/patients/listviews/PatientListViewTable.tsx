@@ -5,6 +5,8 @@
 import GenericListViewTable, { type SortDir } from "@/components/listViews/ListViewTable";
 import { PATIENT_FIELDS, rawValue } from "@/lib/patientFields";
 import { PatientAvatar } from "@/components/patients/PatientAvatar";
+import { VipBadge } from "@/components/shared/VipBadge";
+import { isVipPatient } from "@/lib/vipPatient";
 
 export type { SortDir };
 
@@ -47,7 +49,7 @@ export default function PatientListViewTable({ avatars = {}, ...rest }: Props) {
       renderCell={(row, key, value, editAffordance) => {
         if (key === "full_name") {
           return (
-            <div className="flex items-center gap-3 text-sm font-medium">
+            <div className="flex min-w-0 items-center gap-3 text-sm font-medium">
               <PatientAvatar
                 firstName={row.first_name}
                 lastName={row.last_name}
@@ -55,6 +57,7 @@ export default function PatientListViewTable({ avatars = {}, ...rest }: Props) {
                 className="h-9 w-9"
               />
               <span className="line-clamp-2">{value}</span>
+              {isVipPatient(row) && <VipBadge />}
             </div>
           );
         }

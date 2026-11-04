@@ -61,7 +61,7 @@ export default function Leads() {
   const [convertLead, setConvertLead] = useState<LeadRow | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const { allViews, userId: viewsUserId, activeView, selectView, saveView, saveCharts, deleteView, pinDefault, updateStandardColumns } =
+  const { allViews, userId: viewsUserId, activeView, selectView, saveView, saveCharts, deleteView, pinDefault, unpinDefault, updateStandardColumns } =
     useModuleListViews("leads", "Leads", DEFAULT_LEAD_VIEW_COLUMNS);
   const [viewEditorOpen, setViewEditorOpen] = useState(false);
   const [editingView, setEditingView] = useState<ListView | null>(null);
@@ -195,6 +195,7 @@ export default function Leads() {
           onEdit={(v) => { setEditingView(v); setViewEditorOpen(true); }}
           onDelete={(v) => setDeleteViewTarget(v)}
           onPin={pinDefault}
+          onUnpin={unpinDefault}
           onClone={(v) => { setEditingView({ ...v, id: undefined as unknown as string, name: `${v.name} (Copy)`, is_default: false }); setViewEditorOpen(true); }}
           onFields={() => setViewFieldsOpen(true)}
           onRefresh={refresh}

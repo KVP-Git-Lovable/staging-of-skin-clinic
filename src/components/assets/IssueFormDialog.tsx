@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { numVal } from "@/lib/numberInput";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -89,7 +90,7 @@ export function IssueFormDialog({ open, onOpenChange, assets, vendors, preselect
                 <SelectContent>{vendors.map((v: any) => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div><Label>Estimated Cost (₹)</Label><Input type="number" value={form.cost} onChange={(e) => update("cost", e.target.value)} className="mt-1.5" /></div>
+            <div><Label>Estimated Cost (₹)</Label><Input type="number" value={numVal(form.cost)} onChange={(e) => update("cost", e.target.value)} className="mt-1.5" /></div>
           </div>
           <div className="flex gap-3 pt-2">
             <Button variant="outline" className="flex-1" onClick={() => onOpenChange(false)}>Cancel</Button>

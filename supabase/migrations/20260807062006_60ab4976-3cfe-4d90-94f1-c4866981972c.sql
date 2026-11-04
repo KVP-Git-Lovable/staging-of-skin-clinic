@@ -1,0 +1,1 @@
+ALTER TABLE public.staff ADD COLUMN IF NOT EXISTS theme_preference TEXT NOT NULL DEFAULT 'amber';

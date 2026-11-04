@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { DateInput } from "@/components/shared/DateInput";
 import { X, Plus, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -136,11 +137,10 @@ export function HolidayCalendar() {
           <div className="space-y-4">
             <div>
               <Label htmlFor="holiday-date">Date *</Label>
-              <Input
+              <DateInput
                 id="holiday-date"
-                type="date"
                 value={holidayDate}
-                onChange={(e) => setHolidayDate(e.target.value)}
+                onChange={(isoDate) => setHolidayDate(isoDate)}
                 className="mt-1.5"
               />
             </div>

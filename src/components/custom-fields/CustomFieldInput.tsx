@@ -1,4 +1,5 @@
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/shared/DateInput";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -11,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { CustomField } from "@/lib/custom-fields/types";
+import { MAX_DATETIME, MIN_DATETIME } from "@/lib/dateInput";
 
 interface Props {
   field: CustomField;
@@ -105,13 +107,15 @@ export function CustomFieldInput({ field, value, onChange, disabled, error }: Pr
         );
       case "date":
         return (
-          <Input {...common} type="date" value={value ?? ""} onChange={(e) => onChange(e.target.value || null)} />
+          <DateInput {...common} value={value ?? ""} onChange={(isoDate) => onChange(isoDate || null)} />
         );
       case "datetime":
         return (
           <Input
             {...common}
             type="datetime-local"
+            min={MIN_DATETIME}
+            max={MAX_DATETIME}
             value={value ? String(value).slice(0, 16) : ""}
             onChange={(e) => onChange(e.target.value || null)}
           />

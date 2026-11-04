@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
+import { DateInput } from "@/components/shared/DateInput";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 import { format } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
 import { formatMoney } from "@/lib/currency";
+import { invoiceServiceLabel, invoiceServiceNames, rowMatchesService } from "@/lib/invoiceReportRows";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -17,6 +19,7 @@ import {
   Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer,
   Tooltip, XAxis, YAxis, Line, LineChart,
 } from "recharts";
+import { appointmentPatientName } from "@/lib/appointmentPatientName";
 
 type Kind = "appointments" | "invoices" | "patients";
 
@@ -83,6 +86,8 @@ export default function DashboardExplore() {
   const urlStaff = params.get("staff") || "all";
   const urlService = params.get("service") || "all";
   const urlStatus = params.get("status") || "all";
+  // Set by the dashboard's Billed Appointments card and the trend chart.
+  const urlBilled = params.get("billed") === "1";
   // Slice drill-downs from the dashboard charts
   const urlPaymentMode = params.get("payment_mode") || "";
   const urlProblemArea = params.get("problem_area") || "";
@@ -114,8 +119,12 @@ export default function DashboardExplore() {
     [staffList]
   );
 
-  // Primary-concern names, needed when the drill-down came from the
-  // "Revenue by Primary Concern" chart (concerns live on the appointment).
+  // Primary-concern names, for a drill-down opened with ?problem_area=.
+  //
+  // The dashboard chart that used to send people here is gone - it was one
+  // "Unspecified" bar, the concern being filled on 7 of 56,763 appointments -
+  // but the filter still answers an old bookmark, and unpicking it from the
+  // invoice fetch below would be a change with no one asking for it.
   const { data: problemAreas = [] } = useQuery({
     queryKey: ["explore-problem-areas"],
     enabled: kind === "invoices",
@@ -137,7 +146,10 @@ export default function DashboardExplore() {
     queryKey: ["explore", kind, fromISO, toISO],
     queryFn: async () => {
       if (kind === "appointments") {
-        let q = supabase.from("appointments").select("*, patients(first_name, last_name, phone)").order("start_time", { ascending: false }).limit(5000);
+        // The bills come with the rows so this screen can answer the same
+        // question the Billed Appointments card asked. Cancelled ones are
+        // dropped below, exactly as the dashboard drops them.
+        let q = supabase.from("appointments").select("*, patients(first_name, last_name, phone), invoices(id, status)").order("start_time", { ascending: false }).limit(5000);
         if (fromISO) q = q.gte("start_time", fromISO);
         if (toISO) q = q.lte("start_time", toISO);
         const { data, error } = await q;
@@ -148,6 +160,10 @@ export default function DashboardExplore() {
         let q = supabase
           .from("invoices")
           .select("*, appointments(problem_area_ids)")
+          // This screen is the Dashboard's drill-down, and the Dashboard drops
+          // cancelled bills before it totals anything. Including them here made
+          // the detail disagree with the number that was clicked to reach it.
+          .neq("status", "Cancelled")
           .order("created_at", { ascending: false })
           .limit(5000);
         if (fromISO) q = q.gte("created_at", fromISO);
@@ -172,13 +188,16 @@ export default function DashboardExplore() {
         return {
           id: r.id,
           _staffId: r.staff_id,
-          patient: r.patients ? `${r.patients.first_name} ${r.patients.last_name}` : r.patient_name || "Walk-in",
+          patient: appointmentPatientName(r, "Walk-in"),
           phone: r.patients?.phone || r.patient_phone || "",
           service: r.service || "",
           doctor: r.staff_id ? staffName.get(r.staff_id) || "Unassigned" : "Unassigned",
           date: d ? format(d, "dd MMM yyyy") : "",
           time: d ? format(d, "h:mm a") : "",
           status: r.status || "",
+          billed: ((r.invoices as { status?: string | null }[] | null) || []).some(
+            (inv) => inv?.status !== "Cancelled",
+          ),
           visit_type: r.visit_type || "",
           next_visit_status: r.next_visit_status || "",
           notes: r.notes || "",
@@ -193,6 +212,10 @@ export default function DashboardExplore() {
           patient_name: r.patient_name || "Walk-in",
           doctor: r.doctor_id ? staffName.get(r.doctor_id) || "Unassigned" : "Walk-in / Direct",
           payment_mode: r.payment_mode || "",
+          service: invoiceServiceLabel(r),
+          // Matched against separately: one bill can carry several services,
+          // and the column above joins them into a single cell.
+          _services: invoiceServiceNames(r),
           _areas: (((r.appointments?.problem_area_ids as string[]) || [])
             .map((id) => areaName.get(id))
             .filter(Boolean) as string[]),
@@ -224,7 +247,11 @@ export default function DashboardExplore() {
     [normalized]
   );
   const serviceOptions = useMemo(
-    () => Array.from(new Set(normalized.map((r: any) => r.service).filter(Boolean))).sort(),
+    // Flattened, so a bill charging two services offers each of them rather
+    // than one entry naming the pair.
+    () => Array.from(new Set(normalized.flatMap((r: any) =>
+      Array.isArray(r._services) && r._services.length ? r._services : [r.service],
+    ).filter(Boolean))).sort(),
     [normalized]
   );
   const doctorOptions = useMemo(
@@ -236,8 +263,9 @@ export default function DashboardExplore() {
     const q = search.trim().toLowerCase();
     return normalized.filter((r: any) => {
       if (status !== "all" && r.status !== status) return false;
+      if (urlBilled && !r.billed) return false;
       if (staff !== "all" && r._staffId !== staff) return false;
-      if (service !== "all" && r.service !== service) return false;
+      if (!rowMatchesService(r, service)) return false;
       if (urlPaymentMode) {
         const mode = r.payment_mode || "Unspecified";
         if (mode !== urlPaymentMode) return false;
@@ -249,7 +277,7 @@ export default function DashboardExplore() {
       if (q && !fields.some((f) => String(r[f.key] ?? "").toLowerCase().includes(q))) return false;
       return true;
     });
-  }, [normalized, search, status, staff, service, fields, urlPaymentMode, urlProblemArea]);
+  }, [normalized, search, status, staff, service, fields, urlPaymentMode, urlProblemArea, urlBilled]);
 
   const chartData = useMemo(() => {
     const map: Record<string, number> = {};
@@ -372,11 +400,11 @@ export default function DashboardExplore() {
         </div>
         <div>
           <label className="text-[10px] uppercase tracking-wide text-muted-foreground">From</label>
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-8 w-[140px] text-xs" />
+          <DateInput value={from} onChange={(isoDate) => setFrom(isoDate)} className="h-8 w-[140px] text-xs" />
         </div>
         <div>
           <label className="text-[10px] uppercase tracking-wide text-muted-foreground">To</label>
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-8 w-[140px] text-xs" />
+          <DateInput value={to} onChange={(isoDate) => setTo(isoDate)} className="h-8 w-[140px] text-xs" />
         </div>
         {kind !== "patients" && (
           <div>

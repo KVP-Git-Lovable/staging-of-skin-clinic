@@ -1,7 +1,14 @@
 import { useState, useRef, useMemo, createContext, useContext } from "react";
+import { DateInput } from "@/components/shared/DateInput";
+import { useUrlPanel } from "@/hooks/useUrlPanel";
+import { withDrPrefix } from "@/lib/staffName";
+import { displayDate } from "@/lib/dateInput";
+import { numVal } from "@/lib/numberInput";
+import { applyMedicineDefaults } from "@/lib/medicineDefaults";
+import { usePharmaLookup } from "@/hooks/usePharmaLookup";
 import { useParams, useNavigate } from "react-router-dom";
-import { shortPatientId } from "@/lib/utils";
-import { ArrowLeft, Camera, Calendar, ClipboardList, Pill, Receipt, User, Loader2, Share2, Copy, Check, ScanEye, FileText, Users, Plus, Save, Edit2, Info, Paperclip, Upload, X, ClipboardCheck, Trash2, ChevronDown, Eye, KeyRound, Megaphone, Search, Sparkles, ImageOff } from "lucide-react";
+import { cn, shortPatientId } from "@/lib/utils";
+import { ArrowLeft, Camera, Calendar, ClipboardList, Pill, Receipt, User, Loader2, Share2, Copy, Check, ScanEye, FileText, Users, Plus, Save, Edit2, Info, Paperclip, Upload, X, ClipboardCheck, Trash2, ChevronDown, Eye, KeyRound, Megaphone, Search, Sparkles, ImageOff, Lock, Crown } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { format } from "date-fns";
 import { EngagementScoreCard } from "@/components/patients/EngagementScoreCard";
@@ -24,19 +31,50 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { motion } from "framer-motion";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { useQuery } from "@tanstack/react-query";
 
 import { SkinTracker } from "@/components/shared/SkinTracker";
+import { PhotoViewer } from "@/components/patients/PhotoViewer";
+import { CopyButton } from "@/components/shared/CopyButton";
+import { PatientAvatarEditor } from "@/components/patients/PatientAvatarEditor";
 import { CaseAnalysis } from "@/components/shared/CaseAnalysis";
-import { CameraDialog } from "@/components/shared/CameraDialog";
+import { AiRepository } from "@/components/shared/AiRepository";
+import { WhatsAppDeliveryLog } from "@/components/shared/WhatsAppDeliveryLog";
+import { patientAgeLabel, patientAgeValue } from "@/lib/patientIdentity";
+import { MessageCircle } from "lucide-react";
+import { CameraCapture } from "@/components/shared/CameraCapture";
+import { AttachPhotosButton } from "@/components/photos/AttachPhotosButton";
+import { PatientAttachments } from "@/components/patients/PatientAttachments";
 import { FamilyMembers } from "@/components/patients/FamilyMembers";
 import { ProcedureFormDialog } from "@/components/procedures/ProcedureFormDialog";
 import { ProcedureDetailSheet } from "@/components/procedures/ProcedureDetailSheet";
 import { AppointmentDetailSheet } from "@/components/appointments/AppointmentDetailSheet";
+import { ViewPrescriptionButton } from "@/components/prescriptions/ViewPrescriptionButton";
 import { QuickAppointmentDialog } from "@/components/appointments/QuickAppointmentDialog";
+import { appointmentStatusClasses, appointmentStatusLabel, showsAsBilled, BILLED_BADGE_CLASSES } from "@/lib/appointmentStatus";
+import { invoiceMapByAppointment, type VisitBill } from "@/lib/invoicesForAppointments";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
 import { toast } from "sonner";
 import { SurveyFill } from "@/components/surveys/SurveyFill";
 import { approveSurveyResponse, enrichAiProducts, enrichAiServices } from "@/lib/surveyApproval";
+import { procedureDateLabel } from "@/lib/procedureDate";
+import { investigationText } from "@/lib/investigationText";
+import { PATIENT_SOURCE_OPTIONS, PATIENT_GENDER_OPTIONS, optionsIncluding } from "@/lib/patientSourceOptions";
+import { referralKind, referrerStillApplies, referringPatientId } from "@/lib/patientReferral";
+import { ReferringDoctorPicker } from "@/components/patients/ReferringDoctorPicker";
+import { PatientCombobox } from "@/components/patients/PatientCombobox";
+import { VipBadge } from "@/components/shared/VipBadge";
+import { CustomFieldsRenderer } from "@/components/custom-fields/CustomFieldsRenderer";
+import {
+  ConsultationReasonPicker,
+  buildConsultationReasonsForSave,
+  normaliseConsultationType,
+  parseConsultationReasonsForEdit,
+  type ConsultationType,
+} from "@/components/appointments/ConsultationReasonPicker";
+import { useCustomFields } from "@/lib/custom-fields/api";
+import { useLiveAppointments } from "@/hooks/useLiveAppointments";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
@@ -59,8 +97,28 @@ const SectionTitle = ({ children }: { children: React.ReactNode }) => (
   <h3 className="text-sm font-semibold text-foreground border-b pb-1.5 mb-3">{children}</h3>
 );
 
-const Field = ({ label, value, field, type = "text" }: { label: string; value: any; field: string; type?: string }) => {
-  const { readOnly, upd } = useContext(DetailsFieldContext);
+/** A field withheld because the patient is under another doctor.
+ *
+ *  A small lock rather than the word "Hidden", which read oddly in a column of
+ *  real values. It still has to say something: a bare dash is what every empty
+ *  field here shows, so withheld and simply-not-recorded would look identical.
+ *  The lock carries the reason on hover. */
+const MaskedField = ({ label }: { label: string }) => (
+  <div>
+    <Label className="text-xs text-muted-foreground">{label}</Label>
+    <p className="text-sm mt-1 text-muted-foreground flex items-center gap-1.5" title="Only this patient's own doctor can see this">
+      <Lock className="h-3 w-3" aria-hidden />
+      <span className="sr-only">Not shown - only this patient's own doctor can see this</span>
+      <span aria-hidden>&mdash;</span>
+    </p>
+  </div>
+);
+
+const Field = ({ label, value, field, type = "text", neverEditable = false }: { label: string; value: any; field: string; type?: string; neverEditable?: boolean }) => {
+  const { readOnly: readOnlyMode, upd } = useContext(DetailsFieldContext);
+  // neverEditable is for a value that is displayed but is not what the column
+  // holds - editing it would write the display over the real value.
+  const readOnly = readOnlyMode || neverEditable;
   return (
     <div>
       <Label className="text-xs text-muted-foreground">{label}</Label>
@@ -72,6 +130,12 @@ const Field = ({ label, value, field, type = "text" }: { label: string; value: a
                 : value)
             : <span className="text-muted-foreground/50">—</span>
         }</p>
+      ) : type === "date" ? (
+        // Date of Birth is the field DateInput was written for - a native
+        // date box shows 07/31/1982 on one clinic PC and 31/07/1982 on the
+        // next. The read-only branch above already prints dd/MM/yyyy; this
+        // makes editing agree with it on every machine.
+        <DateInput value={value || ""} onChange={(isoDate) => upd(field, isoDate)} className="mt-1 h-8 text-sm" />
       ) : (
         <Input type={type} value={value || ""} onChange={(e) => upd(field, e.target.value)} className="mt-1 h-8 text-sm" />
       )}
@@ -147,42 +211,40 @@ function SurveyAnswersView({ surveyId, answers, templateId }: { surveyId: string
 }
 
 const PatientDetail = () => {
+  const { dataScope } = useAuth();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const photoCameraRef = useRef<HTMLInputElement>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [failedPhotoIds, setFailedPhotoIds] = useState<Set<string>>(new Set());
-  const [attachmentCameraOpen, setAttachmentCameraOpen] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [skinTrackerOpen, setSkinTrackerOpen] = useState(false);
   const [otpCode, setOtpCode] = useState<string | null>(null);
+  const [vipSaving, setVipSaving] = useState(false);
   const [otpCopied, setOtpCopied] = useState(false);
   const [procedureFormOpen, setProcedureFormOpen] = useState(false);
   const [detailsEditing, setDetailsEditing] = useState(false);
   const [elaboratingField, setElaboratingField] = useState<string | null>(null);
   const [detailsForm, setDetailsForm] = useState<any>(null);
+  // The picker's two "Others" boxes are not patient columns, and the Details
+  // save sends the whole detailsForm object - keeping them here rather than in
+  // that object is what stops the update failing on an unknown column.
+  const [othersAestheticText, setOthersAestheticText] = useState("");
+  const [othersClinicalText, setOthersClinicalText] = useState("");
   const [detailsSaving, setDetailsSaving] = useState(false);
   const [addRxOpen, setAddRxOpen] = useState(false);
   const [rxForm, setRxForm] = useState({ medicine_name: "", dosage: "", frequency: "", duration: "", quantity: 1, instructions: "", procedure_id: "" });
   const [selectedProcedureId, setSelectedProcedureId] = useState<string | null>(null);
-  const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
+  // In the address, so Back closes the panel instead of leaving the patient.
+  const { openId: selectedAppointmentId, open: openAppointment, close: closeAppointment } = useUrlPanel("appointment");
   const [quickApptOpen, setQuickApptOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const photoInputRef = useRef<HTMLInputElement>(null);
-  const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const cameraInputRef = useRef<HTMLInputElement>(null);
-  const [pendingAttachmentFile, setPendingAttachmentFile] = useState<File | null>(null);
-  const [docTypeDialogOpen, setDocTypeDialogOpen] = useState(false);
-  const [viewingAttachment, setViewingAttachment] = useState<any>(null);
-  const [selectedDocType, setSelectedDocType] = useState<string>("Prescription");
-  const [attachmentFilter, setAttachmentFilter] = useState<string>("all");
   const [surveyTemplateSelectOpen, setSurveyTemplateSelectOpen] = useState(false);
   const [selectedSurveyTemplateId, setSelectedSurveyTemplateId] = useState<string | null>(null);
   const [surveyFillOpen, setSurveyFillOpen] = useState(false);
   const [addSurveyMode, setAddSurveyMode] = useState<"choice" | "fill" | "assign" | null>(null);
   const [assigning, setAssigning] = useState(false);
-  const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
 
   const { data: patient, isLoading } = useQuery({
@@ -193,7 +255,59 @@ const PatientDetail = () => {
       return data;
     },
     enabled: !!id,
+    refetchOnMount: "always",
   });
+
+  /**
+   * Mark, or unmark, a patient the front desk should recognise.
+   *
+   * Written straight to the record: the Details tab's Edit/Save is for
+   * correcting a record, and this is a one-click judgement somebody makes while
+   * the patient is standing there. The cached patient is refreshed rather than
+   * patched locally so the badge, the appointment list and anything else
+   * reading the record all agree.
+   */
+  const toggleVip = async () => {
+    if (!id || !patient || vipSaving) return;
+    const next = !patient.is_vip;
+    setVipSaving(true);
+    try {
+      const { error } = await supabase.from("patients").update({ is_vip: next }).eq("id", id);
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ["patient", id] });
+      // The appointment lists carry the flag through their patient join, so
+      // they have to be told too or the crown appears on one screen only.
+      queryClient.invalidateQueries({ queryKey: ["appointments"] });
+      toast.success(next ? "Marked as VIP" : "VIP removed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not update VIP");
+    } finally {
+      setVipSaving(false);
+    }
+  };
+
+  // Who referred them, when the referrer is another patient. The column holds
+  // that patient's id in that case, and a doctor's name in the other, so this
+  // only looks up something that is actually an id.
+  const referredByPatientId =
+    referralKind(patient?.source) === "patient"
+      ? referringPatientId(patient?.source_referral_doctor) || null
+      : null;
+  const { data: referringPatient } = useQuery({
+    queryKey: ["referring-patient", referredByPatientId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patients")
+        .select("id, first_name, last_name")
+        .eq("id", referredByPatientId!)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!referredByPatientId,
+  });
+
+  const { data: customFields = [] } = useCustomFields("patients", true);
 
   const { data: procedures = [] } = useQuery({
     queryKey: ["patient-procedures", id],
@@ -202,6 +316,10 @@ const PatientDetail = () => {
         .from("procedures")
         .select("*, staff:staff!procedures_staff_id_fkey(first_name, last_name)")
         .eq("patient_id", id!)
+        // Visits imported without a date are left out: the clinic wants the
+        // record to match Salesforce exactly, nothing more. The rows are still
+        // in the database - see the 20260925 migration - just not listed.
+        .eq("date_not_recorded", false)
         .order("procedure_date", { ascending: false });
       if (error) throw error;
       return data;
@@ -219,7 +337,7 @@ const PatientDetail = () => {
         queries.push(
           supabase
             .from("prescriptions")
-            .select("*, procedures(service_name, procedure_date)")
+            .select("*, procedures(service_name, procedure_date, date_not_recorded)")
             .in("procedure_id", procIds)
         );
       }
@@ -229,7 +347,7 @@ const PatientDetail = () => {
         queries.push(
           supabase
             .from("prescriptions")
-            .select("*, procedures(service_name, procedure_date)")
+            .select("*, procedures(service_name, procedure_date, date_not_recorded)")
             .in("survey_response_id", surveyIds)
             .is("procedure_id", null)
         );
@@ -244,28 +362,26 @@ const PatientDetail = () => {
     enabled: !!id,
   });
 
+  // A patient's visits move at the front desk while the doctor is reading
+  // them. See APPOINTMENT_QUERY_KEYS.
+  useLiveAppointments();
+
   const { data: appointments = [] } = useQuery({
     queryKey: ["patient-appointments", id],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("appointments")
-        .select("*, staff(first_name, last_name)")
+        .select("*, staff:staff!appointments_staff_id_fkey(first_name, last_name)")
         .eq("patient_id", id!)
-        .order("start_time", { ascending: false });
+        .order("start_time", { ascending: false })
+        .order("created_at", { ascending: false });
       if (error) throw error;
       return data;
     },
     enabled: !!id,
   });
 
-  const { data: pharmaProducts = [] } = useQuery({
-    queryKey: ["pharma-products-lookup-rx"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("pharma_products").select("id, name").order("name");
-      if (error) throw error;
-      return data || [];
-    },
-  });
+  const { data: pharmaProducts = [] } = usePharmaLookup();
 
   const { data: invoices = [] } = useQuery({
     queryKey: ["patient-invoices", id],
@@ -280,6 +396,27 @@ const PatientDetail = () => {
     },
     enabled: !!id,
   });
+
+  /**
+   * Which of this patient's visits actually carry a bill.
+   *
+   * The clinic reported a visit the patient never attended reading "Billed"
+   * here. The badge was derived from the STATUS alone - "Completed" was taken
+   * to mean billed - and this patient's 25 September visit came from the
+   * Salesforce import already marked Completed with no invoice behind it. The
+   * same mistake pointing the other way hid two visits that were genuinely
+   * paid but still sat on "Confirmed", because the trigger that completes an
+   * appointment skips any whose start time has not yet arrived.
+   *
+   * No new query: `invoices` above is already this patient's complete bill
+   * history, fetched for the Invoices tab. That also means the answer here is
+   * always KNOWN rather than guessed, and the two tabs are driven by one list
+   * so they cannot contradict each other.
+   */
+  const billedApptIds = useMemo(
+    () => new Set(invoiceMapByAppointment(invoices as VisitBill[]).keys()),
+    [invoices],
+  );
 
   // Live roll-ups: a "visit" is an appointment that actually happened.
   const visitCount = useMemo(
@@ -305,7 +442,26 @@ const PatientDetail = () => {
     enabled: !!id,
   });
 
-  const { data: attachments = [], refetch: refetchAttachments } = useQuery({
+  // A doctor on data_scope = 'own' sees every patient's chart - that is
+  // deliberate, and the scoping migration says so - but the clinic does not want
+  // them reading contact details or takings for a patient another doctor treats.
+  // Asked of the database rather than inferred from the role: is_my_patient()
+  // returns true for anyone with full scope, so admins and reception are
+  // untouched without a second condition here.
+  const { data: isMyPatient = true } = useQuery({
+    queryKey: ["is-my-patient", id],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("is_my_patient", { _patient_id: id! });
+      if (error) throw error;
+      return data === true;
+    },
+    enabled: !!id && dataScope === "own",
+  });
+  const hideOtherDoctorDetails = dataScope === "own" && !isMyPatient;
+
+  // Kept for the tab label's count only; PatientAttachments owns the list and
+  // uses this same query key, so this costs no extra request.
+  const { data: attachments = [] } = useQuery({
     queryKey: ["patient-attachments", id],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -503,76 +659,6 @@ const PatientDetail = () => {
     }
   };
 
-  const handleAttachmentUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !id) return;
-    setPendingAttachmentFile(file);
-    setSelectedDocType("Prescription");
-    setDocTypeDialogOpen(true);
-    e.target.value = "";
-  };
-
-  const uploadPendingAttachment = async () => {
-    if (!pendingAttachmentFile || !id) return;
-    setUploadingAttachment(true);
-    const file = pendingAttachmentFile;
-    try {
-      const ext = file.name.split(".").pop() || "bin";
-      const filePath = `${id}/${Date.now()}.${ext}`;
-      const { error: uploadError } = await supabase.storage.from("patient-photos").upload(filePath, file);
-      if (uploadError) throw uploadError;
-      const fileUrl = `${SUPABASE_URL}/storage/v1/object/public/patient-photos/${filePath}`;
-      const { error } = await supabase.from("procedure_attachments").insert({
-        patient_id: id,
-        procedure_id: procedures.length > 0 ? procedures[0].id : null,
-        file_name: file.name,
-        file_url: fileUrl,
-        document_type: selectedDocType,
-      } as any);
-      if (error) throw error;
-      toast.success("Attachment uploaded");
-      setDocTypeDialogOpen(false);
-      setPendingAttachmentFile(null);
-      refetchAttachments();
-    } catch (err: any) {
-      toast.error(err.message);
-    } finally {
-      setUploadingAttachment(false);
-    }
-  };
-
-  const handlePhotoCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !id) return;
-    e.target.value = "";
-    savePhotoFile(file);
-  };
-
-  const savePhotoFile = async (file: File) => {
-    if (!file || !id) return;
-    setUploadingPhoto(true);
-    try {
-      const ext = file.name.split(".").pop() || "jpg";
-      const fileName = `${id}/${Date.now()}.${ext}`;
-      const { error: uploadError } = await supabase.storage.from("patient-photos").upload(fileName, file);
-      if (uploadError) throw uploadError;
-      const photoUrl = `${SUPABASE_URL}/storage/v1/object/public/patient-photos/${fileName}`;
-      const { error } = await supabase.from("patient_photos").insert({
-        patient_id: id,
-        photo_url: photoUrl,
-        notes: null,
-      } as any);
-      if (error) throw error;
-      toast.success("Photo uploaded");
-      queryClient.invalidateQueries({ queryKey: ["patient-photos", id] });
-      setPendingPhotoFile(null);
-    } catch (err: any) {
-      toast.error(err.message || "Failed to upload photo");
-    } finally {
-      setUploadingPhoto(false);
-    }
-  };
-
   const deletePhoto = async (photo: any) => {
     if (!confirm("Delete this photo?")) return;
     try {
@@ -586,22 +672,6 @@ const PatientDetail = () => {
       queryClient.invalidateQueries({ queryKey: ["patient-photos", id] });
     } catch (err: any) {
       toast.error(err.message || "Failed to delete photo");
-    }
-  };
-
-  const deleteAttachment = async (att: any) => {
-    if (!confirm("Delete this attachment?")) return;
-    try {
-      const parts = att.file_url?.split("/patient-photos/");
-      if (parts && parts[1]) {
-        await supabase.storage.from("patient-photos").remove([parts[1]]);
-      }
-      const { error } = await supabase.from("procedure_attachments").delete().eq("id", att.id);
-      if (error) throw error;
-      toast.success("Attachment deleted");
-      refetchAttachments();
-    } catch (err: any) {
-      toast.error(err.message || "Failed to delete attachment");
     }
   };
 
@@ -622,11 +692,6 @@ const PatientDetail = () => {
     );
   }
 
-  const getAge = (dob: string | null) => {
-    if (!dob) return null;
-    return Math.floor((Date.now() - new Date(dob).getTime()) / (365.25 * 24 * 60 * 60 * 1000));
-  };
-
   const statusStyles: Record<string, string> = {
     Paid: "bg-success/10 text-success",
     Partial: "bg-warning/10 text-warning",
@@ -643,19 +708,29 @@ const PatientDetail = () => {
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
             <div className="flex items-center gap-3 md:gap-4">
-              <div className="h-12 w-12 md:h-16 md:w-16 rounded-full bg-primary/10 flex items-center justify-center text-primary font-display font-bold text-lg md:text-xl shrink-0">
-                {patient.first_name[0]}{patient.last_name[0]}
-              </div>
+              <PatientAvatarEditor
+                patientId={patient.id}
+                firstName={patient.first_name}
+                lastName={patient.last_name}
+                avatarUrl={(patient as { avatar_url?: string | null }).avatar_url}
+                photos={photos as { id: string; photo_url: string }[]}
+              />
               <div className="min-w-0">
-                <h1 className="page-title text-xl md:text-2xl truncate">{patient.first_name} {patient.last_name}</h1>
+                <div className="flex items-center gap-2 min-w-0">
+                  <h1 className="page-title text-xl md:text-2xl truncate">{patient.first_name} {patient.last_name}</h1>
+                  {/* Beside the name, where the eye already is. One of a kind on
+                      this page, so it is allowed the slow sweep; the list rows
+                      are not. */}
+                  {patient.is_vip && <VipBadge size="md" shimmer />}
+                </div>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 md:mt-1 text-xs md:text-sm text-muted-foreground">
                   <span className="font-mono text-primary">{shortPatientId(patient.id)}</span>
                   {patient.gender && <span>{patient.gender}</span>}
-                  {getAge(patient.date_of_birth) !== null && <span>• Age {getAge(patient.date_of_birth)}</span>}
+                  {patientAgeValue(patient.date_of_birth) && <span>• Age {patientAgeValue(patient.date_of_birth)}</span>}
                   {patient.blood_group && <span>• {patient.blood_group}</span>}
-                  {patient.phone && <span className="hidden sm:inline">• {patient.phone}</span>}
+                  {patient.phone && !hideOtherDoctorDetails && <span className="hidden sm:inline">• {patient.phone}</span>}
                 </div>
-                {patient.phone && <p className="text-xs text-muted-foreground sm:hidden mt-0.5">{patient.phone}</p>}
+                {patient.phone && !hideOtherDoctorDetails && <p className="text-xs text-muted-foreground sm:hidden mt-0.5">{patient.phone}</p>}
               </div>
             </div>
             <div className="flex flex-col items-stretch sm:items-end gap-2">
@@ -725,6 +800,29 @@ const PatientDetail = () => {
               >
                 <KeyRound className="h-3.5 w-3.5" /> Reset Portal PIN
               </Button>
+              {/* A deliberate mark, not a calculated one - the engagement tier
+                  below is computed from visits and spend and answers a
+                  different question. Written straight to the record rather than
+                  through the Details tab's edit mode, because recognising a
+                  patient at the desk cannot wait for Edit then Save. */}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                role="switch"
+                aria-checked={!!patient.is_vip}
+                aria-label={patient.is_vip ? "Remove VIP" : "Mark as VIP"}
+                disabled={vipSaving}
+                className={cn(
+                  "gap-1.5 h-8 text-xs",
+                  patient.is_vip &&
+                    "border-[hsl(var(--vip-border))] bg-[hsl(var(--vip-surface))] text-[hsl(var(--vip-ink))] hover:bg-[hsl(var(--vip-surface))]"
+                )}
+                onClick={() => void toggleVip()}
+              >
+                <Crown className="h-3.5 w-3.5" />
+                {patient.is_vip ? "VIP" : "Mark VIP"}
+              </Button>
               <Badge className={`h-8 ${patient.status === "Active" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>
                 {patient.status}
               </Badge>
@@ -764,7 +862,7 @@ const PatientDetail = () => {
       )}
 
       <div className="space-y-4 mb-4">
-        <EngagementScoreCard patientId={id!} />
+        <EngagementScoreCard patientId={id!} hideBilled={hideOtherDoctorDetails} />
       </div>
 
       <Tabs defaultValue="details" className="mt-2">
@@ -774,12 +872,14 @@ const PatientDetail = () => {
             <TabsTrigger value="appointments" title="Appointments" aria-label="Appointments" className="gap-1 text-xs md:text-sm"><Calendar className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Appts</span> ({appointments.length})</TabsTrigger>
             <TabsTrigger value="invoices" title="Invoices" aria-label="Invoices" className="gap-1 text-xs md:text-sm"><Receipt className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Invoices</span> ({invoices.length})</TabsTrigger>
             <TabsTrigger value="photos" title="Photos" aria-label="Photos" className="gap-1 text-xs md:text-sm"><Camera className="h-3.5 w-3.5" /> ({photos.length})</TabsTrigger>
-            <TabsTrigger value="procedures" title="Procedures" aria-label="Procedures" className="gap-1 text-xs md:text-sm"><ClipboardList className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Procedures</span> ({procedures.length})</TabsTrigger>
+            <TabsTrigger value="procedures" title="Prescriptions" aria-label="Prescriptions" className="gap-1 text-xs md:text-sm"><ClipboardList className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Prescriptions</span> ({procedures.length})</TabsTrigger>
             <TabsTrigger value="prescriptions" title="Prescriptions" aria-label="Prescriptions" className="gap-1 text-xs md:text-sm"><Pill className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Rx</span> ({prescriptions.length})</TabsTrigger>
             <TabsTrigger value="family" title="Family" aria-label="Family" className="gap-1 text-xs md:text-sm"><Users className="h-3.5 w-3.5" /> Family</TabsTrigger>
             <TabsTrigger value="surveys" title="Surveys" aria-label="Surveys" className="gap-1 text-xs md:text-sm"><ClipboardCheck className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Surveys</span> ({surveyResponses.length + surveyAssignments.length})</TabsTrigger>
             <TabsTrigger value="attachments" title="Attachments" aria-label="Attachments" className="gap-1 text-xs md:text-sm"><Paperclip className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Attachments</span> ({attachments.length})</TabsTrigger>
             <TabsTrigger value="campaigns" title="Campaigns" aria-label="Campaigns" className="gap-1 text-xs md:text-sm"><Megaphone className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Campaigns</span> ({patientCampaigns.length})</TabsTrigger>
+            <TabsTrigger value="ai-repo" title="AI Repository" aria-label="AI Repository" className="gap-1 text-xs md:text-sm"><Sparkles className="h-3.5 w-3.5" /> <span className="hidden sm:inline">AI Repository</span></TabsTrigger>
+            <TabsTrigger value="whatsapp" title="WhatsApp" aria-label="WhatsApp" className="gap-1 text-xs md:text-sm"><MessageCircle className="h-3.5 w-3.5" /> <span className="hidden sm:inline">WhatsApp</span></TabsTrigger>
           </TabsList>
         </div>
 
@@ -789,17 +889,34 @@ const PatientDetail = () => {
             <div className="flex justify-end mb-3">
               {detailsEditing ? (
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => { setDetailsEditing(false); setDetailsForm(null); }}>Cancel</Button>
+                  <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => { setDetailsEditing(false); setDetailsForm(null); setOthersAestheticText(""); setOthersClinicalText(""); }}>Cancel</Button>
                   <Button size="sm" className="gap-1.5 h-8 text-xs" disabled={detailsSaving} onClick={async () => {
                     if (!detailsForm) return;
                     setDetailsSaving(true);
                     try {
-                      const { error } = await supabase.from("patients").update(detailsForm).eq("id", id!);
+                      // detailsForm holds the picker's tags while editing (the
+                      // same shape the Add/Edit form keeps); the two "Others"
+                      // boxes are folded back in here, so what was typed into
+                      // them survives a save.
+                      const payload = {
+                        ...detailsForm,
+                        consultation_type: normaliseConsultationType(detailsForm.consultation_type),
+                        consultation_reasons: (detailsForm.consultation_reasons || []).length
+                          ? buildConsultationReasonsForSave(
+                              detailsForm.consultation_reasons,
+                              othersAestheticText,
+                              othersClinicalText,
+                            )
+                          : null,
+                      };
+                      const { error } = await supabase.from("patients").update(payload).eq("id", id!);
                       if (error) throw error;
                       toast.success("Patient details updated");
                       queryClient.invalidateQueries({ queryKey: ["patient", id] });
                       setDetailsEditing(false);
                       setDetailsForm(null);
+                      setOthersAestheticText("");
+                      setOthersClinicalText("");
                     } catch (err: any) {
                       toast.error(err.message);
                     } finally {
@@ -812,9 +929,15 @@ const PatientDetail = () => {
               ) : (
                 <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" onClick={() => {
                   setDetailsEditing(true);
+                  // Splits "Others (Aesthetic): dry patches" back into the tag
+                  // and the text, so editing cannot drop what was typed.
+                  const parsedReasons = parseConsultationReasonsForEdit(patient.consultation_reasons);
+                  setOthersAestheticText(parsedReasons.othersAestheticText);
+                  setOthersClinicalText(parsedReasons.othersClinicalText);
                   setDetailsForm({
                     first_name: patient.first_name, last_name: patient.last_name, date_of_birth: patient.date_of_birth,
-                    gender: patient.gender, phone: patient.phone, email: patient.email, address: patient.address,
+                    gender: patient.gender, phone: patient.phone, alternate_phone: patient.alternate_phone,
+                    email: patient.email, address: patient.address,
                     city: patient.city, state: patient.state, pincode: patient.pincode,
                     emergency_contact_name: patient.emergency_contact_name, emergency_contact_phone: patient.emergency_contact_phone,
                     blood_group: patient.blood_group, medical_history: patient.medical_history,
@@ -823,6 +946,16 @@ const PatientDetail = () => {
                     previous_treatments: patient.previous_treatments, notes: patient.notes, status: patient.status,
                     source: patient.source, source_ad_details: patient.source_ad_details,
                     source_referral_doctor: patient.source_referral_doctor,
+                    // Were left out, so the inline edit silently could not touch them.
+                    source_other_text: patient.source_other_text,
+                    consultation_type: patient.consultation_type,
+                    consultation_reasons: parsedReasons.reasons,
+                    // Whatever an admin has configured. Seeded by name rather than
+                    // spreading the whole record, which would carry the engagement
+                    // roll-ups and Salesforce markers back into the update.
+                    ...Object.fromEntries(
+                      customFields.map((f) => [f.column_name, (patient as Record<string, unknown>)[f.column_name]]),
+                    ),
                     facebook_url: patient.facebook_url, instagram_url: patient.instagram_url,
                     follows_facebook: patient.follows_facebook, follows_instagram: patient.follows_instagram,
                   });
@@ -833,7 +966,18 @@ const PatientDetail = () => {
             </div>
             {(() => {
               const d = detailsEditing ? detailsForm : patient;
-              const upd = (field: string, value: any) => setDetailsForm((prev: any) => ({ ...prev, [field]: value || null }));
+              // "Dr. referral" stores the doctor's name; "Referred by Patient"
+              // stores that patient's id. Show the name either way rather than a
+              // raw uuid - referringPatient resolves the second case.
+              const referredByLabel =
+                (referralKind(d.source) === "patient" && referringPatient
+                  ? `${referringPatient.first_name || ""} ${referringPatient.last_name || ""}`.trim()
+                  : "") || d.source_referral_doctor;
+              // Empty text becomes null, but a boolean is passed through: `false || null`
+              // wrote null when a "Follows us on..." box was unticked, leaving a
+              // yes/no column with three states.
+              const upd = (field: string, value: any) =>
+                setDetailsForm((prev: any) => ({ ...prev, [field]: typeof value === "boolean" ? value : value || null }));
               const readOnly = !detailsEditing;
 
               const elaborate = async (field: string, label: string, currentText: string) => {
@@ -877,6 +1021,28 @@ const PatientDetail = () => {
                       <Field label="Last Name" value={d.last_name} field="last_name" />
                       <Field label="Date of Birth" value={d.date_of_birth} field="date_of_birth" type="date" />
                       <div>
+                        {/* Read, never asked for. Worked out from the date of
+                            birth beside it by the same function as the header
+                            and the Add Patient form, so no two screens can
+                            disagree about how old somebody is. There is no age
+                            column - nothing is stored. */}
+                        <Label className="text-xs text-muted-foreground">Age</Label>
+                        {readOnly ? (
+                          <p className="text-sm mt-1">
+                            {patientAgeLabel(d.date_of_birth) || <span className="text-muted-foreground/50">—</span>}
+                          </p>
+                        ) : (
+                          <Input
+                            readOnly
+                            tabIndex={-1}
+                            aria-readonly="true"
+                            value={patientAgeLabel(d.date_of_birth)}
+                            placeholder="—"
+                            className="mt-1 h-8 text-sm bg-muted/50 text-muted-foreground"
+                          />
+                        )}
+                      </div>
+                      <div>
                         <Label className="text-xs text-muted-foreground">Gender</Label>
                         {readOnly ? (
                           <p className="text-sm mt-1">{d.gender || <span className="text-muted-foreground/50">—</span>}</p>
@@ -884,19 +1050,31 @@ const PatientDetail = () => {
                           <Select value={d.gender || ""} onValueChange={(v) => upd("gender", v)}>
                             <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select" /></SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="Male">Male</SelectItem>
-                              <SelectItem value="Female">Female</SelectItem>
-                              <SelectItem value="Other">Other</SelectItem>
+                              {/* The form offers "Prefer not to say"; this list did not. */}
+                              {optionsIncluding(d.gender, PATIENT_GENDER_OPTIONS).map((o) => (
+                                <SelectItem key={o} value={o}>{o}</SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                         )}
                       </div>
-                      <Field label="Phone" value={d.phone} field="phone" />
-                      <Field label="Email" value={d.email} field="email" type="email" />
+                      {hideOtherDoctorDetails ? (
+                        <>
+                          <MaskedField label="Phone" />
+                          <MaskedField label="Alternate Phone" />
+                          <MaskedField label="Email" />
+                        </>
+                      ) : (
+                        <>
+                          <Field label="Phone" value={d.phone} field="phone" />
+                          <Field label="Alternate Phone" value={d.alternate_phone} field="alternate_phone" />
+                          <Field label="Email" value={d.email} field="email" type="email" />
+                        </>
+                      )}
                       <div>
                         <Label className="text-xs text-muted-foreground">Status</Label>
                         {readOnly ? (
-                          <p className="text-sm mt-1">{d.status}</p>
+                          <p className="text-sm mt-1">{d.status || <span className="text-muted-foreground/50">—</span>}</p>
                         ) : (
                           <Select value={d.status || "Active"} onValueChange={(v) => upd("status", v)}>
                             <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue /></SelectTrigger>
@@ -910,7 +1088,13 @@ const PatientDetail = () => {
                     </div>
                   </div>
 
-                  {/* Address */}
+                  {/* Address, minus the boxes nobody ever filled.
+                      State and Pincode were empty on all 27,281 patients, and
+                      the Emergency Contact card - a name and a phone - on all
+                      but one, so taking them away removes clutter and no
+                      information. Address and City stay: 4,113 patients have an
+                      address, and it has to remain readable and correctable.
+                      Both columns are untouched in the database. */}
                   <div className="stat-card p-4">
                     <SectionTitle>Address</SectionTitle>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -918,17 +1102,6 @@ const PatientDetail = () => {
                         <TextareaField label="Address" value={d.address} field="address" />
                       </div>
                       <Field label="City" value={d.city} field="city" />
-                      <Field label="State" value={d.state} field="state" />
-                      <Field label="Pincode" value={d.pincode} field="pincode" />
-                    </div>
-                  </div>
-
-                  {/* Emergency */}
-                  <div className="stat-card p-4">
-                    <SectionTitle>Emergency Contact</SectionTitle>
-                    <div className="grid grid-cols-2 gap-4">
-                      <Field label="Contact Name" value={d.emergency_contact_name} field="emergency_contact_name" />
-                      <Field label="Contact Phone" value={d.emergency_contact_phone} field="emergency_contact_phone" />
                     </div>
                   </div>
 
@@ -954,6 +1127,39 @@ const PatientDetail = () => {
                       <TextareaField label="Medical History" value={d.medical_history} field="medical_history" ai />
                       <TextareaField label="Current Medications" value={d.current_medications} field="current_medications" ai />
                       <TextareaField label="Allergies" value={d.allergies} field="allergies" ai />
+                    </div>
+                    {/* Asked for on every registration. This rendered only when a
+                        value was already stored, so on the 27,000-odd patients who
+                        have none there was no field at all and no way to set one.
+                        Always shown now, and in edit mode it is the same picker the
+                        Add/Edit form uses, so the choices cannot drift apart. */}
+                    <div className="mt-4 pt-4 border-t">
+                      {readOnly ? (
+                        <>
+                          <Label className="text-xs text-muted-foreground">Reason for Consultation</Label>
+                          <p className="text-sm mt-1">
+                            {normaliseConsultationType(d.consultation_type) || <span className="text-muted-foreground/50">—</span>}
+                          </p>
+                          {(d.consultation_reasons || []).length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {(d.consultation_reasons || []).map((reason: string) => (
+                                <Badge key={reason} variant="secondary" className="text-xs font-normal">{reason}</Badge>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <ConsultationReasonPicker
+                          consultationType={(d.consultation_type || "") as ConsultationType | ""}
+                          onConsultationTypeChange={(v) => upd("consultation_type", v)}
+                          consultationReasons={d.consultation_reasons || []}
+                          onConsultationReasonsChange={(r) => upd("consultation_reasons", r)}
+                          othersAestheticText={othersAestheticText}
+                          setOthersAestheticText={setOthersAestheticText}
+                          othersClinicalText={othersClinicalText}
+                          setOthersClinicalText={setOthersClinicalText}
+                        />
+                      )}
                     </div>
                   </div>
 
@@ -990,18 +1196,78 @@ const PatientDetail = () => {
                         {readOnly ? (
                           <p className="text-sm mt-1">{d.source || <span className="text-muted-foreground/50">—</span>}</p>
                         ) : (
-                          <Select value={d.source || "Walk-in"} onValueChange={(v) => upd("source", v)}>
+                          <Select
+                            value={d.source || "Walk-in"}
+                            onValueChange={(v) =>
+                              setDetailsForm((prev: any) => ({
+                                ...prev,
+                                source: v,
+                                // Same rule as the Add form: the column holds a
+                                // doctor's name for one kind of referral and a
+                                // patient's id for the other, so switching kind
+                                // has to clear it rather than leave a name where
+                                // an id is read.
+                                source_referral_doctor: referrerStillApplies(prev.source, v)
+                                  ? prev.source_referral_doctor
+                                  : null,
+                              }))
+                            }
+                          >
                             <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue /></SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="Walk-in">Walk-in</SelectItem>
-                              <SelectItem value="Advertisement">Advertisement</SelectItem>
-                              <SelectItem value="Other Dr. referral">Other Dr. referral</SelectItem>
+                              {/* Was three literal options - Walk-in, Advertisement
+                                  and "Other Dr. referral", a value the form never
+                                  writes - against the form's six. Shared now, and
+                                  whatever the record already holds stays on the
+                                  list so an imported source is not overwritten. */}
+                              {optionsIncluding(d.source, PATIENT_SOURCE_OPTIONS).map((o) => (
+                                <SelectItem key={o} value={o}>{o}</SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                         )}
                       </div>
                       {d.source === "Advertisement" && <Field label="Ad Details" value={d.source_ad_details} field="source_ad_details" />}
-                      {d.source === "Other Dr. referral" && <Field label="Referring Doctor" value={d.source_referral_doctor} field="source_referral_doctor" />}
+                      {/* A free text box here where the Add form shows a list:
+                          the clinic picked a doctor from four on registration and
+                          then retyped the name - or a variant of it - on every
+                          edit. The same two pickers the form uses now, chosen by
+                          the one shared rule, which also recognises the imported
+                          "Reference - other Dr" and "Reference - other patients"
+                          that 546 patients carry and that no screen used to offer
+                          a referrer box for at all. */}
+                      {referralKind(d.source) !== "none" && (
+                        <div>
+                          <Label className="text-xs text-muted-foreground">
+                            {referralKind(d.source) === "patient" ? "Referred By Patient" : "Referred By Doctor"}
+                          </Label>
+                          {readOnly ? (
+                            <p className="text-sm mt-1">
+                              {referredByLabel || <span className="text-muted-foreground/50">—</span>}
+                            </p>
+                          ) : referralKind(d.source) === "doctor" ? (
+                            <ReferringDoctorPicker
+                              value={d.source_referral_doctor}
+                              onChange={(name) => upd("source_referral_doctor", name)}
+                              className="mt-1 h-8 text-sm"
+                            />
+                          ) : (
+                            // Stores the referring patient's id, which is what the
+                            // column holds for this source - the old box wrote the
+                            // displayed name over that id, so it had to be locked
+                            // read-only and the referrer could not be corrected.
+                            <PatientCombobox
+                              value={referringPatientId(d.source_referral_doctor)}
+                              onValueChange={(patientId) => upd("source_referral_doctor", patientId)}
+                              placeholder="Select patient"
+                              // Nobody refers themselves.
+                              excludeId={d.id}
+                              className="mt-1 h-8 text-sm"
+                            />
+                          )}
+                        </div>
+                      )}
+                      {d.source === "Other" && <Field label="Specify Source" value={d.source_other_text} field="source_other_text" />}
                       <Field label="Facebook URL" value={d.facebook_url} field="facebook_url" />
                       <Field label="Instagram URL" value={d.instagram_url} field="instagram_url" />
                       <div className="flex items-center gap-4 col-span-2">
@@ -1022,6 +1288,20 @@ const PatientDetail = () => {
                     patient={patient}
                     visitsOverride={visitCount}
                     lifetimeValueOverride={lifetimeValue}
+                  />
+
+                  {/* Custom fields
+                      The Add/Edit form renders and saves whatever an admin has
+                      configured, and this tab had no renderer for them at all -
+                      so a clinic could add a field, fill it in on registration,
+                      and never see it again. Same component as the form, with
+                      `disabled` standing in for read mode. It renders nothing
+                      when no custom fields are configured. */}
+                  <CustomFieldsRenderer
+                    objectKey="patients"
+                    values={d as Record<string, unknown>}
+                    onChange={(key, value) => upd(key, value)}
+                    disabled={readOnly}
                   />
 
                   {/* Notes */}
@@ -1062,15 +1342,15 @@ const PatientDetail = () => {
               {appointments.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground text-sm">No appointments found</div>
               ) : appointments.map((apt: any) => (
-                <div key={apt.id} className="stat-card p-3 cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => setSelectedAppointmentId(apt.id)}>
+                <div key={apt.id} className="stat-card p-3 cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => openAppointment(apt.id)}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-medium text-sm">{apt.service}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">{apt.staff ? `Dr. ${apt.staff.first_name} ${apt.staff.last_name}` : "—"}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{apt.staff ? withDrPrefix(`${apt.staff.first_name} ${apt.staff.last_name}`) : "—"}</p>
                     </div>
                     <div className="text-right shrink-0">
-                      <Badge variant="secondary" className="text-xs">{apt.status}</Badge>
-                      <p className="text-xs text-muted-foreground mt-1">{new Date(apt.start_time).toLocaleDateString()}</p>
+                      <Badge variant="outline" className={`text-xs ${showsAsBilled(apt.status, billedApptIds.has(apt.id)) ? BILLED_BADGE_CLASSES : appointmentStatusClasses(apt.status)}`}>{appointmentStatusLabel(apt.status, billedApptIds.has(apt.id))}</Badge>
+                      <p className="text-xs text-muted-foreground mt-1">{displayDate(apt.start_time)}</p>
                       <p className="text-xs text-muted-foreground">{new Date(apt.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                     </div>
                   </div>
@@ -1082,7 +1362,7 @@ const PatientDetail = () => {
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="text-left text-xs font-medium text-muted-foreground p-4">Date & Time</th>
-                    <th className="text-left text-xs font-medium text-muted-foreground p-4">Service</th>
+                    <th className="text-left text-xs font-medium text-muted-foreground p-4">Investigation</th>
                     <th className="text-left text-xs font-medium text-muted-foreground p-4">Doctor</th>
                     <th className="text-left text-xs font-medium text-muted-foreground p-4">Status</th>
                   </tr>
@@ -1091,14 +1371,27 @@ const PatientDetail = () => {
                   {appointments.length === 0 ? (
                     <tr><td colSpan={4} className="text-center py-8 text-muted-foreground text-sm">No appointments found</td></tr>
                   ) : appointments.map((apt: any) => (
-                    <tr key={apt.id} className="hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => setSelectedAppointmentId(apt.id)}>
+                    <tr key={apt.id} className="hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => openAppointment(apt.id)}>
                       <td className="p-4 text-sm">
-                        <p>{new Date(apt.start_time).toLocaleDateString()}</p>
+                        <p>{displayDate(apt.start_time)}</p>
                         <p className="text-xs text-muted-foreground">{new Date(apt.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                       </td>
-                      <td className="p-4 font-medium text-sm">{apt.service}</td>
-                      <td className="p-4 text-sm text-muted-foreground">{apt.staff ? `Dr. ${apt.staff.first_name} ${apt.staff.last_name}` : "—"}</td>
-                      <td className="p-4"><Badge variant="secondary" className="text-xs">{apt.status}</Badge></td>
+                      {/* What the visit was about, not the service booked -
+                          that reads "Consultation" on most rows and says
+                          nothing. investigationText falls back to the service
+                          when a visit has no investigation recorded. */}
+                      {/* The copy button takes the empty fallback, not the
+                          "—" shown beside it: a blank investigation should
+                          offer no button rather than copy a dash into the next
+                          appointment. */}
+                      <td className="p-4 font-medium text-sm">
+                        <span className="inline-flex items-center gap-1">
+                          {investigationText(apt, "—")}
+                          <CopyButton value={investigationText(apt, "")} label="investigation" />
+                        </span>
+                      </td>
+                      <td className="p-4 text-sm text-muted-foreground">{apt.staff ? withDrPrefix(`${apt.staff.first_name} ${apt.staff.last_name}`) : "—"}</td>
+                      <td className="p-4"><Badge variant="outline" className={`text-xs ${showsAsBilled(apt.status, billedApptIds.has(apt.id)) ? BILLED_BADGE_CLASSES : appointmentStatusClasses(apt.status)}`}>{appointmentStatusLabel(apt.status, billedApptIds.has(apt.id))}</Badge></td>
                     </tr>
                   ))}
                 </tbody>
@@ -1123,7 +1416,7 @@ const PatientDetail = () => {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-medium text-sm">{inv.invoice_number}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">{new Date(inv.created_at).toLocaleDateString()}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{displayDate(inv.created_at)}</p>
                       <div className="flex flex-wrap gap-1 mt-1">
                         {(inv.services || []).slice(0, 2).map((s: string, i: number) => (
                           <Badge key={i} variant="secondary" className="text-[10px]">{s}</Badge>
@@ -1157,7 +1450,7 @@ const PatientDetail = () => {
                   ) : invoices.map((inv: any) => (
                     <tr key={inv.id} className="hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => navigate(`/billing?viewInvoice=${inv.id}`)}>
                       <td className="p-4 font-medium text-sm">{inv.invoice_number}</td>
-                      <td className="p-4 text-sm">{new Date(inv.created_at).toLocaleDateString()}</td>
+                      <td className="p-4 text-sm">{displayDate(inv.created_at)}</td>
                       <td className="p-4">
                         <div className="flex flex-wrap gap-1">
                           {(inv.services || []).map((s: string, i: number) => (
@@ -1184,28 +1477,14 @@ const PatientDetail = () => {
         <TabsContent value="photos">
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-4">
             <div className="flex justify-end gap-2 mb-3">
-              {/* accept="image/*" with no capture attribute is what makes a phone offer
-                  the gallery rather than jumping straight into the camera. */}
-              <input
-                ref={photoInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handlePhotoCapture}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5 h-8 text-xs"
-                disabled={uploadingPhoto}
-                onClick={() => photoInputRef.current?.click()}
-              >
-                <Paperclip className="h-3.5 w-3.5" /> {uploadingPhoto ? "Uploading..." : "Attach Photo"}
-              </Button>
+              {/* Several photos at once. This used to be a single-file input
+                  here, so ten photos meant ten trips through the picker; the
+                  shared control also puts the same button on the appointment
+                  tab, which had no way to attach a photo at all. */}
+              <AttachPhotosButton patientId={id!} size="sm" className="h-8 text-xs" />
               <Button
                 size="sm"
                 className="gap-1.5 h-8 text-xs"
-                disabled={uploadingPhoto}
                 onClick={() => setCameraOpen(true)}
               >
                 <Plus className="h-3.5 w-3.5" /> Take Photo
@@ -1218,7 +1497,7 @@ const PatientDetail = () => {
               </div>
             ) : (
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4">
-                {photos.map((photo: any) => (
+                {photos.map((photo: any, photoIndex: number) => (
                   <div key={photo.id} className="stat-card p-0 overflow-hidden">
                     <div className="relative">
                       {failedPhotoIds.has(photo.id) ? (
@@ -1227,13 +1506,23 @@ const PatientDetail = () => {
                           <span className="text-[10px]">Photo unavailable</span>
                         </div>
                       ) : (
-                        <img
-                          src={photo.photo_url}
-                          alt=""
-                          className="w-full h-32 md:h-40 object-cover"
-                          loading="lazy"
-                          onError={() => setFailedPhotoIds((prev) => new Set(prev).add(photo.id))}
-                        />
+                        // A button, not a clickable div: the thumbnail is
+                        // genuinely an action, so it should be reachable and
+                        // operable from the keyboard like any other.
+                        <button
+                          type="button"
+                          onClick={() => setViewerIndex(photoIndex)}
+                          aria-label="View photo full size"
+                          className="block w-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <img
+                            src={photo.photo_url}
+                            alt=""
+                            className="w-full h-32 md:h-40 object-cover transition-transform duration-200 hover:scale-[1.03]"
+                            loading="lazy"
+                            onError={() => setFailedPhotoIds((prev) => new Set(prev).add(photo.id))}
+                          />
+                        </button>
                       )}
                       <Button
                         variant="destructive"
@@ -1246,7 +1535,7 @@ const PatientDetail = () => {
                     </div>
                     <div className="p-2 md:p-3">
                       {photo.procedures?.service_name && <p className="text-xs text-muted-foreground truncate">{photo.procedures.service_name}</p>}
-                      <p className="text-xs text-muted-foreground mt-0.5">{new Date(photo.taken_at).toLocaleDateString()}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{displayDate(photo.taken_at)}</p>
                     </div>
                   </div>
                 ))}
@@ -1260,25 +1549,26 @@ const PatientDetail = () => {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-4 space-y-3 md:space-y-0">
             <div className="flex justify-end mb-3">
               <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={() => setProcedureFormOpen(true)}>
-                <Plus className="h-3.5 w-3.5" /> Add Procedure
+                <Plus className="h-3.5 w-3.5" /> Add Prescription
               </Button>
             </div>
             <div className="md:hidden space-y-3">
               {procedures.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground text-sm">No procedures recorded</div>
+                <div className="text-center py-8 text-muted-foreground text-sm">No prescriptions recorded</div>
               ) : procedures.map((proc: any) => (
                 <div key={proc.id} className="stat-card p-3 cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => setSelectedProcedureId(proc.id)}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-medium text-sm">{proc.service_name}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {proc.staff ? `Dr. ${proc.staff.first_name} ${proc.staff.last_name}` : "—"}
+                        {proc.staff ? withDrPrefix(`${proc.staff.first_name} ${proc.staff.last_name}`) : "—"}
                       </p>
                       {proc.diagnosis && <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{proc.diagnosis}</p>}
                     </div>
                     <div className="text-right shrink-0">
                       <Badge variant="secondary" className="text-xs">{proc.status}</Badge>
-                      <p className="text-xs text-muted-foreground mt-1">{new Date(proc.procedure_date).toLocaleDateString()}</p>
+                      <p className="text-xs text-muted-foreground mt-1">{procedureDateLabel(proc)}</p>
+                      <ViewPrescriptionButton procedureId={proc.id} className="mt-1" />
                     </div>
                   </div>
                 </div>
@@ -1293,18 +1583,22 @@ const PatientDetail = () => {
                     <th className="text-left text-xs font-medium text-muted-foreground p-4">Doctor</th>
                     <th className="text-left text-xs font-medium text-muted-foreground p-4">Diagnosis</th>
                     <th className="text-left text-xs font-medium text-muted-foreground p-4">Status</th>
+                    <th className="text-right text-xs font-medium text-muted-foreground p-4">Prescription</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
                   {procedures.length === 0 ? (
-                    <tr><td colSpan={5} className="text-center py-8 text-muted-foreground text-sm">No procedures recorded</td></tr>
+                    <tr><td colSpan={6} className="text-center py-8 text-muted-foreground text-sm">No prescriptions recorded</td></tr>
                   ) : procedures.map((proc: any) => (
                     <tr key={proc.id} className="hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => setSelectedProcedureId(proc.id)}>
-                      <td className="p-4 text-sm">{new Date(proc.procedure_date).toLocaleDateString()}</td>
+                      <td className="p-4 text-sm">{procedureDateLabel(proc)}</td>
                       <td className="p-4 font-medium text-sm">{proc.service_name}</td>
-                      <td className="p-4 text-sm text-muted-foreground">{proc.staff ? `Dr. ${proc.staff.first_name} ${proc.staff.last_name}` : "—"}</td>
+                      <td className="p-4 text-sm text-muted-foreground">{proc.staff ? withDrPrefix(`${proc.staff.first_name} ${proc.staff.last_name}`) : "—"}</td>
                       <td className="p-4 text-sm text-muted-foreground truncate max-w-[200px]">{proc.diagnosis || "—"}</td>
                       <td className="p-4"><Badge variant="secondary" className="text-xs">{proc.status}</Badge></td>
+                      {/* Reading one should not mean opening the visit that
+                          wrote it - see ViewPrescriptionButton. */}
+                      <td className="p-4 text-right"><ViewPrescriptionButton procedureId={proc.id} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -1330,24 +1624,38 @@ const PatientDetail = () => {
                       <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select procedure" /></SelectTrigger>
                       <SelectContent>
                         {procedures.map((proc: any) => (
-                          <SelectItem key={proc.id} value={proc.id}>{proc.service_name} — {new Date(proc.procedure_date).toLocaleDateString()}</SelectItem>
+                          <SelectItem key={proc.id} value={proc.id}>{proc.service_name} — {procedureDateLabel(proc)}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
                   <div>
                     <Label className="text-xs">Medicine Name *</Label>
-                    <Select
+                    {/* This form stores the medicine's name rather than its
+                        id, so the options are keyed by name. */}
+                    <SearchableSelect
+                      className="mt-1 h-8 text-sm"
                       value={rxForm.medicine_name}
-                      onValueChange={(v) => setRxForm(p => ({ ...p, medicine_name: v }))}
-                    >
-                      <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select medicine" /></SelectTrigger>
-                      <SelectContent>
-                        {pharmaProducts.map((prod: any) => (
-                          <SelectItem key={prod.id} value={prod.name}>{prod.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      onChange={(v) => setRxForm(p => {
+                        // The pharmacy's defaults for the chosen medicine; a
+                        // value typed here is the doctor's and is kept.
+                        const next = pharmaProducts.find((prod) => prod.name === v);
+                        const previous = pharmaProducts.find((prod) => prod.name === p.medicine_name);
+                        return {
+                          ...p,
+                          medicine_name: v,
+                          ...applyMedicineDefaults(
+                            { frequency: p.frequency, duration: p.duration, instructions: numVal(p.instructions) },
+                            next,
+                            previous,
+                          ),
+                        };
+                      })}
+                      options={pharmaProducts.map((prod) => ({ id: prod.name, name: prod.name }))}
+                      placeholder="Select medicine"
+                      searchPlaceholder="Search medicine..."
+                      emptyText="No medicine found."
+                    />
                   </div>
                   <div>
                     <Label className="text-xs flex items-center justify-between">Dosage <MicButton value={rxForm.dosage} onChange={(v) => setRxForm(p => ({ ...p, dosage: v }))} mode="replace" /></Label>
@@ -1363,11 +1671,11 @@ const PatientDetail = () => {
                   </div>
                   <div>
                     <Label className="text-xs">Quantity</Label>
-                    <Input type="number" value={rxForm.quantity} onChange={(e) => setRxForm(p => ({ ...p, quantity: parseInt(e.target.value) || 1 }))} className="mt-1 h-8 text-sm" />
+                    <Input type="number" value={numVal(rxForm.quantity)} onChange={(e) => setRxForm(p => ({ ...p, quantity: parseInt(e.target.value) || 1 }))} className="mt-1 h-8 text-sm" />
                   </div>
                   <div className="col-span-2 md:col-span-3">
-                    <Label className="text-xs flex items-center justify-between">Instructions <MicButton value={rxForm.instructions} onChange={(v) => setRxForm(p => ({ ...p, instructions: v }))} /></Label>
-                    <Input value={rxForm.instructions} onChange={(e) => setRxForm(p => ({ ...p, instructions: e.target.value }))} className="mt-1 h-8 text-sm" placeholder="e.g. After meals" />
+                    <Label className="text-xs flex items-center justify-between">Instructions <MicButton value={numVal(rxForm.instructions)} onChange={(v) => setRxForm(p => ({ ...p, instructions: v }))} /></Label>
+                    <Input value={numVal(rxForm.instructions)} onChange={(e) => setRxForm(p => ({ ...p, instructions: e.target.value }))} className="mt-1 h-8 text-sm" placeholder="e.g. After meals" />
                   </div>
                 </div>
                 <div className="flex gap-2 justify-end">
@@ -1421,7 +1729,7 @@ const PatientDetail = () => {
                       {rx.procedures && (
                         <div className="text-left sm:text-right text-xs text-muted-foreground">
                           <p>{rx.procedures.service_name}</p>
-                          <p>{new Date(rx.procedures.procedure_date).toLocaleDateString()}</p>
+                          <p>{procedureDateLabel(rx.procedures)}</p>
                         </div>
                       )}
                       <Button
@@ -1504,7 +1812,7 @@ const PatientDetail = () => {
                     <p className="font-medium text-sm truncate">{a.survey_templates?.name || "Survey"}</p>
                     <div className="flex items-center gap-2 shrink-0">
                       <Badge variant="outline" className="text-[10px]">Pending patient</Badge>
-                      <p className="text-xs text-muted-foreground">{new Date(a.created_at).toLocaleDateString()}</p>
+                      <p className="text-xs text-muted-foreground">{displayDate(a.created_at)}</p>
                     </div>
                   </div>
                 ))}
@@ -1550,7 +1858,7 @@ const PatientDetail = () => {
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
-                        <p className="text-xs text-muted-foreground">{new Date(sr.created_at).toLocaleDateString()}</p>
+                        <p className="text-xs text-muted-foreground">{displayDate(sr.created_at)}</p>
                       </div>
                     </div>
                   );
@@ -1560,95 +1868,20 @@ const PatientDetail = () => {
           </motion.div>
         </TabsContent>
 
-        {/* Attachments Tab */}
+        {/* Attachments Tab - shared with the appointment sheet, see PatientAttachments */}
         <TabsContent value="attachments">
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-4">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-              <Select value={attachmentFilter} onValueChange={setAttachmentFilter}>
-                <SelectTrigger className="h-8 text-xs w-full sm:w-56"><SelectValue placeholder="Filter by type" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All types</SelectItem>
-                  <SelectItem value="Prescription">Prescription</SelectItem>
-                  <SelectItem value="Consent Form">Consent Form</SelectItem>
-                  <SelectItem value="Lab Report">Lab Report</SelectItem>
-                  <SelectItem value="Previous Doctor Report">Previous Doctor Report</SelectItem>
-                  <SelectItem value="Other">Other</SelectItem>
-                </SelectContent>
-              </Select>
-              <div className="flex gap-2">
-                <input type="file" ref={fileInputRef} className="hidden" onChange={handleAttachmentUpload} />
-                <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs" disabled={uploadingAttachment} onClick={() => setAttachmentCameraOpen(true)}>
-                  <Camera className="h-3.5 w-3.5" /> Take Photo
-                </Button>
-                <Button size="sm" className="gap-1.5 h-8 text-xs" disabled={uploadingAttachment} onClick={() => fileInputRef.current?.click()}>
-                  {uploadingAttachment ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-                  Upload File
-                </Button>
-              </div>
-            </div>
-            {(() => {
-              const filtered = attachmentFilter === "all"
-                ? attachments
-                : attachments.filter((a: any) => a.document_type === attachmentFilter);
-              if (filtered.length === 0) {
-                return (
-                  <div className="text-center py-12 text-muted-foreground">
-                    <Paperclip className="h-10 w-10 mx-auto mb-2 opacity-40" />
-                    <p className="text-sm">No attachments {attachmentFilter !== "all" ? `of type "${attachmentFilter}"` : "yet"}. Upload files to attach to this patient.</p>
-                  </div>
-                );
-              }
-              return (
-                <div className="space-y-3">
-                  {filtered.map((att: any) => (
-                  <div key={att.id} className="stat-card p-3 md:p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="h-10 w-10 rounded-lg bg-muted flex items-center justify-center shrink-0">
-                          <FileText className="h-5 w-5 text-muted-foreground" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="font-medium text-sm truncate">{att.file_name}</p>
-                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                            {att.document_type && (
-                              <Badge variant="default" className="text-[10px]">{att.document_type}</Badge>
-                            )}
-                            {att.procedures?.service_name && (
-                              <Badge variant="secondary" className="text-[10px]">{att.procedures.service_name}</Badge>
-                            )}
-                            <span className="text-xs text-muted-foreground">{new Date(att.created_at).toLocaleDateString()}</span>
-                          </div>
-                          {att.notes && <p className="text-xs text-muted-foreground mt-1">{att.notes}</p>}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs"
-                          onClick={() => setViewingAttachment(att)}
-                        >
-                          View
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
-                          onClick={() => deleteAttachment(att)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                  ))}
-                </div>
-              );
-            })()}
-          </motion.div>
+          <PatientAttachments patientId={id} defaultProcedureId={procedures.length > 0 ? procedures[0].id : null} />
         </TabsContent>
 
         {/* Campaigns Tab */}
+        <TabsContent value="ai-repo">
+          <div className="mt-4"><AiRepository patientId={id!} patientName={`${patient.first_name} ${patient.last_name}`} /></div>
+        </TabsContent>
+
+        <TabsContent value="whatsapp">
+          <div className="mt-4"><WhatsAppDeliveryLog patientId={id!} /></div>
+        </TabsContent>
+
         <TabsContent value="campaigns">
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-4">
             <div className="flex justify-end mb-3">
@@ -1732,53 +1965,23 @@ const PatientDetail = () => {
       </Tabs>
 
 
-      <Dialog open={docTypeDialogOpen} onOpenChange={(o) => { if (!o) { setDocTypeDialogOpen(false); setPendingAttachmentFile(null); } }}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="font-display">Document Type</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            {pendingAttachmentFile && (
-              <p className="text-xs text-muted-foreground truncate">File: {pendingAttachmentFile.name}</p>
-            )}
-            <div>
-              <Label>Type</Label>
-              <Select value={selectedDocType} onValueChange={setSelectedDocType}>
-                <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Prescription">Prescription</SelectItem>
-                  <SelectItem value="Consent Form">Consent Form</SelectItem>
-                  <SelectItem value="Lab Report">Lab Report</SelectItem>
-                  <SelectItem value="Previous Doctor Report">Previous Doctor Report</SelectItem>
-                  <SelectItem value="Other">Other</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => { setDocTypeDialogOpen(false); setPendingAttachmentFile(null); }}>Cancel</Button>
-              <Button size="sm" disabled={uploadingAttachment} onClick={uploadPendingAttachment}>
-                {uploadingAttachment ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null} Save
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <CameraDialog
+      {/* The shared capture dialog, which takes several photos before sending
+          any of them. This page used to open the bare camera and upload one
+          file through its own copy of the upload - which is why "take several
+          photos" landed everywhere except here, the one place the clinic
+          actually uses. */}
+      <CameraCapture
         open={cameraOpen}
         onOpenChange={setCameraOpen}
-        title="Take Patient Photo"
-        onCapture={(file) => savePhotoFile(file)}
+        patientId={id!}
+        patientName={`${patient.first_name} ${patient.last_name || ""}`.trim()}
+        context="patient"
       />
-      <CameraDialog
-        open={attachmentCameraOpen}
-        onOpenChange={setAttachmentCameraOpen}
-        title="Capture Attachment"
-        onCapture={(file) => {
-          setPendingAttachmentFile(file);
-          setSelectedDocType("Prescription");
-          setDocTypeDialogOpen(true);
-        }}
+      <PhotoViewer
+        photos={photos}
+        index={viewerIndex}
+        onIndexChange={setViewerIndex}
+        patientName={`${patient.first_name} ${patient.last_name}`}
       />
 
       <SkinTracker
@@ -1786,6 +1989,7 @@ const PatientDetail = () => {
         onOpenChange={setSkinTrackerOpen}
         photos={photos}
         patientName={`${patient.first_name} ${patient.last_name}`}
+        patientId={id!}
       />
 
       <ProcedureFormDialog
@@ -1807,7 +2011,7 @@ const PatientDetail = () => {
         appointmentId={selectedAppointmentId}
         fullScreen
         onClose={() => {
-          setSelectedAppointmentId(null);
+          closeAppointment();
           queryClient.invalidateQueries({ queryKey: ["patient-appointments", id] });
         }}
       />
@@ -1828,44 +2032,6 @@ const PatientDetail = () => {
 
       {/* Survey detail moved to dedicated /surveys/:id route */}
 
-      <Dialog open={!!viewingAttachment} onOpenChange={(o) => { if (!o) setViewingAttachment(null); }}>
-        <DialogContent className="max-w-4xl">
-          <DialogHeader>
-            <DialogTitle className="font-display truncate pr-8">{viewingAttachment?.file_name}</DialogTitle>
-          </DialogHeader>
-          {viewingAttachment && (() => {
-            const url: string = viewingAttachment.file_url || "";
-            const name: string = viewingAttachment.file_name || url;
-            const lower = name.toLowerCase();
-            const isImage = /\.(jpe?g|png|gif|webp|bmp|heic|heif|svg)$/i.test(lower) || /\.(jpe?g|png|gif|webp|bmp)$/i.test(url.split("?")[0]);
-            const isPdf = /\.pdf$/i.test(lower) || /\.pdf(\?|$)/i.test(url);
-            return (
-              <div className="space-y-3">
-                <div className="bg-muted/40 rounded-lg overflow-hidden flex items-center justify-center" style={{ minHeight: 400 }}>
-                  {isImage ? (
-                    <img src={url} alt={name} className="max-h-[70vh] w-auto object-contain" />
-                  ) : isPdf ? (
-                    <iframe src={url} title={name} className="w-full h-[70vh]" />
-                  ) : (
-                    <div className="p-8 text-center">
-                      <FileText className="h-10 w-10 mx-auto text-muted-foreground mb-2" />
-                      <p className="text-sm text-muted-foreground">Preview not available for this file type.</p>
-                    </div>
-                  )}
-                </div>
-                <div className="flex justify-end gap-2">
-                  <Button variant="outline" size="sm" asChild>
-                    <a href={url} target="_blank" rel="noopener noreferrer">Open in new tab</a>
-                  </Button>
-                  <Button size="sm" asChild>
-                    <a href={url} download={name}>Download</a>
-                  </Button>
-                </div>
-              </div>
-            );
-          })()}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };

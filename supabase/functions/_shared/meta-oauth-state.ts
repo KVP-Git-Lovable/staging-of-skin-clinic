@@ -2,7 +2,7 @@
 // The state is `base64url(json).hmac` so the callback can trust the origin it carries
 // (storehaven's state was unsigned). The HMAC key is META_APP_SECRET.
 
-const PROJECT_REF = "39771034-fc6c-41cf-99ab-dd67e5d2cccb";
+const PROJECT_REF = "2faada2a-2978-48c3-bbc5-6bf3066e3eec";
 export const DEFAULT_ORIGIN = "https://clinic.quickapp.ai";
 
 export function allowedOrigins(): Set<string> {

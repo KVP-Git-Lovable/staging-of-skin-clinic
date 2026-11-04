@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { displayDate } from "@/lib/dateInput";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -141,7 +142,7 @@ export default function Trash() {
                   <p className="text-xs text-muted-foreground mt-1">
                     Deleted by {item.deleted_by_name || "unknown"} on {new Date(item.deleted_at).toLocaleString()}
                     {item.status === "trashed" && !eligible && (
-                      <> · can be permanently deleted after {purgeAvailableOn(item.deleted_at, retention).toLocaleDateString()}</>
+                      <> · can be permanently deleted after {displayDate(purgeAvailableOn(item.deleted_at, retention))}</>
                     )}
                     {item.status === "restored" && item.restored_at && (
                       <> · restored on {new Date(item.restored_at).toLocaleString()}</>
@@ -161,7 +162,7 @@ export default function Trash() {
                       variant="ghost"
                       className="gap-1.5 text-destructive hover:text-destructive"
                       disabled={!eligible}
-                      title={eligible ? "Delete permanently" : `Available after ${purgeAvailableOn(item.deleted_at, retention).toLocaleDateString()}`}
+                      title={eligible ? "Delete permanently" : `Available after ${displayDate(purgeAvailableOn(item.deleted_at, retention))}`}
                       onClick={() => setPurgeTarget(item)}
                     >
                       <Trash2 className="h-3.5 w-3.5" /> Delete forever

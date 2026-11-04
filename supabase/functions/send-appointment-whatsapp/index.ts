@@ -4,17 +4,29 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-// Appointment confirmation template with "Confirm" / "I need to modify" /
-// "I want to cancel" quick-reply buttons. Takes 2 variables: name and
-// date+time. The button labels are load-bearing - whatsapp-webhook matches
-// replies against that exact text - so a future revision must keep them.
+// Appointment confirmation template with CONFIRM / RESCHEDULE / CANCEL
+// quick-reply buttons. Takes 3 variables: name, date, time - the revision
+// approved on 14 October 2026 splits the date and the time, where the one
+// before it carried them as a single string.
+//
+// The button labels are load-bearing - whatsapp-webhook matches replies
+// against that exact text - so a future revision must keep them, or teach
+// detectButtonIntent the new wording in the same breath. It still answers the
+// previous labels ("I need to modify", "I want to cancel") for patients part
+// way through a conversation started under them.
 //
 // Read from the environment so the next revision is a secret change rather than
 // a deploy (Twilio cannot edit an approved template, so every reword means a new
 // id). Same shape as portal-otp-send.
+// The revision before this one, which carried the date and time in a single
+// {{2}}. Named so this function can tell which template it is actually pointed
+// at: deploying the code and setting the secret are two separate acts by two
+// separate hands, and whichever lands first must not break the send. Once the
+// secret names the new template this constant and the branch below can go.
+const LEGACY_DATE_AND_TIME_SID = "HX2c965add7f2cc9d16757d594cd30f04c";
+
 const TEMPLATE_SID =
-  Deno.env.get("TWILIO_APPOINTMENT_TEMPLATE_SID") ||
-  "HX2c965add7f2cc9d16757d594cd30f04c";
+  Deno.env.get("TWILIO_APPOINTMENT_TEMPLATE_SID") || LEGACY_DATE_AND_TIME_SID;
 
 function normalizePhone(phone: string): string | null {
   if (!phone) return null;
@@ -104,15 +116,18 @@ Deno.serve(async (req) => {
       dayAndDate = `${dayName}, ${day} ${month} ${year}`;
     }
 
-    const dateAndTime = `${dayAndDate} at ${ensureIstTime(appointmentTime)}`;
+    const time = ensureIstTime(appointmentTime);
 
     // Exactly as many variables as the template declares - Twilio rejects the
-    // send outright on a mismatch. serviceName is still accepted in the request
-    // body (callers pass it) but the template no longer names the service.
-    const contentVariables = JSON.stringify({
-      "1": namedPatient,
-      "2": dateAndTime,
-    });
+    // send outright on a mismatch, with nothing delivered - so the shape is
+    // read from which template is configured rather than assumed. serviceName is
+    // still accepted in the request body (callers pass it) but neither template
+    // names the service.
+    const contentVariables = JSON.stringify(
+      TEMPLATE_SID === LEGACY_DATE_AND_TIME_SID
+        ? { "1": namedPatient, "2": `${dayAndDate} at ${time}` }
+        : { "1": namedPatient, "2": dayAndDate, "3": time },
+    );
 
     const body = new URLSearchParams({
       To: toFormatted,

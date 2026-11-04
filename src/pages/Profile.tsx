@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { User, Lock, Save } from "lucide-react";
 import { ThemePicker } from "@/components/theme/ThemePicker";
+import { useQuery } from "@tanstack/react-query";
+import { StaffPhotoCard } from "@/components/staff/StaffPhotoCard";
 
 export default function Profile() {
   const { staffProfile, user } = useAuth();
@@ -22,6 +24,20 @@ export default function Profile() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [changingPw, setChangingPw] = useState(false);
+
+  // Read from the staff row rather than widening useAuth's StaffProfile:
+  // every screen in the app depends on that hook, and this is the only page
+  // that needs the photo.
+  const { data: photoUrl = null } = useQuery({
+    queryKey: ["staff", "photo", staffProfile?.id],
+    enabled: !!staffProfile?.id,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("staff").select("photo_url").eq("id", staffProfile!.id).maybeSingle();
+      if (error) throw error;
+      return data?.photo_url ?? null;
+    },
+  });
 
   useEffect(() => {
     if (staffProfile) {
@@ -87,6 +103,14 @@ export default function Profile() {
           <Badge variant="secondary">{staffProfile.roleName}</Badge>
         )}
       </div>
+
+      {staffProfile && (
+        <StaffPhotoCard
+          staffId={staffProfile.id}
+          photoUrl={photoUrl}
+          name={`${staffProfile.firstName} ${staffProfile.lastName}`.trim()}
+        />
+      )}
 
       <Card>
         <CardHeader><CardTitle className="text-lg">Personal Information</CardTitle></CardHeader>

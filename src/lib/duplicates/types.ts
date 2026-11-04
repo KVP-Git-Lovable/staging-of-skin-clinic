@@ -6,7 +6,10 @@ export interface MatchField {
   matchType: MatchType;
   /** How this field combines with the previous one. */
   joiner: "and" | "or";
-  /** What happens when this field matches: warn the user or stop the save. */
+  /**
+   * Historic. Rules stored before duplicates became warning-only may still say
+   * "block"; the engine reads the value and ignores it. Nothing writes it now.
+   */
   severity?: "alert" | "block";
 }
 
@@ -61,7 +64,7 @@ export const DUPLICATE_ACTIONS: {
   {
     key: "ignore",
     label: "Ignore and continue",
-    description: "Lets the user save anyway (only possible for alert severity).",
+    description: "Dismisses the warning so the form is clear. Saving is never blocked either way.",
   },
 ];
 

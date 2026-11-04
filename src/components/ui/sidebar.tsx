@@ -226,7 +226,11 @@ const SidebarTrigger = React.forwardRef<React.ElementRef<typeof Button>, React.C
         data-sidebar="trigger"
         variant="ghost"
         size="icon"
-        className={cn("h-7 w-7", className)}
+        /* 44px on touch, 28px from md up. On a phone this is the ONLY way
+           into navigation - the desktop rail is md:block - and at 28x28 it
+           was well under the 44px anyone can reliably hit. The icon itself
+           stays small; it is the tap area that grows. */
+        className={cn("h-11 w-11 md:h-7 md:w-7", className)}
         onClick={(event) => {
           onClick?.(event);
           toggleSidebar();

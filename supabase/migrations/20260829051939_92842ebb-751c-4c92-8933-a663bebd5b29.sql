@@ -1,0 +1,1 @@
+ALTER TABLE public.list_views ADD COLUMN IF NOT EXISTS charts jsonb NOT NULL DEFAULT '[]'::jsonb;

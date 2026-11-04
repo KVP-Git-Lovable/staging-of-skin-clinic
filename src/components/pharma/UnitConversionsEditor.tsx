@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { numVal } from "@/lib/numberInput";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -95,7 +96,7 @@ export function UnitConversionsEditor({ value, onChange, unitOptions, baseUnit }
                 <Input
                   type="number"
                   className="mt-1 h-8"
-                  value={row.conversion_value}
+                  value={numVal(row.conversion_value)}
                   onChange={(e) => update(idx, { conversion_value: parseFloat(e.target.value) || 1 })}
                   min={1}
                 />

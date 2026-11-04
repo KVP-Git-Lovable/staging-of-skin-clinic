@@ -1,0 +1,1 @@
+ALTER TABLE public.invoices ADD COLUMN appointment_id uuid REFERENCES public.appointments(id) ON DELETE SET NULL DEFAULT NULL;

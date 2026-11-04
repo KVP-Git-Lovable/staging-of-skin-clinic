@@ -1,0 +1,1 @@
+ALTER TABLE public.patient_family_members ADD COLUMN phone text;

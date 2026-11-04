@@ -191,9 +191,9 @@ export default function DuplicateAlertsPanel({ objectKey }: { objectKey: string 
         {alerts.map((a: any) => (
           <div key={a.id} className="p-4 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={a.severity === "block" ? "destructive" : "secondary"}>
-                {a.severity === "block" ? "Blocking" : "Alert"}
-              </Badge>
+              {/* Alerts recorded before duplicates became warning-only can say
+                  "block". Nothing blocks now, so they all read the same. */}
+              <Badge variant="secondary">Warning</Badge>
               <span className="text-sm font-medium">{a.record_label} ↔ {a.match_record_label}</span>
               <Badge variant="outline">{STATUS_LABEL[a.status] || a.status}</Badge>
               <span className="text-xs text-muted-foreground ml-auto">{a.rule_name}</span>

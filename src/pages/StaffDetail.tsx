@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { DateInput } from "@/components/shared/DateInput";
+import { onlyCountableInvoices } from "@/lib/revenueScope";
+import { numVal } from "@/lib/numberInput";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -19,6 +22,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { motion } from "framer-motion";
 import StaffPerformanceCharts from "@/components/staff/StaffPerformanceCharts";
+import { procedureDateLabel } from "@/lib/procedureDate";
+import { appointmentPatientName } from "@/lib/appointmentPatientName";
+import { appointmentStatusLabel, appointmentStatusClasses, showsAsBilled, BILLED_BADGE_CLASSES } from "@/lib/appointmentStatus";
+import { fetchInvoicesByAppointmentIds, invoiceMapByAppointment, type VisitBill } from "@/lib/invoicesForAppointments";
 
 const StaffDetail = () => {
   const { id } = useParams<{ id: string }>();
@@ -105,11 +112,44 @@ const AppointmentsTab = ({ staffId }: { staffId: string }) => {
   const { data: appointments = [] } = useQuery({
     queryKey: ["staff-appointments", staffId],
     queryFn: async () => {
-      const { data, error } = await supabase.from("appointments").select("*").eq("staff_id", staffId).order("start_time", { ascending: false }).limit(50);
+      // With the patient joined, this worklist names whoever the visit is filed
+      // under, like every other screen - not a copy of a name taken at booking.
+      const { data, error } = await supabase.from("appointments").select("*, patients(first_name, last_name)").eq("staff_id", staffId).order("start_time", { ascending: false }).limit(50);
       if (error) throw error;
       return data;
     },
   });
+
+  /**
+   * Which of these visits carry a bill.
+   *
+   * The Status cell used to read the appointment's status and call anything
+   * "Completed" billed. That is not a reliable record of a bill - a visit can
+   * be marked Completed by a Salesforce import with no invoice behind it, and
+   * a visit paid minutes before its slot stays on "Confirmed" for ever - so
+   * the bills are fetched and asked directly.
+   */
+  const appointmentIds = useMemo(() => (appointments as { id: string }[]).map((a) => a.id), [appointments]);
+  const { data: visitBills = [] } = useQuery({
+    // Keyed on the ids themselves, not their count: this list is capped at
+    // 50, so reassigning one visit to another doctor leaves the length
+    // identical and would otherwise serve the previous set's bills.
+    queryKey: ["staff-appointment-bills", staffId, appointmentIds.join(",")],
+    enabled: appointmentIds.length > 0,
+    queryFn: () =>
+      fetchInvoicesByAppointmentIds(async (ids: string[]) => {
+        const { data, error } = await supabase
+          .from("invoices")
+          .select("id, appointment_id, status, created_at")
+          .in("appointment_id", ids);
+        if (error) throw error;
+        return data || [];
+      }, appointmentIds),
+  });
+  const billedApptIds = useMemo(
+    () => new Set(invoiceMapByAppointment(visitBills as VisitBill[]).keys()),
+    [visitBills],
+  );
 
   return (
     <Card>
@@ -129,9 +169,9 @@ const AppointmentsTab = ({ staffId }: { staffId: string }) => {
               {appointments.map((a: any) => (
                 <TableRow key={a.id}>
                   <TableCell className="text-sm">{format(new Date(a.start_time), "dd MMM yyyy, hh:mm a")}</TableCell>
-                  <TableCell>{a.patient_name || "—"}</TableCell>
+                  <TableCell>{appointmentPatientName(a)}</TableCell>
                   <TableCell>{a.service}</TableCell>
-                  <TableCell><Badge variant={a.status === "Completed" ? "default" : "secondary"}>{a.status}</Badge></TableCell>
+                  <TableCell><Badge variant="outline" className={showsAsBilled(a.status, billedApptIds.has(a.id)) ? BILLED_BADGE_CLASSES : appointmentStatusClasses(a.status)}>{appointmentStatusLabel(a.status, billedApptIds.has(a.id))}</Badge></TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -153,7 +193,8 @@ const InvoicesTab = ({ staffId }: { staffId: string }) => {
       const ids = appts.map((a: any) => a.id);
       const { data, error } = await supabase.from("invoices").select("*").in("appointment_id", ids).order("created_at", { ascending: false });
       if (error) throw error;
-      return data || [];
+      // A cancelled bill is money never taken - see src/lib/revenueScope.ts.
+      return onlyCountableInvoices(data || []);
     },
   });
 
@@ -202,7 +243,7 @@ const ProceduresTab = ({ staffId }: { staffId: string }) => {
   const { data: procedures = [] } = useQuery({
     queryKey: ["staff-procedures", staffId],
     queryFn: async () => {
-      const { data, error } = await supabase.from("procedures").select("*, patients(first_name, last_name)").eq("staff_id", staffId).order("procedure_date", { ascending: false }).limit(50);
+      const { data, error } = await supabase.from("procedures").select("*, patients(first_name, last_name)").eq("staff_id", staffId).eq("date_not_recorded", false).order("procedure_date", { ascending: false }).limit(50);
       if (error) throw error;
       return data;
     },
@@ -225,7 +266,7 @@ const ProceduresTab = ({ staffId }: { staffId: string }) => {
             <TableBody>
               {procedures.map((p: any) => (
                 <TableRow key={p.id}>
-                  <TableCell className="text-sm">{format(new Date(p.procedure_date), "dd MMM yyyy")}</TableCell>
+                  <TableCell className="text-sm">{procedureDateLabel(p, "dd MMM yyyy")}</TableCell>
                   <TableCell>{p.patients ? `${p.patients.first_name} ${p.patients.last_name}` : "—"}</TableCell>
                   <TableCell>{p.service_name}</TableCell>
                   <TableCell><Badge variant={p.status === "Completed" ? "default" : "secondary"}>{p.status}</Badge></TableCell>
@@ -318,10 +359,10 @@ const EducationTab = ({ staffId }: { staffId: string }) => {
               <div><Label>Field of Study</Label><Input className="mt-1" placeholder="e.g. Medicine" value={form.field_of_study} onChange={(e) => setForm({ ...form, field_of_study: e.target.value })} /></div>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div><Label>Start Year</Label><Input type="number" className="mt-1" value={form.start_year} onChange={(e) => setForm({ ...form, start_year: e.target.value })} /></div>
-              <div><Label>End Year</Label><Input type="number" className="mt-1" value={form.end_year} onChange={(e) => setForm({ ...form, end_year: e.target.value })} /></div>
+              <div><Label>Start Year</Label><Input type="number" className="mt-1" value={numVal(form.start_year)} onChange={(e) => setForm({ ...form, start_year: e.target.value })} /></div>
+              <div><Label>End Year</Label><Input type="number" className="mt-1" value={numVal(form.end_year)} onChange={(e) => setForm({ ...form, end_year: e.target.value })} /></div>
             </div>
-            <div><Label>Notes</Label><Textarea className="mt-1" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
+            <div><Label>Notes</Label><Textarea className="mt-1" value={numVal(form.notes)} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={closeForm}>Cancel</Button>
@@ -421,8 +462,8 @@ const ExperienceTab = ({ staffId }: { staffId: string }) => {
             <div><Label>Company *</Label><Input className="mt-1" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} /></div>
             <div><Label>Title *</Label><Input className="mt-1" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
             <div className="grid grid-cols-2 gap-3">
-              <div><Label>Start Date</Label><Input type="date" className="mt-1" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} /></div>
-              <div><Label>End Date</Label><Input type="date" className="mt-1" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} /></div>
+              <div><Label>Start Date</Label><DateInput className="mt-1" value={form.start_date} onChange={(isoDate) => setForm({ ...form, start_date: isoDate })} /></div>
+              <div><Label>End Date</Label><DateInput className="mt-1" value={form.end_date} onChange={(isoDate) => setForm({ ...form, end_date: isoDate })} /></div>
             </div>
             <div><Label>Notes</Label><Textarea className="mt-1" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
@@ -524,7 +565,7 @@ const AspirationsTab = ({ staffId }: { staffId: string }) => {
             <div><Label>Title *</Label><Input className="mt-1" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
             <div><Label>Description</Label><Textarea className="mt-1" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
             <div className="grid grid-cols-2 gap-3">
-              <div><Label>Target Date</Label><Input type="date" className="mt-1" value={form.target_date} onChange={(e) => setForm({ ...form, target_date: e.target.value })} /></div>
+              <div><Label>Target Date</Label><DateInput className="mt-1" value={form.target_date} onChange={(isoDate) => setForm({ ...form, target_date: isoDate })} /></div>
               <div>
                 <Label>Status</Label>
                 <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>

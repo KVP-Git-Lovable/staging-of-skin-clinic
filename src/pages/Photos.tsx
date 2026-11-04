@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { displayDate } from "@/lib/dateInput";
 import { Plus, Camera, Image, Trash2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,8 +42,13 @@ import ViewFiltersPanel from "@/components/listViews/ViewFiltersPanel";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { applyFilters as applyListFilters, type ListView } from "@/lib/listViews/engine";
 import { PHOTO_VIEW_FIELDS, DEFAULT_PHOTO_VIEW_COLUMNS } from "@/lib/listViews/photoFields";
+import { appointmentPatientName } from "@/lib/appointmentPatientName";
+import { hashImageFile } from "@/lib/photoHashImage";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+
+/** How many photos the gallery holds at once. See the query below. */
+const PHOTO_LIMIT = 500;
 
 const Photos = () => {
   const queryClient = useQueryClient();
@@ -52,7 +58,7 @@ const Photos = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const {
-    allViews, userId: viewsUserId, activeView, selectView, saveView, deleteView, pinDefault,
+    allViews, userId: viewsUserId, activeView, selectView, saveView, deleteView, pinDefault, unpinDefault,
   } = useModuleListViews("photos", "Photos", DEFAULT_PHOTO_VIEW_COLUMNS);
   const [viewEditorOpen, setViewEditorOpen] = useState(false);
   const [editingView, setEditingView] = useState<ListView | null>(null);
@@ -68,17 +74,33 @@ const Photos = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
 
-  const { data: photos = [], isLoading } = useQuery({
+  // The newest PHOTO_LIMIT photos, in one request.
+  //
+  // This page used to ask for every row - 85,000 of them - and render them all.
+  // Paging that through fetchAll only made it worse: 86 sequential round trips,
+  // which is why the gallery sat on "Loading photos..." indefinitely. Neither is
+  // right for a wall of images nobody scrolls to the end of.
+  //
+  // The cost is that search and the filters below work over what was fetched, so
+  // they cover the most recent PHOTO_LIMIT rather than the whole archive. The
+  // banner says so when the cap is actually reached, rather than quietly
+  // pretending this is everything - a patient's full set is on their own page.
+  const { data: photos = [], isLoading, isError } = useQuery({
     queryKey: ["patient-photos"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("patient_photos")
         .select("*, patients(first_name, last_name), procedures(service_name)")
-        .order("taken_at", { ascending: false });
+        .order("taken_at", { ascending: false })
+        // taken_at is not unique, and a limit over a non-unique order can return
+        // a different slice each time; id settles the tie.
+        .order("id", { ascending: true })
+        .limit(PHOTO_LIMIT);
       if (error) throw error;
-      return data;
+      return data ?? [];
     },
   });
+  const photosCapped = photos.length >= PHOTO_LIMIT;
 
   const { data: patients = [] } = useQuery({
     queryKey: ["patients-list"],
@@ -113,7 +135,10 @@ const Photos = () => {
   const { data: appointments = [] } = useQuery({
     queryKey: ["appointments-list"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("appointments").select("id, patient_name, service, start_time").order("start_time", { ascending: false }).limit(50);
+      // Joined, because this picker decides whose record a clinical photo is
+      // filed against - the one place a name taken at booking must not stand in
+      // for the patient the appointment belongs to.
+      const { data, error } = await supabase.from("appointments").select("id, patient_name, service, start_time, patients(first_name, last_name)").order("start_time", { ascending: false }).limit(50);
       if (error) throw error;
       return data;
     },
@@ -122,7 +147,7 @@ const Photos = () => {
   const { data: procedures = [] } = useQuery({
     queryKey: ["procedures-list"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("procedures").select("id, service_name, procedure_date, patients(first_name, last_name)").order("procedure_date", { ascending: false }).limit(50);
+      const { data, error } = await supabase.from("procedures").select("id, service_name, procedure_date, date_not_recorded, patients(first_name, last_name)").eq("date_not_recorded", false).order("procedure_date", { ascending: false }).limit(50);
       if (error) throw error;
       return data;
     },
@@ -152,12 +177,17 @@ const Photos = () => {
 
       const photoUrl = `${SUPABASE_URL}/storage/v1/object/public/patient-photos/${fileName}`;
 
+      // Fingerprint it on the way in, so Photos search can find this picture
+      // again from a copy. A decode failure is not an upload failure.
+      const phash = await hashImageFile(selectedFile);
+
       const { error } = await supabase.from("patient_photos").insert({
         patient_id: patientId,
         appointment_id: appointmentId || null,
         procedure_id: procedureId || null,
         photo_type: photoType,
         photo_url: photoUrl,
+        phash,
         notes: notes || null,
       });
       if (error) throw error;
@@ -298,7 +328,7 @@ const Photos = () => {
                   <SelectTrigger className="mt-1.5"><SelectValue placeholder="Optional" /></SelectTrigger>
                   <SelectContent>
                     {appointments.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>{a.patient_name} — {a.service}</SelectItem>
+                      <SelectItem key={a.id} value={a.id}>{appointmentPatientName(a, "Appointment")} — {a.service}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -357,6 +387,7 @@ const Photos = () => {
           onEdit={(v) => { setEditingView(v); setViewEditorOpen(true); }}
           onDelete={(v) => setDeleteViewTarget(v)}
           onPin={pinDefault}
+          onUnpin={unpinDefault}
           onClone={(v) => { setEditingView({ ...v, id: undefined as any, name: `${v.name} (Copy)`, is_default: false }); setViewEditorOpen(true); }}
           onRefresh={() => queryClient.invalidateQueries({ queryKey: ["patient-photos"] })}
           display="cards"
@@ -388,8 +419,23 @@ const Photos = () => {
       )}
 
       {/* Photo Grid */}
+      {photosCapped && !isLoading && !isError && (
+        <p className="mb-3 text-xs text-muted-foreground">
+          Showing the {PHOTO_LIMIT} most recent photos. Search and filters here cover these;
+          open a patient to see their full set.
+        </p>
+      )}
+
       {isLoading ? (
         <p className="text-center py-12 text-muted-foreground">Loading photos...</p>
+      ) : isError ? (
+        /* A failed fetch is not an empty gallery, and saying so is the whole
+           point: this page read as "no access" when the query simply fell over. */
+        <div className="text-center py-16">
+          <Camera className="h-12 w-12 mx-auto text-destructive/40 mb-3" />
+          <p className="text-destructive">Could not load photos</p>
+          <p className="text-sm text-muted-foreground mt-1">This is not the same as there being none. Try refreshing.</p>
+        </div>
       ) : viewFiltered.length === 0 ? (
         <div className="text-center py-16">
           <Camera className="h-12 w-12 mx-auto text-muted-foreground/40 mb-3" />
@@ -415,7 +461,7 @@ const Photos = () => {
                 {photo.procedures?.service_name && (
                   <p className="text-xs text-muted-foreground truncate">{photo.procedures.service_name}</p>
                 )}
-                <p className="text-xs text-muted-foreground mt-1">{new Date(photo.taken_at).toLocaleDateString()}</p>
+                <p className="text-xs text-muted-foreground mt-1">{displayDate(photo.taken_at)}</p>
               </div>
             </motion.div>
           ))}
@@ -433,7 +479,7 @@ const Photos = () => {
               <img src={viewPhoto.photo_url} alt="" className="w-full max-h-[60vh] object-contain rounded-lg bg-muted" />
               <div className="flex flex-wrap gap-2 items-center">
                 <span className="text-sm font-medium">{viewPhoto.patients?.first_name} {viewPhoto.patients?.last_name}</span>
-                <span className="text-xs text-muted-foreground">• {new Date(viewPhoto.taken_at).toLocaleDateString()}</span>
+                <span className="text-xs text-muted-foreground">• {displayDate(viewPhoto.taken_at)}</span>
               </div>
               {viewPhoto.procedures?.service_name && (
                 <p className="text-sm text-muted-foreground">Procedure: <span className="text-foreground">{viewPhoto.procedures.service_name}</span></p>

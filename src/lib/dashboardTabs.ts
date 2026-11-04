@@ -8,7 +8,7 @@ export interface DashboardTab {
 export const DASHBOARD_WIDGETS = [
   { key: "appointments_total", label: "Total Appointments" },
   { key: "appointments_confirmed", label: "Confirmed Appointments" },
-  { key: "appointments_completed", label: "Completed Appointments" },
+  { key: "appointments_completed", label: "Billed Appointments" },
   { key: "revenue", label: "Revenue" },
   { key: "staff_present", label: "Staff Present" },
   { key: "new_patients", label: "New Patients Added" },

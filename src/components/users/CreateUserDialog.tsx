@@ -1,7 +1,10 @@
 import { useState, useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { edgeFunctionErrorMessage } from "@/lib/edgeFunctionError";
+import { PASSWORD_RULE_TEXT, passwordProblem } from "@/lib/passwordRules";
 import { toast } from "@/hooks/use-toast";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +34,7 @@ export default function CreateUserDialog({ open, onOpenChange, staffList, roles 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [forceChange, setForceChange] = useState(true);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Auto-fill when staff member selected
   useEffect(() => {
@@ -55,13 +59,18 @@ export default function CreateUserDialog({ open, onOpenChange, staffList, roles 
     setPassword("");
     setConfirmPassword("");
     setForceChange(true);
+    setFormError(null);
   };
 
   const createUser = useMutation({
     mutationFn: async () => {
       if (!fullName.trim() || !email.trim()) throw new Error("Name and email are required");
-      if (!autoGenPassword && password !== confirmPassword) throw new Error("Passwords do not match");
-      if (!autoGenPassword && password.length < 6) throw new Error("Password must be at least 6 characters");
+      // Strength rules came from main. Shared, so the reset dialog and the
+      // first-login screen cannot accept less than the API will.
+      if (!autoGenPassword) {
+        const problem = passwordProblem(password, confirmPassword);
+        if (problem) throw new Error(problem);
+      }
 
       const staffId = linkedStaffId && linkedStaffId !== "manual" ? linkedStaffId : null;
 
@@ -94,24 +103,34 @@ export default function CreateUserDialog({ open, onOpenChange, staffList, roles 
         },
       });
 
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
+      // supabase-js flattens any non-2xx into a generic "non-2xx status code"
+      // and nulls out `data`, so the function's own message never reached the
+      // toast below. edgeFunctionErrorMessage recovers it and translates a
+      // weak-password rejection - main added that translation here; the shared
+      // helper gives it to the three User Management call sites too, which can
+      // hit exactly the same rejection.
+      if (error) return { error: await edgeFunctionErrorMessage(error) };
+      if (data?.error) return { error: data.error as string };
 
       // Update role on existing staff if linked
       if (staffId && roleId) {
         await supabase.from("staff").update({ role_id: roleId, is_active: isActive } as any).eq("id", staffId);
       }
 
-      return data;
+      return { data };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result.error) {
+        setFormError(result.error);
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["staff-with-roles"] });
       toast({ title: "User created successfully" });
       resetForm();
       onOpenChange(false);
     },
     onError: (err: any) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      setFormError(err instanceof Error ? err.message : "Could not create this user. Please try again.");
     },
   });
 
@@ -201,17 +220,18 @@ export default function CreateUserDialog({ open, onOpenChange, staffList, roles 
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <Label>Auto-generate & send via email</Label>
-                <Switch checked={autoGenPassword} onCheckedChange={setAutoGenPassword} />
+                <Switch checked={autoGenPassword} onCheckedChange={(checked) => { setAutoGenPassword(checked); setFormError(null); }} />
               </div>
               {!autoGenPassword && (
                 <>
                   <div>
                     <Label>Password</Label>
-                    <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min 6 characters" />
+                    <Input type="password" value={password} onChange={(e) => { setPassword(e.target.value); setFormError(null); }} placeholder="At least 8 characters" aria-invalid={Boolean(formError)} />
+                    <p className="mt-1 text-xs text-muted-foreground">{PASSWORD_RULE_TEXT}</p>
                   </div>
                   <div>
                     <Label>Confirm Password</Label>
-                    <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+                    <Input type="password" value={confirmPassword} onChange={(e) => { setConfirmPassword(e.target.value); setFormError(null); }} aria-invalid={Boolean(formError)} />
                   </div>
                 </>
               )}
@@ -222,7 +242,13 @@ export default function CreateUserDialog({ open, onOpenChange, staffList, roles 
             </div>
           </div>
 
-          <Button className="w-full" onClick={() => createUser.mutate()} disabled={createUser.isPending || !fullName.trim() || !email.trim()}>
+          {formError && (
+            <Alert variant="destructive">
+              <AlertDescription>{formError}</AlertDescription>
+            </Alert>
+          )}
+
+          <Button className="w-full" onClick={() => { setFormError(null); createUser.mutate(); }} disabled={createUser.isPending || !fullName.trim() || !email.trim()}>
             {createUser.isPending ? "Creating..." : "Create User"}
           </Button>
         </div>

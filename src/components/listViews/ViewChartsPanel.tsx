@@ -54,6 +54,7 @@ import {
   type FieldDef,
   type RawValueFn,
   type ViewChart,
+  type ChartOptionsFn,
 } from "@/lib/listViews/engine";
 
 const CHART_TYPES: { value: ChartType; label: string }[] = [
@@ -195,6 +196,9 @@ interface Props {
   onClose: () => void;
   fields: FieldDef[];
   rawValue?: RawValueFn;
+  /** The choices behind a picklist, so a chart grouped by one reads as names
+   *  rather than the ids the column stores. */
+  optionsFor?: ChartOptionsFn;
   /** Plural noun used in the default new-chart name, e.g. "Patients". Defaults to "Records". */
   itemLabel?: string;
   /** Field key the default new chart groups by. Defaults to "status". */
@@ -203,7 +207,7 @@ interface Props {
 
 export default function ViewChartsPanel({
   charts, rows, canManage, onChange, onClose, fields, rawValue = defaultRawValue,
-  itemLabel = "Records", defaultGroupField = "status",
+  optionsFor, itemLabel = "Records", defaultGroupField = "status",
 }: Props) {
   const [activeId, setActiveId] = useState<string | null>(charts[0]?.id ?? null);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -224,7 +228,10 @@ export default function ViewChartsPanel({
   }, [charts, activeId]);
 
   const chart = charts.find((c) => c.id === activeId) ?? null;
-  const data = useMemo(() => (chart ? computeChartData(rows, chart, fields, rawValue) : []), [rows, chart, fields, rawValue]);
+  const data = useMemo(
+    () => (chart ? computeChartData(rows, chart, fields, rawValue, optionsFor) : []),
+    [rows, chart, fields, rawValue, optionsFor],
+  );
 
   const metricLabel = chart
     ? chart.aggregate === "count"

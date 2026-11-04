@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { numVal } from "@/lib/numberInput";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Save, ChevronsUpDown, Check, X, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -400,15 +401,15 @@ const TaxMasterForm = () => {
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <Label>CGST (%)</Label>
-                <Input type="number" step="0.01" className="mt-1.5" placeholder="0" value={cgst} onChange={(e) => setCgst(e.target.value)} />
+                <Input type="number" step="0.01" className="mt-1.5" placeholder="0" value={numVal(cgst)} onChange={(e) => setCgst(e.target.value)} />
               </div>
               <div>
                 <Label>SGST (%)</Label>
-                <Input type="number" step="0.01" className="mt-1.5" placeholder="0" value={sgst} onChange={(e) => setSgst(e.target.value)} />
+                <Input type="number" step="0.01" className="mt-1.5" placeholder="0" value={numVal(sgst)} onChange={(e) => setSgst(e.target.value)} />
               </div>
               <div>
                 <Label>IGST (%)</Label>
-                <Input type="number" step="0.01" className="mt-1.5" placeholder="0" value={igst} onChange={(e) => setIgst(e.target.value)} />
+                <Input type="number" step="0.01" className="mt-1.5" placeholder="0" value={numVal(igst)} onChange={(e) => setIgst(e.target.value)} />
               </div>
             </div>
             <div className="flex items-center justify-between rounded-lg bg-muted/50 px-4 py-3">

@@ -48,7 +48,7 @@ export function PatientToolsBar({
     <>
       <div className={`flex gap-2 flex-wrap ${className}`}>
         <Patient360 patientId={patientId} patientName={patientName} />
-        <CaseAnalysis patientId={patientId} patientName={patientName} />
+        <CaseAnalysis patientId={patientId} patientName={patientName} appointmentId={context === "appointment" ? contextId : undefined} />
         <Button type="button" variant="outline" size="sm" className="gap-1 h-8 text-xs" onClick={() => setCameraOpen(true)}>
           <Camera className="h-3.5 w-3.5" /> Take Photo
         </Button>
@@ -74,6 +74,8 @@ export function PatientToolsBar({
           onOpenChange={setSkinTrackerOpen}
           photos={photos as any}
           patientName={patientName}
+          patientId={patientId}
+          appointmentId={context === "appointment" ? contextId : undefined}
         />
       )}
     </>

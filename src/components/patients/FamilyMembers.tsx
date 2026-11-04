@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { PatientFormSheet } from "./PatientFormSheet";
+import { patientAgeLabel } from "@/lib/patientIdentity";
 import type { Tables } from "@/integrations/supabase/types";
 
 const RELATIONSHIPS = [
@@ -116,29 +117,21 @@ export function FamilyMembers({ patientId, patientName }: FamilyMembersProps) {
     enabled: uniqueLinkedIds.length > 0,
   });
 
-  // Fetch visit stats (appointment counts & last visit) for linked patients
-  const { data: visitStats = {} } = useQuery({
-    queryKey: ["family-visit-stats", uniqueLinkedIds],
-    queryFn: async () => {
-      if (uniqueLinkedIds.length === 0) return {};
-      const { data, error } = await supabase
-        .from("appointments")
-        .select("patient_id, start_time")
-        .in("patient_id", uniqueLinkedIds)
-        .order("start_time", { ascending: false });
-      if (error) throw error;
-      const stats: Record<string, { totalVisits: number; lastVisit: string | null }> = {};
-      for (const apt of data || []) {
-        if (!apt.patient_id) continue;
-        if (!stats[apt.patient_id]) {
-          stats[apt.patient_id] = { totalVisits: 0, lastVisit: apt.start_time };
-        }
-        stats[apt.patient_id].totalVisits++;
-      }
-      return stats;
-    },
-    enabled: uniqueLinkedIds.length > 0,
-  });
+  // Visits come from the patient's own rollup, which recalc_patient_visit_rollups
+  // maintains. This used to count every appointment row for the family member -
+  // so a relative with nine future bookings and one attended visit read as ten,
+  // and a cancellation counted the same as a consultation. The rollup counts
+  // what the patient attended, including a past appointment with a paid invoice
+  // that Salesforce never closed out. linkedPatients already selects these
+  // columns, so this also drops a whole query.
+  const visitStats = useMemo(() => {
+    const stats: Record<string, { totalVisits: number; lastVisit: string | null }> = {};
+    for (const p of linkedPatients as Patient[]) {
+      if (!p?.id) continue;
+      stats[p.id] = { totalVisits: p.total_visits ?? 0, lastVisit: p.last_visit_date ?? null };
+    }
+    return stats;
+  }, [linkedPatients]);
 
   const addMember = useMutation({
     mutationFn: async () => {
@@ -567,15 +560,10 @@ function MemberDetailView({
   onEdit: () => void;
   onViewProfile: () => void;
 }) {
-  const getAge = (dob: string | null) => {
-    if (!dob) return null;
-    return Math.floor((Date.now() - new Date(dob).getTime()) / (365.25 * 24 * 60 * 60 * 1000));
-  };
-
   const fields = [
     { label: "Relationship", value: relationship },
     { label: "Gender", value: patient.gender },
-    { label: "Age", value: getAge(patient.date_of_birth) ? `${getAge(patient.date_of_birth)} years` : null },
+    { label: "Age", value: patientAgeLabel(patient.date_of_birth) || null },
     { label: "Date of Birth", value: patient.date_of_birth },
     { label: "Phone", value: patient.phone },
     { label: "Email", value: patient.email },

@@ -25,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { emptyDraft, invokeTemplates, TemplateDraft, TemplateRow } from "@/lib/comms/templatesApi";
 import { toFriendlyBody } from "@/lib/comms/templateVariables";
+import { onlyClinicTemplates, TEMPLATE_FILTER_LABEL } from "@/lib/comms/templateFilter";
 
 const statusStyle: Record<string, string> = {
   draft: "bg-muted text-muted-foreground",
@@ -51,7 +52,9 @@ export default function WhatsAppTemplates() {
         .select("*")
         .order("updated_at", { ascending: false });
       if (error) throw error;
-      return (data || []) as unknown as TemplateRow[];
+      // Import from API brings down the whole Twilio account, so the clinic's own
+      // templates are picked out here rather than left for the reader to scan past.
+      return onlyClinicTemplates((data || []) as unknown as TemplateRow[]);
     },
   });
 
@@ -60,7 +63,12 @@ export default function WhatsAppTemplates() {
   const importFromApi = useMutation({
     mutationFn: () => invokeTemplates<{ imported: number; skipped: number }>({ action: "import-from-twilio" }),
     onSuccess: (r) => {
-      toast.success(`Imported ${r.imported} template${r.imported === 1 ? "" : "s"}, ${r.skipped} already existed`);
+      // The counts are whole-account numbers from Twilio. Saying so stops the list
+      // below looking broken when it shows fewer than the number just imported.
+      toast.success(
+        `Imported ${r.imported} template${r.imported === 1 ? "" : "s"}, ${r.skipped} already existed. ` +
+          `Listing only those named ${TEMPLATE_FILTER_LABEL}.`
+      );
       refresh();
     },
     onError: (e: Error) => toast.error(e.message),
@@ -143,7 +151,9 @@ export default function WhatsAppTemplates() {
           <h1 className="page-title flex items-center gap-2">
             <FileText className="h-6 w-6 text-primary" /> WhatsApp Templates
           </h1>
-          <p className="page-subtitle">Create and manage WhatsApp message templates via API</p>
+          <p className="page-subtitle">
+            Create and manage WhatsApp message templates via API. Showing only templates named {TEMPLATE_FILTER_LABEL}.
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => importFromApi.mutate()} disabled={importFromApi.isPending}>
@@ -193,7 +203,7 @@ export default function WhatsAppTemplates() {
           ) : visible.length === 0 ? (
             <p className="py-10 text-center text-sm text-muted-foreground">
               {templates.length === 0
-                ? "No templates yet. Create one, or use Import from API to bring in templates already on your Twilio account."
+                ? `No templates named ${TEMPLATE_FILTER_LABEL} yet. Create one, or use Import from API to bring in matching templates already on your Twilio account.`
                 : "No templates match these filters."}
             </p>
           ) : (

@@ -10,6 +10,7 @@ import { CameraDialog } from "@/components/shared/CameraDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { APPOINTMENT_REMOVED_NOTICE, appointmentLinkForSave } from "@/lib/procedureAppointment";
 
 interface Medicine {
   medicine_name: string;
@@ -116,14 +117,20 @@ export function ScanProcedureDialog({ open, onOpenChange, appointmentId, patient
     setData({ ...data, medicines: [...data.medicines, { medicine_name: "" }] });
   };
 
+  /** Set by the save when the appointment it named had been deleted. */
+  const scanAppointmentRemovedRef = useRef(false);
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!data) throw new Error("No data");
       if (!data.service_name.trim()) throw new Error("Service / Procedure name is required");
+      // Checked, not assumed - see procedureAppointment.ts.
+      const appointmentLink = await appointmentLinkForSave(appointmentId);
+      scanAppointmentRemovedRef.current = appointmentLink.removed;
       const { data: proc, error } = await supabase
         .from("procedures")
         .insert({
-          appointment_id: appointmentId,
+          appointment_id: appointmentLink.id,
           patient_id: patientId,
           staff_id: staffId || null,
           service_name: data.service_name.trim(),
@@ -154,6 +161,7 @@ export function ScanProcedureDialog({ open, onOpenChange, appointmentId, patient
     },
     onSuccess: () => {
       toast.success("Procedure created from scan");
+      if (scanAppointmentRemovedRef.current) toast.warning(APPOINTMENT_REMOVED_NOTICE);
       qc.invalidateQueries({ queryKey: ["appointment-procedures", appointmentId] });
       qc.invalidateQueries({ queryKey: ["procedures"] });
       handleClose(false);
@@ -166,7 +174,7 @@ export function ScanProcedureDialog({ open, onOpenChange, appointmentId, patient
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="font-display flex items-center gap-2">
-            <ScanLine className="h-5 w-5 text-primary" /> Scan Procedure Notes
+            <ScanLine className="h-5 w-5 text-primary" /> Scan Prescription Notes
           </DialogTitle>
         </DialogHeader>
 

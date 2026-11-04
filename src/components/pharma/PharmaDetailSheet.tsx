@@ -1,4 +1,6 @@
 import { formatMoney } from "@/lib/currency";
+import { DateInput } from "@/components/shared/DateInput";
+import { numVal } from "@/lib/numberInput";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { VendorCombobox } from "@/components/shared/VendorCombobox";
@@ -22,6 +24,7 @@ import { getUomOptions, getSaleUom, toUomQty, fmtQty, type UomOption } from "@/l
 import { getActiveBatchPrice } from "@/lib/productPricing";
 import { UnitConversionsEditor, syncProductUnits, type ConversionRow } from "@/components/pharma/UnitConversionsEditor";
 import { useProductUnits } from "@/hooks/usePharmaProductUnits";
+import { PHARMA_LOOKUP_KEY } from "@/lib/medicineDefaults";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -190,6 +193,9 @@ export function ProductDetailSheet({ productId, onClose, onClone, onAddStock }: 
       queryClient.invalidateQueries({ queryKey: ["pharma-products"] });
       queryClient.invalidateQueries({ queryKey: ["pharma-product", productId] });
       queryClient.invalidateQueries({ queryKey: ["pharma-product-units"] });
+      // A renamed medicine, and its prescribing defaults, reach the procedure
+      // screens straight away rather than after a reload.
+      queryClient.invalidateQueries({ queryKey: PHARMA_LOOKUP_KEY });
       toast.success("Product updated");
       setIsEditing(false);
     },
@@ -203,6 +209,9 @@ export function ProductDetailSheet({ productId, onClose, onClone, onAddStock }: 
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["pharma-products"] });
+      // Most important of the four: a deleted medicine left in an open
+      // prescribing list is an id the database will reject on save.
+      queryClient.invalidateQueries({ queryKey: PHARMA_LOOKUP_KEY });
       toast.success("Product deleted");
       onClose();
     },
@@ -680,16 +689,16 @@ export function ProductDetailSheet({ productId, onClose, onClone, onAddStock }: 
                 {showPriceForm && (
                   <div className="border rounded-lg p-3 mb-3 bg-muted/30 space-y-2">
                     <div className="grid grid-cols-2 gap-2">
-                      <div><Label className="text-xs">MRP (₹)</Label><Input type="number" className="mt-1 h-8" value={priceForm.mrp} onChange={(e) => setPriceForm({ ...priceForm, mrp: parseFloat(e.target.value) || 0 })} /></div>
-                      <div><Label className="text-xs">Sell Price (₹)</Label><Input type="number" className="mt-1 h-8" value={priceForm.selling_price} onChange={(e) => setPriceForm({ ...priceForm, selling_price: parseFloat(e.target.value) || 0 })} /></div>
+                      <div><Label className="text-xs">MRP (₹)</Label><Input type="number" className="mt-1 h-8" value={numVal(priceForm.mrp)} onChange={(e) => setPriceForm({ ...priceForm, mrp: parseFloat(e.target.value) || 0 })} /></div>
+                      <div><Label className="text-xs">Sell Price (₹)</Label><Input type="number" className="mt-1 h-8" value={numVal(priceForm.selling_price)} onChange={(e) => setPriceForm({ ...priceForm, selling_price: parseFloat(e.target.value) || 0 })} /></div>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <div><Label className="text-xs">Buy Price (₹)</Label><Input type="number" className="mt-1 h-8" value={priceForm.purchase_price} onChange={(e) => setPriceForm({ ...priceForm, purchase_price: parseFloat(e.target.value) || 0 })} /></div>
-                      <div><Label className="text-xs">GST %</Label><Input type="number" className="mt-1 h-8" value={priceForm.gst_percent} onChange={(e) => setPriceForm({ ...priceForm, gst_percent: parseFloat(e.target.value) || 0 })} /></div>
+                      <div><Label className="text-xs">Buy Price (₹)</Label><Input type="number" className="mt-1 h-8" value={numVal(priceForm.purchase_price)} onChange={(e) => setPriceForm({ ...priceForm, purchase_price: parseFloat(e.target.value) || 0 })} /></div>
+                      <div><Label className="text-xs">GST %</Label><Input type="number" className="mt-1 h-8" value={numVal(priceForm.gst_percent)} onChange={(e) => setPriceForm({ ...priceForm, gst_percent: parseFloat(e.target.value) || 0 })} /></div>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <div><Label className="text-xs">Effective From *</Label><Input type="date" className="mt-1 h-8" value={priceForm.effective_from} onChange={(e) => setPriceForm({ ...priceForm, effective_from: e.target.value })} required /></div>
-                      <div><Label className="text-xs">Notes</Label><Input className="mt-1 h-8" value={priceForm.notes} onChange={(e) => setPriceForm({ ...priceForm, notes: e.target.value })} placeholder="Reason for price change" /></div>
+                      <div><Label className="text-xs">Effective From *</Label><DateInput className="mt-1 h-8" value={numVal(priceForm.effective_from)} onChange={(isoDate) => setPriceForm({ ...priceForm, effective_from: isoDate })} required /></div>
+                      <div><Label className="text-xs">Notes</Label><Input className="mt-1 h-8" value={numVal(priceForm.notes)} onChange={(e) => setPriceForm({ ...priceForm, notes: e.target.value })} placeholder="Reason for price change" /></div>
                     </div>
                     <div className="flex gap-2">
                       <Button size="sm" onClick={() => addPrice.mutate()} disabled={addPrice.isPending || !priceForm.effective_from}><Check className="h-3 w-3 mr-1" />{addPrice.isPending ? "Saving..." : "Save & Activate"}</Button>
@@ -758,7 +767,7 @@ export function ProductDetailSheet({ productId, onClose, onClone, onAddStock }: 
               })()}
               <div className="grid grid-cols-2 gap-3">
                 <div><Label>HSN Code</Label><Input className="mt-1" value={form.hsn_code || ""} onChange={(e) => setForm({ ...form, hsn_code: e.target.value })} /></div>
-                <div><Label>Reorder Level</Label><Input type="number" className="mt-1" value={form.reorder_level || 10} onChange={(e) => setForm({ ...form, reorder_level: parseInt(e.target.value) || 10 })} /></div>
+                <div><Label>Reorder Level</Label><Input type="number" className="mt-1" value={numVal(form.reorder_level || 10)} onChange={(e) => setForm({ ...form, reorder_level: parseInt(e.target.value) || 10 })} /></div>
               </div>
               <div className="rounded-md border bg-muted/30 p-3 space-y-3">
                 <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Prescription Defaults</div>
@@ -913,11 +922,11 @@ export function InventoryDetailSheet({ inventoryId, onClose, onClone, products }
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><Label>Batch No. *</Label><Input className="mt-1" value={form.batch_number || ""} onChange={(e) => setForm({ ...form, batch_number: e.target.value })} /></div>
-                <div><Label>Expiry Date *</Label><Input type="date" className="mt-1" value={form.expiry_date || ""} onChange={(e) => setForm({ ...form, expiry_date: e.target.value })} /></div>
+                <div><Label>Expiry Date *</Label><DateInput className="mt-1" value={form.expiry_date || ""} onChange={(isoDate) => setForm({ ...form, expiry_date: isoDate })} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label>Quantity *</Label><Input type="number" className="mt-1" value={form.quantity || 0} onChange={(e) => setForm({ ...form, quantity: parseInt(e.target.value) || 0 })} /></div>
-                <div><Label>Purchase Price (₹)</Label><Input type="number" className="mt-1" value={form.purchase_price || 0} onChange={(e) => setForm({ ...form, purchase_price: parseFloat(e.target.value) || 0 })} /></div>
+                <div><Label>Quantity *</Label><Input type="number" className="mt-1" value={numVal(form.quantity || 0)} onChange={(e) => setForm({ ...form, quantity: parseInt(e.target.value) || 0 })} /></div>
+                <div><Label>Purchase Price (₹)</Label><Input type="number" className="mt-1" value={numVal(form.purchase_price || 0)} onChange={(e) => setForm({ ...form, purchase_price: parseFloat(e.target.value) || 0 })} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><Label>Supplier</Label><div className="mt-1"><VendorCombobox value={form.supplier || ""} onChange={(v) => setForm({ ...form, supplier: v })} placeholder="Select supplier..." /></div></div>
@@ -1083,10 +1092,10 @@ export function BillDetailSheet({ billId, onClose, onClone }: { billId: string |
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label>Discount (₹)</Label><Input type="number" className="mt-1" value={form.discount || 0} onChange={(e) => setForm({ ...form, discount: parseFloat(e.target.value) || 0 })} /></div>
+                <div><Label>Discount (₹)</Label><Input type="number" className="mt-1" value={numVal(form.discount || 0)} onChange={(e) => setForm({ ...form, discount: parseFloat(e.target.value) || 0 })} /></div>
                 <div>
                   <Label>Status</Label>
-                  <Select value={form.status || "Paid"} onValueChange={(v) => setForm({ ...form, status: v })}>
+                  <Select value={numVal(form.status || "Paid")} onValueChange={(v) => setForm({ ...form, status: v })}>
                     <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>{["Paid", "Pending", "Cancelled"].map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                   </Select>

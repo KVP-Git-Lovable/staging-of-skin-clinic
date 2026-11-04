@@ -8,11 +8,17 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { buildOrFilter, buildFuzzyOrFilter, fuzzyRank, normalize, fuzzyScore } from "@/lib/fuzzySearch";
-
-const PHONE_LIKE_NAME = /^[+\d\s()\-]{7,}$/;
+import { buildFuzzyOrFilter, buildTokenFilters, fuzzyRank, normalize, fuzzyScore } from "@/lib/fuzzySearch";
+import { hasRealName, isPhoneLikeName, rawPatientName } from "@/lib/patientName";
+import {
+  PATIENT_PICKER_PAGE_SIZE,
+  PATIENT_PICKER_FETCH,
+  patientPickerColumns,
+  pickPickerRows,
+  fetchInitialPatients,
+} from "@/lib/patientPickerList";
 
 export interface PatientLite {
   id: string;
@@ -33,14 +39,18 @@ interface PatientComboboxProps {
   className?: string;
   disabled?: boolean;
   withSource?: boolean;
+  /**
+   * A patient who must not be offered - the one being edited, who cannot be
+   * their own referrer. Applied when the rows are rendered rather than when
+   * they are fetched: the fetched list is cached under one key and shared by
+   * every screen showing a picker, while this differs per screen.
+   */
+  excludeId?: string | null;
 }
 
-const PAGE_SIZE = 50;
-
-const buildColumns = (withSource: boolean) =>
-  withSource
-    ? "id, first_name, last_name, phone, source, source_ad_details, source_referral_doctor"
-    : "id, first_name, last_name, phone";
+// Both moved to @/lib/patientPickerList, which is now the only place that
+// knows how deep to fetch and which rows belong in the list.
+const PAGE_SIZE = PATIENT_PICKER_PAGE_SIZE;
 
 export function PatientCombobox({
   value,
@@ -51,12 +61,12 @@ export function PatientCombobox({
   className,
   disabled,
   withSource = false,
+  excludeId = null,
 }: PatientComboboxProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
-  const queryClient = useQueryClient();
-  const columns = buildColumns(withSource);
+  const columns = patientPickerColumns(withSource);
 
   // Debounce search input
   useEffect(() => {
@@ -67,17 +77,13 @@ export function PatientCombobox({
   // Fetch first page (initial list) — cached, only when opened
   const { data: initialList = [], isLoading: loadingInitial } = useQuery({
     queryKey: ["patients-combobox-initial", withSource],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("patients")
-        .select(columns)
-        .order("first_name")
-        .range(0, PAGE_SIZE * 2 - 1);
-      if (error) throw error;
-      const all = ((data ?? []) as unknown) as PatientLite[];
-      const withNames = all.filter(p => p.first_name && p.first_name.trim());
-      return withNames.slice(0, PAGE_SIZE);
-    },
+    // One function, in @/lib/patientPickerList. A second copy used to sit in
+    // onOpenChange below as a cache warm-up, writing to this same key but
+    // fetching only 50 rows and filtering none of them - and since the
+    // phone-named records sort first, those 50 were all of them. It was issued
+    // first, so its result is what the clinic saw: every dropdown in the app
+    // opened on a wall of "Unnamed - 6282285155".
+    queryFn: () => fetchInitialPatients(withSource),
     enabled: open,
     staleTime: 5 * 60_000,
   });
@@ -151,12 +157,13 @@ export function PatientCombobox({
         }
       }
 
-      // Final fallback: standard OR search
-      const or = buildOrFilter(q, ["first_name", "last_name", "phone"]);
-      const { data: orResults, error } = await supabase
-        .from("patients")
-        .select(columns)
-        .or(or)
+      // Every word must match somewhere - see buildTokenFilters. The fuzzy
+      // fallback below still covers a strict miss.
+      let orQuery = supabase.from("patients").select(columns);
+      for (const f of buildTokenFilters(q, ["first_name", "last_name", "phone"])) {
+        orQuery = orQuery.or(f);
+      }
+      const { data: orResults, error } = await orQuery
         .order("first_name")
         .limit(PAGE_SIZE);
       if (error) throw error;
@@ -199,15 +206,15 @@ export function PatientCombobox({
     staleTime: 5 * 60_000,
   });
 
-  const list = debounced ? searchResults : initialList;
+  // Both branches, or typing the patient's own name would bring them back.
+  const list = useMemo(
+    () => pickPickerRows(debounced ? searchResults : initialList, { excludeId }),
+    [debounced, searchResults, initialList, excludeId]
+  );
 
-  const getRawName = (p: PatientLite) =>
-    `${p.first_name || ""} ${p.last_name || ""}`.replace(/\s+/g, " ").trim();
+  const getRawName = (p: PatientLite) => rawPatientName(p);
 
-  const hasMeaningfulName = (p: PatientLite) => {
-    const name = getRawName(p);
-    return !!name && !PHONE_LIKE_NAME.test(name);
-  };
+  const hasMeaningfulName = (p: PatientLite) => hasRealName(p);
 
   const displayName = (p: PatientLite) => {
     const name = getRawName(p);
@@ -221,7 +228,7 @@ export function PatientCombobox({
     const phone = (p.phone || "").trim();
     const label = phone ? `${name} — ${phone}` : name;
     // Final guard: if for any reason the label is still phone-like, prepend "Unnamed — ".
-    if (PHONE_LIKE_NAME.test(label)) return `Unnamed — ${label}`;
+    if (isPhoneLikeName(label)) return `Unnamed — ${label}`;
     return label;
   };
 
@@ -271,19 +278,6 @@ export function PatientCombobox({
         if (!o) {
           setSearch("");
           setDebounced("");
-        } else {
-          // Warm initial cache aggressively
-          queryClient.prefetchQuery({
-            queryKey: ["patients-combobox-initial", withSource],
-            queryFn: async () => {
-              const { data } = await supabase
-                .from("patients")
-                .select(columns)
-                .order("first_name")
-                .range(0, PAGE_SIZE - 1);
-              return ((data ?? []) as unknown) as PatientLite[];
-            },
-          });
         }
       }}
     >
@@ -339,7 +333,10 @@ export function PatientCombobox({
             <p className="text-xs text-muted-foreground text-center py-3">Loading…</p>
           ) : sorted.length === 0 ? (
             <p className="text-xs text-muted-foreground text-center py-3">
-              {debounced ? "No patients match" : "No patients found"}
+              {/* "No patients found" with no search typed was never true -
+                  there are 27,000 of them. The list only ever holds the first
+                  page of patients who have a name. */}
+              {debounced ? "No patients match" : "Type a name or phone to search"}
             </p>
           ) : (
             sorted.map((p) => (

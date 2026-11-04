@@ -1,0 +1,1 @@
+ALTER TABLE public.patient_feedback ADD COLUMN IF NOT EXISTS comments TEXT;

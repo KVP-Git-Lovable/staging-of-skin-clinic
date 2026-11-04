@@ -1,5 +1,25 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// What counts as a visit: an appointment the patient turned up to. Mirrors
+// isVisit in src/lib/visitStats.ts - Deno cannot import from the browser
+// bundle, so the rule is repeated here on purpose. Keep the two in step.
+//
+// Status alone was not enough. 13,205 past appointments still read "Confirmed"
+// - Salesforce's word for booked, which nobody closes afterwards - so a patient
+// with seven attended visits and Rs 21,500 billed had a header reading
+// "1 Visits, Last Visit Feb 16" beside her own list of all seven.
+const VISIT_STATUSES = ["Completed", "Checked-in", "In Progress"];
+const NON_VISIT_STATUSES = ["Cancelled", "No Show"];
+
+/** Attended: said so, or it is in the past and they were not turned away. */
+const isVisit = (apt: { status?: string | null; start_time?: string | null }): boolean => {
+  if (VISIT_STATUSES.includes(String(apt?.status ?? ""))) return true;
+  if (!apt?.start_time) return false;
+  const when = new Date(apt.start_time).getTime();
+  if (Number.isNaN(when) || when >= Date.now()) return false;
+  return !NON_VISIT_STATUSES.includes(String(apt.status ?? ""));
+};
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -46,10 +66,19 @@ Deno.serve(async (req) => {
 
       // --- Visit Frequency (30%) ---
       const totalApts = patientApts.length;
-      const completedApts = patientApts.filter((a) => a.status === "Completed" || a.status === "Checked-in").length;
-      const aptDates = patientApts.map((a) => new Date(a.start_time).getTime()).sort((a, b) => b - a);
+      const completedApts = patientApts.filter(isVisit).length;
+      // Attended appointments only. This took the newest of ALL of them, so a
+      // booking still in the future became the patient's "last visit" and
+      // days-since came out negative - one patient page read "-32". lastVisitDate
+      // below already filtered; these two disagreed on the same record.
+      const aptDates = patientApts
+        .filter(isVisit)
+        .map((a) => new Date(a.start_time).getTime())
+        .sort((a, b) => b - a);
       const lastVisitMs = aptDates.length > 0 ? aptDates[0] : 0;
-      const daysSinceLastVisit = lastVisitMs > 0 ? (now - lastVisitMs) / (1000 * 60 * 60 * 24) : 999;
+      // Floored at 0: an appointment marked attended ahead of time means nobody
+      // has been in since, which is 0 days, not a negative count.
+      const daysSinceLastVisit = lastVisitMs > 0 ? Math.max(0, (now - lastVisitMs) / (1000 * 60 * 60 * 24)) : 999;
 
       let visitScore = 0;
       // Frequency component (up to 40 pts of 100 sub-score)
@@ -170,7 +199,7 @@ Deno.serve(async (req) => {
           daysSinceLastVisit: Math.round(daysSinceLastVisit),
           lastVisitDate: (() => {
             const completedDates = patientApts
-              .filter((a) => a.status === "Completed")
+              .filter(isVisit)
               .map((a) => a.start_time)
               .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
             return completedDates.length > 0 ? completedDates[0] : null;
@@ -196,11 +225,14 @@ Deno.serve(async (req) => {
               engagement_retention_signal: r.breakdown.retentionSignal,
               engagement_compliance: r.breakdown.compliance,
               engagement_updated_at: stamp,
-              total_visits: r.stats.completedAppointments,
               lifetime_value: r.stats.totalBilled,
-              last_visit_date: r.stats.lastVisitDate,
-              days_since_last_visit:
-                r.stats.daysSinceLastVisit >= 999 ? null : r.stats.daysSinceLastVisit,
+              // total_visits, last_visit_date and days_since_last_visit are
+              // deliberately NOT written here. recalc_patient_visit_rollups owns
+              // them, and it counts a past appointment with a paid invoice as
+              // attended - 3,371 visits this function cannot see, because it
+              // reads status alone. Two writers with two different rules is what
+              // put a last visit of 18 Sept beside a days-since taken from an
+              // October booking, and left 59 patients with a negative number.
             })
             .eq("id", pid)
         )

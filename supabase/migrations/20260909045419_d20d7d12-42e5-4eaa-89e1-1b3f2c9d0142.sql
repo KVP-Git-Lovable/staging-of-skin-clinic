@@ -1,0 +1,1 @@
+REVOKE EXECUTE ON FUNCTION public.complete_appointment_on_invoice_paid() FROM anon, authenticated, public;

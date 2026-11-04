@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { numVal } from "@/lib/numberInput";
 import { Plus, Trash2, GripVertical, Search, Copy, Send, Mic, MicOff, Sparkles, Loader2, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -508,11 +509,11 @@ export function SurveyTemplateForm({ open, onOpenChange, templateId }: Props) {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>Age Range Min</Label>
-                <Input type="number" value={ageMin} onChange={(e) => setAgeMin(Number(e.target.value))} className="mt-1.5" />
+                <Input type="number" value={numVal(ageMin)} onChange={(e) => setAgeMin(Number(e.target.value))} className="mt-1.5" />
               </div>
               <div>
                 <Label>Age Range Max</Label>
-                <Input type="number" value={ageMax} onChange={(e) => setAgeMax(Number(e.target.value))} className="mt-1.5" />
+                <Input type="number" value={numVal(ageMax)} onChange={(e) => setAgeMax(Number(e.target.value))} className="mt-1.5" />
               </div>
             </div>
             <div>
@@ -554,7 +555,7 @@ export function SurveyTemplateForm({ open, onOpenChange, templateId }: Props) {
                 <div className="flex items-center gap-2">
                   <Input
                     type="number" min={1} max={30}
-                    value={suggestCount}
+                    value={numVal(suggestCount)}
                     onChange={(e) => setSuggestCount(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
                     className="h-8 w-16 text-center"
                   />

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { parseCanvas } from "@/lib/comms/journeyGraph";
 import { audienceSummary, invokeJourneyActions, type Journey } from "@/lib/comms/journeys";
 import { summarizeSchedule } from "@/lib/comms/schedule";
+import { JOURNEY_SCHEDULER_ENABLED, JOURNEY_SCHEDULER_OFF_NOTICE } from "@/lib/comms/journeyScheduler";
 
 type Preview = { total: number; without_phone: number };
 
@@ -53,7 +54,9 @@ export function ActivateJourneyDialog({
           <AlertDialogDescription asChild>
             <div className="space-y-2 text-sm">
               <p>
-                Activating enrolls the audience and starts sending real WhatsApp messages
+                {JOURNEY_SCHEDULER_ENABLED
+                  ? "Activating enrolls the audience and starts sending real WhatsApp messages"
+                  : "Activating enrolls the audience"}
                 {journey?.schedule ? ` according to the schedule (${summarizeSchedule(journey.schedule)}).` : " right away."}
               </p>
               <p>Audience: {audienceSummary(journey?.audience_config ?? null)}</p>
@@ -61,6 +64,12 @@ export function ActivateJourneyDialog({
                 {previewError ? previewError : preview ? `${preview.total} patient${preview.total === 1 ? "" : "s"} will be enrolled` : "Counting audience…"}
               </p>
               <p>{messages.length} WhatsApp template step{messages.length === 1 ? "" : "s"}.</p>
+              {!JOURNEY_SCHEDULER_ENABLED && (
+                <p className="flex gap-2 rounded-md bg-warning/10 p-2 text-warning">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  {JOURNEY_SCHEDULER_OFF_NOTICE}
+                </p>
+              )}
               {marketing && (
                 <p className="flex gap-2 rounded-md bg-warning/10 p-2 text-warning">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -72,7 +81,15 @@ export function ActivateJourneyDialog({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <Button disabled={!preview || activate.isPending} onClick={() => activate.mutate()}>
+          {/* Not just a caption: activating asks comms-journey-actions to run the first batch
+              immediately, and it does that the moment LOVABLE_CRON_SECRET exists - it calls the
+              sender itself and does not wait for a scheduled task. So while the scheduler is off
+              this has to actually block, not only warn. */}
+          <Button
+            disabled={!preview || activate.isPending || !JOURNEY_SCHEDULER_ENABLED}
+            title={JOURNEY_SCHEDULER_ENABLED ? undefined : JOURNEY_SCHEDULER_OFF_NOTICE}
+            onClick={() => activate.mutate()}
+          >
             {activate.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Activate
           </Button>
         </AlertDialogFooter>

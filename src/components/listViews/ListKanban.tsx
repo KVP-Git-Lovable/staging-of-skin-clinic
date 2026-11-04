@@ -28,6 +28,8 @@ interface Props {
   titleField?: string;
   /** Optional leading visual on each card (e.g. avatar). */
   renderLeading?: (row: any) => React.ReactNode;
+  /** Optional mark after the card title (e.g. the patients list's VIP crown). */
+  renderTitleAfter?: (row: any) => React.ReactNode;
 }
 
 const EMPTY = "__empty__";
@@ -37,6 +39,7 @@ const inr = (n: number) =>
 
 export default function ListKanban({
   rows, config, options, columns, fields, rawValue = defaultRawValue, onOpen, onMove, titleField, renderLeading,
+  renderTitleAfter,
 }: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
@@ -117,7 +120,10 @@ export default function ListKanban({
                   >
                     <div className="flex items-center gap-2">
                       {renderLeading?.(row)}
+                      {/* truncate already gives the title an automatic min-size
+                          of 0, so it yields to the mark without further help. */}
                       <p className="truncate text-sm font-medium text-primary">{formatCell(row, title)}</p>
+                      {renderTitleAfter?.(row)}
                     </div>
                     <div className="mt-2 space-y-0.5">
                       {secondary.map((key) => (

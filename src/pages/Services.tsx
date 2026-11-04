@@ -1,5 +1,8 @@
 import { useState, useMemo } from "react";
-import { Plus, Search, Edit2, Trash2, Clock, IndianRupee, Pill, Sparkles, Loader2, Wrench, Cloud } from "lucide-react";
+import { numVal } from "@/lib/numberInput";
+import { applyMedicineDefaults } from "@/lib/medicineDefaults";
+import { usePharmaLookup } from "@/hooks/usePharmaLookup";
+import { Plus, Search, Edit2, Trash2, Clock, IndianRupee, Pill, Sparkles, Loader2, Wrench } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -151,17 +154,7 @@ const Services = () => {
     },
   });
 
-  const { data: products = [] } = useQuery({
-    queryKey: ["pharma-products-lookup"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("pharma_products")
-        .select("id, name, default_frequency, default_duration, default_instructions")
-        .order("name");
-      if (error) throw error;
-      return data;
-    },
-  });
+  const { data: products = [] } = usePharmaLookup();
 
   const { data: allAssets = [] } = useQuery({
     queryKey: ["assets-lookup"],
@@ -304,118 +297,6 @@ const Services = () => {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  const syncSalesforceeMutation = useMutation({
-    mutationFn: async () => {
-      // Call Edge Function to fetch from Salesforce
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sync-salesforce-services`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to fetch from Salesforce");
-      }
-
-      const data = await response.json();
-      const sfServices = data.services || [];
-
-      // Re-fetch fresh rather than trusting the (possibly stale) query-cache
-      // `services` value, so this never races the initial page load.
-      const { data: existing, error: fetchErr } = await supabase.from("services").select("*");
-      if (fetchErr) throw fetchErr;
-      const existingByNorm = new Map((existing || []).map((s: any) => [normalizeName(s.name), s]));
-
-      const toInsert: any[] = [];
-      const toUpdate: { id: string; patch: Record<string, any> }[] = [];
-      const conflicts: string[] = [];
-      let unchangedCount = 0;
-
-      for (const sf of sfServices) {
-        const recs = sf.Recommendations__c
-          ? sf.Recommendations__c.split("\n").filter((r: string) => r.trim())
-          : [];
-        const match = existingByNorm.get(normalizeName(sf.Name));
-
-        if (!match) {
-          toInsert.push({
-            name: sf.Name,
-            category: sf.Category__c || "General",
-            price: sf.Cost__c || 0,
-            duration: sf.Duration__c || 30,
-            procedure_notes: sf.Procedure_Notes__c || null,
-            recommendations: recs,
-            salesforce_id: sf.Id,
-          });
-          continue;
-        }
-
-        // Only fill in currently-empty fields - never overwrite a value a
-        // staff member may have edited in-app after the row was created.
-        const patch: Record<string, any> = {};
-        if (!match.procedure_notes && sf.Procedure_Notes__c) patch.procedure_notes = sf.Procedure_Notes__c;
-        if ((!match.recommendations || match.recommendations.length === 0) && recs.length > 0) {
-          patch.recommendations = recs;
-        }
-        if (!match.salesforce_id) {
-          patch.salesforce_id = sf.Id;
-        } else if (match.salesforce_id !== sf.Id) {
-          conflicts.push(sf.Name);
-        }
-
-        if (Object.keys(patch).length > 0) toUpdate.push({ id: match.id, patch });
-        else unchangedCount++;
-      }
-
-      if (toInsert.length > 0) {
-        const { error } = await supabase.from("services").upsert(toInsert, { onConflict: "salesforce_id" });
-        if (error) throw error;
-      }
-
-      let updateErrors = 0;
-      for (const { id, patch } of toUpdate) {
-        const { error } = await supabase.from("services").update(patch as any).eq("id", id);
-        if (error) updateErrors++;
-      }
-      if (updateErrors > 0 && updateErrors === toUpdate.length) {
-        throw new Error(`Failed to update ${updateErrors} service(s)`);
-      }
-
-      return {
-        total: sfServices.length,
-        insertedCount: toInsert.length,
-        updatedCount: toUpdate.length - updateErrors,
-        unchangedCount,
-        conflictCount: conflicts.length,
-        stats: data.stats as
-          | { from_template: number; from_visits: number; no_content: number }
-          | undefined,
-      };
-    },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["services"] });
-      toast.success(
-        `Synced from Salesforce: ${data.insertedCount} new, ${data.updatedCount} updated, ${data.unchangedCount} already up to date` +
-        (data.conflictCount ? `, ${data.conflictCount} skipped (salesforce_id conflict)` : ""),
-        data.stats
-          ? {
-              description:
-                `Notes: ${data.stats.from_template} from Salesforce service templates, ` +
-                `${data.stats.from_visits} derived from past visits, ` +
-                `${data.stats.no_content} with no content in Salesforce.`,
-            }
-          : undefined
-      );
-    },
-
-    onError: (err: Error) => toast.error(err.message),
-  });
 
   const resetForm = () => {
     setName("");
@@ -441,25 +322,11 @@ const Services = () => {
     const updated = [...medicines];
     const row = { ...updated[index] };
     if (field === "product_id") {
-      const prevProd: any = products.find((p: any) => p.id === row.product_id);
-      const prod: any = products.find((p: any) => p.id === value);
+      const prevProd = products.find((p) => p.id === row.product_id);
+      const prod = products.find((p) => p.id === value);
       row.product_id = value;
       row.product_name = prod?.name || "";
-      // Only carry a field forward if it's empty or still matches the
-      // previous medicine's autofilled default - a manually typed value is
-      // never overwritten, but switching medicines should swap in the new
-      // medicine's own defaults instead of leaving the old one's behind.
-      const carryOver = (current: string, prevDefault?: string) =>
-        !current || current === (prevDefault || "");
-      row.frequency = carryOver(row.frequency, prevProd?.default_frequency)
-        ? prod?.default_frequency || ""
-        : row.frequency;
-      row.duration = carryOver(row.duration, prevProd?.default_duration)
-        ? prod?.default_duration || ""
-        : row.duration;
-      row.instructions = carryOver(row.instructions, prevProd?.default_instructions)
-        ? prod?.default_instructions || ""
-        : row.instructions;
+      Object.assign(row, applyMedicineDefaults(row, prod, prevProd));
     } else {
       (row[field] as string) = value;
     }
@@ -504,10 +371,6 @@ const Services = () => {
           <p className="page-subtitle">Manage clinic services, medicines and recommendations</p>
         </div>
         <div className="flex gap-2 w-fit">
-        <Button variant="outline" className="gap-2" onClick={() => syncSalesforceeMutation.mutate()} disabled={syncSalesforceeMutation.isPending || isLoading}>
-          {syncSalesforceeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}
-          {syncSalesforceeMutation.isPending ? "Syncing..." : "Sync from Salesforce"}
-        </Button>
         <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="outline" className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive" disabled={services.length === 0 || deleteAllMutation.isPending}>
@@ -583,17 +446,17 @@ const Services = () => {
                 </div>
                 <div>
                   <Label>Duration (mins)</Label>
-                  <Input type="number" placeholder="45" className="mt-1.5" value={duration} onChange={(e) => setDuration(e.target.value)} />
+                  <Input type="number" placeholder="45" className="mt-1.5" value={numVal(duration)} onChange={(e) => setDuration(e.target.value)} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Price (₹)</Label>
-                  <Input type="number" placeholder="3500" className="mt-1.5" value={price} onChange={(e) => setPrice(e.target.value)} />
+                  <Input type="number" placeholder="3500" className="mt-1.5" value={numVal(price)} onChange={(e) => setPrice(e.target.value)} />
                 </div>
                 <div>
                   <Label>HSN Code</Label>
-                  <Select value={hsnCode} onValueChange={setHsnCode}>
+                  <Select value={numVal(hsnCode)} onValueChange={setHsnCode}>
                     <SelectTrigger className="mt-1.5"><SelectValue placeholder="Select HSN code" /></SelectTrigger>
                     <SelectContent>
                       {hsnTaxes.map((h: any) => (
@@ -741,7 +604,7 @@ const Services = () => {
                     />
                     <div className="grid grid-cols-2 gap-2">
                       <Input placeholder="Usage guideline" value={al.usage_guideline} onChange={(e) => updateAssetLink(i, "usage_guideline", e.target.value)} />
-                      <Input type="number" placeholder="Time taken (mins)" value={al.time_taken} onChange={(e) => updateAssetLink(i, "time_taken", e.target.value)} />
+                      <Input type="number" placeholder="Time taken (mins)" value={numVal(al.time_taken)} onChange={(e) => updateAssetLink(i, "time_taken", e.target.value)} />
                     </div>
                   </div>
                 ))}

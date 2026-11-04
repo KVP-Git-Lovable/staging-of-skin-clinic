@@ -21,6 +21,8 @@ export interface MailchimpConnection {
   consent_confirmed_at: string | null;
   last_ping_at: string | null;
   last_error: string | null;
+  /** Last four characters of the saved API key, for display only. The key itself never leaves the server. */
+  api_key_last4?: string | null;
   auth_mode?: "api_key" | "oauth" | string | null;
   status?: "connected" | "revoked" | string | null;
   connected_by?: string | null;

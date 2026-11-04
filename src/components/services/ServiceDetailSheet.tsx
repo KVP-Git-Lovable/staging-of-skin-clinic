@@ -1,4 +1,8 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
+import { numVal } from "@/lib/numberInput";
+import { applyMedicineDefaults } from "@/lib/medicineDefaults";
+import { usePharmaLookup } from "@/hooks/usePharmaLookup";
 import { Save, Trash2, Plus, Pill, Sparkles, Loader2, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,12 +10,16 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ServicePatientsTab, ServiceReportsTab } from "./ServiceUsagePanel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { supabase } from "@/integrations/supabase/client";
+import { SearchableSelect } from "@/components/shared/SearchableSelect";
+import { FieldHistorySection } from "@/components/shared/FieldHistorySection";
 import { moveToTrash } from "@/lib/trash";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -77,17 +85,7 @@ export function ServiceDetailSheet({ serviceId, onClose }: ServiceDetailSheetPro
     enabled: !!serviceId,
   });
 
-  const { data: products = [] } = useQuery({
-    queryKey: ["pharma-products-lookup"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("pharma_products")
-        .select("id, name, default_frequency, default_duration, default_instructions")
-        .order("name");
-      if (error) throw error;
-      return data;
-    },
-  });
+  const { data: products = [] } = usePharmaLookup();
 
   const { data: allAssets = [] } = useQuery({
     queryKey: ["assets-lookup"],
@@ -258,15 +256,14 @@ export function ServiceDetailSheet({ serviceId, onClose }: ServiceDetailSheetPro
   const addMedicine = () => setMedicines([...medicines, { product_id: "", product_name: "", frequency: "", duration: "", instructions: "" }]);
   const updateMedicine = (i: number, field: keyof MedicineInput, value: string) => {
     const updated = [...medicines];
+    const previousProductId = updated[i].product_id;
+    updated[i] = { ...updated[i] };
     updated[i][field] = value;
     if (field === "product_id") {
-      const prod: any = products.find((p: any) => p.id === value);
+      const prod = products.find((p) => p.id === value);
+      const prevProd = products.find((p) => p.id === previousProductId);
       updated[i].product_name = prod?.name || "";
-      if (prod) {
-        if (!updated[i].frequency) updated[i].frequency = prod.default_frequency || "";
-        if (!updated[i].duration) updated[i].duration = prod.default_duration || "";
-        if (!updated[i].instructions) updated[i].instructions = prod.default_instructions || "";
-      }
+      Object.assign(updated[i], applyMedicineDefaults(updated[i], prod, prevProd));
     }
     setMedicines(updated);
   };
@@ -291,7 +288,20 @@ export function ServiceDetailSheet({ serviceId, onClose }: ServiceDetailSheetPro
         {!service ? (
           <div className="text-center py-8 text-muted-foreground">Loading...</div>
         ) : (
-          <div className="space-y-4 pt-4">
+          <Tabs defaultValue="details" className="w-full pt-4">
+            {/* Details stays the landing tab: opening a service is still, most
+                of the time, about editing it. The other two only mount when
+                chosen, so they cost nothing until someone asks for them. */}
+            <TabsList className="h-auto flex flex-wrap justify-start gap-1">
+              <TabsTrigger value="details">Details</TabsTrigger>
+              <TabsTrigger value="patients">Patients</TabsTrigger>
+              <TabsTrigger value="reports">Reports</TabsTrigger>
+            </TabsList>
+            <TabsContent value="details" className="space-y-4 pt-4">
+            <div className="flex flex-wrap gap-2 border-b pb-4">
+              <Button asChild variant="outline"><Link to={`/knowledge?service=${service.id}`} onClick={handleClose}>Knowledge Articles</Link></Button>
+              <Button asChild variant="outline"><Link to={`/knowledge?service=${service.id}&new=1`} onClick={handleClose}>Generate Clinical Knowledge Article</Link></Button>
+            </div>
             <div>
               <Label>Service Name *</Label>
               <Input className="mt-1.5" value={name} onChange={(e) => setName(e.target.value)} />
@@ -303,17 +313,17 @@ export function ServiceDetailSheet({ serviceId, onClose }: ServiceDetailSheetPro
               </div>
               <div>
                 <Label>Duration (mins)</Label>
-                <Input type="number" className="mt-1.5" value={duration} onChange={(e) => setDuration(e.target.value)} />
+                <Input type="number" className="mt-1.5" value={numVal(duration)} onChange={(e) => setDuration(e.target.value)} />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>Price (₹)</Label>
-                <Input type="number" className="mt-1.5" value={price} onChange={(e) => setPrice(e.target.value)} />
+                <Input type="number" className="mt-1.5" value={numVal(price)} onChange={(e) => setPrice(e.target.value)} />
               </div>
               <div>
                 <Label>HSN Code</Label>
-                <Select value={hsnCode} onValueChange={setHsnCode}>
+                <Select value={numVal(hsnCode)} onValueChange={setHsnCode}>
                   <SelectTrigger className="mt-1.5"><SelectValue placeholder="Select HSN code" /></SelectTrigger>
                   <SelectContent>
                     {hsnTaxes.map((h: any) => (
@@ -384,12 +394,14 @@ export function ServiceDetailSheet({ serviceId, onClose }: ServiceDetailSheetPro
                     <span className="text-xs font-medium text-muted-foreground">Medicine {i + 1}</span>
                     <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => removeMedicine(i)}>Remove</Button>
                   </div>
-                  <Select value={med.product_id} onValueChange={(v) => updateMedicine(i, "product_id", v)}>
-                    <SelectTrigger><SelectValue placeholder="Select medicine" /></SelectTrigger>
-                    <SelectContent>
-                      {products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <SearchableSelect
+                    value={med.product_id}
+                    onChange={(v) => updateMedicine(i, "product_id", v)}
+                    options={(products as { id: string; name: string }[]).map((p) => ({ id: p.id, name: p.name }))}
+                    placeholder="Select medicine"
+                    searchPlaceholder="Search medicine..."
+                    emptyText="No medicine found."
+                  />
                   <div className="grid grid-cols-3 gap-2">
                     <Input placeholder="Frequency" value={med.frequency} onChange={(e) => updateMedicine(i, "frequency", e.target.value)} />
                     <Input placeholder="Duration" value={med.duration} onChange={(e) => updateMedicine(i, "duration", e.target.value)} />
@@ -423,7 +435,7 @@ export function ServiceDetailSheet({ serviceId, onClose }: ServiceDetailSheetPro
                   </Select>
                   <div className="grid grid-cols-2 gap-2">
                     <Input placeholder="Usage guideline" value={al.usage_guideline} onChange={(e) => updateAssetLink(i, "usage_guideline", e.target.value)} />
-                    <Input type="number" placeholder="Time taken (mins)" value={al.time_taken} onChange={(e) => updateAssetLink(i, "time_taken", e.target.value)} />
+                    <Input type="number" placeholder="Time taken (mins)" value={numVal(al.time_taken)} onChange={(e) => updateAssetLink(i, "time_taken", e.target.value)} />
                   </div>
                 </div>
               ))}
@@ -448,7 +460,24 @@ export function ServiceDetailSheet({ serviceId, onClose }: ServiceDetailSheetPro
                 </AlertDialogContent>
               </AlertDialog>
             </div>
-          </div>
+
+            {/* The same change log the appointment and invoice screens carry.
+                Recording has always worked here - log_field_history is a
+                database trigger on services, switched on from Admin > History
+                Tracking like any other object - but nothing on this sheet ever
+                showed it, so turning it on appeared to do nothing. The panel
+                reads whichever fields the admin chose to track. */}
+            <FieldHistorySection objectType="services" recordId={serviceId} className="mt-4" />
+            </TabsContent>
+
+            <TabsContent value="patients">
+              <ServicePatientsTab serviceId={service.id} serviceName={service.name} />
+            </TabsContent>
+
+            <TabsContent value="reports">
+              <ServiceReportsTab serviceId={service.id} serviceName={service.name} />
+            </TabsContent>
+          </Tabs>
         )}
       </SheetContent>
     </Sheet>

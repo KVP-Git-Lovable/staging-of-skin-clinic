@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { numVal } from "@/lib/numberInput";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -93,7 +94,7 @@ export default function CurrencyBilling() {
               type="number"
               min={0}
               max={6}
-              value={form.decimal_digits}
+              value={numVal(form.decimal_digits)}
               onChange={(e) => set({ decimal_digits: Number(e.target.value) })}
               className="max-w-[120px]"
             />

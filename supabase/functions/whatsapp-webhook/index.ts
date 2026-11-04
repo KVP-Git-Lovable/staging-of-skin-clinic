@@ -60,7 +60,7 @@ async function executeTool(sb: any, toolName: string, args: any, patientId: stri
       return JSON.stringify({ success: true, appointment: { id: appt.id, date: new Date(appt.start_time).toLocaleDateString("en-IN"), time: new Date(appt.start_time).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }), service } });
     }
     case "list_patient_appointments": {
-      const { data } = await sb.from("appointments").select("id, service, start_time, status, staff(first_name, last_name)").eq("patient_id", patientId).gte("start_time", new Date().toISOString()).neq("status", "Cancelled").order("start_time", { ascending: true }).limit(10);
+      const { data } = await sb.from("appointments").select("id, service, start_time, status, staff:staff!appointments_staff_id_fkey(first_name, last_name)").eq("patient_id", patientId).gte("start_time", new Date().toISOString()).neq("status", "Cancelled").order("start_time", { ascending: true }).limit(10);
       return JSON.stringify({ upcoming_appointments: (data || []).map((a: any) => ({ id: a.id, service: a.service, date: new Date(a.start_time).toLocaleDateString("en-IN"), time: new Date(a.start_time).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }), status: a.status, doctor: a.staff ? `Dr. ${a.staff.first_name} ${a.staff.last_name}` : "Not assigned" })) });
     }
     case "cancel_appointment": {
@@ -180,11 +180,22 @@ const GREETING_RE = /^(hi+|hey+|hello+|helo+|yo|hola|namaste|namaskar|good\s*(mo
 const CLINIC_CALL_MESSAGE =
   "To modify or cancel your booking, please call us on +91 96201 23030 / +91 63607 53030.\nThe Skin Clinic, Mangalore";
 
-// Quick-reply buttons from the appointment confirmation template
+// Quick-reply buttons from the appointment confirmation template.
+//
+// Both wordings are listed. The template approved on 14 October 2026 labels its
+// buttons CONFIRM / RESCHEDULE / CANCEL; the one before it said "Confirm" /
+// "I need to modify" / "I want to cancel". Twilio cannot edit an approved
+// template, so every reword is a new one - and a patient who was sent the old
+// template yesterday can still tap its buttons today. Dropping a label here
+// would not error, it would quietly answer them with the wrong message.
+//
+// "reschedule" reports as "modify" because that is what the clinic does with
+// it: the reply asks them to call, and nothing downstream distinguishes the two.
 function detectButtonIntent(text: string): "modify" | "cancel" | "confirm" | null {
   const t = (text || "").toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
   if (!t) return null;
   if (t === "i need to modify" || t === "need to modify" || t === "modify") return "modify";
+  if (t === "reschedule" || t === "i need to reschedule" || t === "want to reschedule") return "modify";
   if (t === "i want to cancel" || t === "want to cancel" || t === "cancel") return "cancel";
   if (t === "confirm" || t === "i confirm" || t === "yes confirm") return "confirm";
   return null;
@@ -219,6 +230,24 @@ async function processMessage(opts: { fromRaw: string; userBody: string; message
         .limit(20),
     ]);
     log("parallel_loaded");
+
+    // The bot is switched off. Confirm keeps its acknowledgement; every other
+    // button or free-text message receives only the clinic call instruction.
+    {
+      const buttonIntent = detectButtonIntent(buttonText || "") || detectButtonIntent(userBody);
+      const reply = buttonIntent === "confirm"
+        ? patient
+          ? `Thanks for confirming, ${patient.first_name}! 😊 See you soon.\nThe Skin Clinic, Mangalore`
+          : "Thanks for confirming! 😊 See you soon.\nThe Skin Clinic, Mangalore"
+        : CLINIC_CALL_MESSAGE;
+      const sid = await sendWhatsAppReply(phone, reply);
+      await sb.from("whatsapp_conversations").insert({
+        patient_id: patient?.id ?? null, phone, direction: "outbound", role: "assistant", content: reply, message_sid: sid,
+      });
+      if (patient) sb.from("whatsapp_conversations").update({ patient_id: patient.id }).eq("message_sid", messageSid).is("patient_id", null).then(() => {});
+      log(buttonIntent === "confirm" ? "done_button_confirm" : "done_fixed_reply");
+      return;
+    }
 
     if (!patient) {
       const replyText = `Hi! 👋 I couldn't find a patient profile for this WhatsApp number (${phone}). Please visit the clinic or contact us so we can register you. Once registered, I'll be able to help you book appointments, order products, and track orders right here on WhatsApp.`;
@@ -283,8 +312,9 @@ async function processMessage(opts: { fromRaw: string; userBody: string; message
         .neq("status", "Cancelled")
         .order("start_time", { ascending: true })
         .limit(5);
-      if (upcoming && upcoming.length > 0) {
-        upcomingContext = upcoming
+      const upcomingRows: any[] = (upcoming as any[] | null) ?? [];
+      if (upcomingRows.length > 0) {
+        upcomingContext = upcomingRows
           .map((a: any) => {
             const d = new Date(a.start_time);
             const when = d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: true });

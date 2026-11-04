@@ -1,6 +1,27 @@
-import { formatMoney } from "@/lib/currency";
+import { formatMoney, formatMoneyPrecise } from "@/lib/currency";
+import { edgeFunctionErrorMessage } from "@/lib/edgeFunctionError";
+import { waitForInvoicePdf } from "@/lib/invoicePdfWait";
+import { paymentModeForSplits, splitProblem, splitTotal, splitsFromInvoice } from "@/lib/paymentSplits";
+import { visitLabel } from "@/lib/visitLabel";
+import { useUrlPanel } from "@/hooks/useUrlPanel";
+import { viewDatePreset } from "@/lib/viewDatePreset";
+import { dateRangeFor } from "@/lib/listViews/engine";
+import { seedInvoiceLines } from "@/lib/invoiceEditSeed";
+import type { Json } from "@/integrations/supabase/types";
+import { stockDelta } from "@/lib/pharmaStockDelta";
+import { readBillingPrefill } from "@/lib/billingPrefill";
+import { invoiceLineChanges } from "@/lib/invoiceLineChanges";
+import { pickAppointmentForInvoice, doctorForInvoice, type LinkableAppointment } from "@/lib/appointmentForInvoice";
+import { resolveInvoiceAppointmentId } from "@/lib/invoiceAppointmentLink";
+import { paymentModeLabel } from "@/lib/paymentModes";
+import { renderPdfToImages } from "@/lib/renderPdf";
+import { PdfPreviewDialog } from "@/components/shared/PdfPreviewDialog";
+import { useAuth } from "@/hooks/useAuth";
+import { displayDate } from "@/lib/dateInput";
+import { numVal } from "@/lib/numberInput";
+import { assertWrote, NOT_YOURS_MESSAGE } from "@/lib/rowAccess";
 import { useStackedTable } from "@/hooks/useStackedTable";
-import { useState, useMemo, useRef, useEffect, lazy, Suspense } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback, lazy, Suspense } from "react";
 import { useSearchParams } from "react-router-dom";
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval, addMonths, isSameDay } from "date-fns";
 import SearchableSelect from "@/components/shared/SearchableSelect";
@@ -17,6 +38,9 @@ import { ALL_VIEW_ID, getKanbanConfig, setKanbanConfig } from "@/lib/listViews/s
 import { BILLING_VIEW_FIELDS, DEFAULT_BILLING_VIEW_COLUMNS } from "@/lib/listViews/billingFields";
 
 // Lazy: pulls in recharts, kept out of the main bundle until a user actually opens Charts.
+/** The ways the clinic takes money. "Split" is derived, never chosen here. */
+const PAYMENT_MODES = ["Cash", "Card", "UPI", "Cheque", "Bank Transfer"] as const;
+
 const ViewChartsPanel = lazy(() => import("@/components/listViews/ViewChartsPanel"));
 import { AppointmentDetailSheet } from "@/components/appointments/AppointmentDetailSheet";
 import { Input } from "@/components/ui/input";
@@ -27,7 +51,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { motion } from "framer-motion";
 import { StatCard } from "@/components/dashboard/StatCard";
-import { SalesforceSyncButton } from "@/components/salesforce/SalesforceSyncButton";
 import {
   Dialog,
   DialogContent,
@@ -61,20 +84,26 @@ import {
 } from "@/components/ui/sheet";
 import {
   Popover,
+  PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
+import { CalendarPopover } from "@/components/shared/CalendarPopover";
 import { supabase } from "@/integrations/supabase/client";
+import { hsnRateCache, invoiceLineRows, displayServices } from "@/lib/invoiceLines";
 import { SystemRecordSection } from "@/components/shared/SystemRecordSection";
 import { RecordOwnerField } from "@/components/shared/RecordOwnerField";
 import { FieldHistorySection } from "@/components/shared/FieldHistorySection";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { BILLED_BY_OPTIONS, billedByLabel } from "@/lib/billedBy";
+import { invoiceCanBeSaved, invoiceFormHasContent } from "@/lib/invoiceFormState";
+import { allocateInvoiceNumbers } from "@/lib/invoiceNumber";
 import { cn } from "@/lib/utils";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { fetchAll } from "@/lib/supabasePaginate";
-import { fetchInvoicesPage, fetchInvoicesBounded, fetchInvoicesSearch, fetchInvoiceStats, fetchInvoiceById } from "@/lib/invoicesPage";
+import { fetchInvoicesPage, fetchInvoicesInRange, fetchInvoicesSearch, fetchInvoiceStats, fetchInvoiceById } from "@/lib/invoicesPage";
+import { activeHsnCodes, hsnOptions as buildHsnOptions, liveHsn } from "@/lib/hsn";
 import { withDrPrefix } from "@/lib/staffName";
 import { PatientCombobox } from "@/components/patients/PatientCombobox";
 import { StaffCombobox } from "@/components/shared/StaffCombobox";
@@ -97,66 +126,13 @@ const money = (n: number) =>
 const rateLabel = (n: number) =>
   `${Math.round((Number(n) || 0) * 100) / 100}`;
 /** Number input helper: 0 shows as an empty field with a "0" watermark. */
-const numVal = (n: number | undefined | null) => (n ? String(n) : "");
-
-/** Active HSN GST rates (total %), cached so the shared helpers below can resolve
- *  a line's GST when the stored snapshot carries none. */
-const hsnRateCache: Record<string, number> = {};
-
-/** Normalised line-item rows (rate, tax, total) shared by the invoice view and the PDF. */
-export interface InvoiceLineRow {
-  name: string; hsn: string; qty: number; price: number; amount: number; gst: number; tax: number; total: number;
-}
-const invoiceLineRows = (inv: any): InvoiceLineRow[] => {
-  const invoiceTax = Number(inv?.cgst_amount || 0) + Number(inv?.sgst_amount || 0) + Number(inv?.igst_amount || 0)
-    || Number(inv?.tax_amount || 0);
-  // Salesforce-imported invoices (and any other invoice saved without a
-  // line_items snapshot) only carry an invoice-level total/tax, not a
-  // per-service price - synthesize one row per named service so Rate/Amount/
-  // Tax don't render as a hollow 0. total_amount is tax-INCLUSIVE (it's what
-  // "Grand Total"/paid_amount already read directly), so the pre-tax base
-  // must be derived algebraically from the GST rate (base * (1+rate/100) =
-  // total_amount) rather than by subtracting a separately-tracked tax
-  // figure - otherwise Amount+Tax ends up adding a fresh tax on top of a
-  // base that was never reduced by it, inflating the line-item Total past
-  // the invoice's actual Grand Total.
-  const raw: any[] = Array.isArray(inv?.line_items) && inv.line_items.length > 0
-    ? inv.line_items
-    : (() => {
-        const names: string[] = displayServices(inv);
-        const gstRate = Number(inv?.tax_rate) || 0;
-        const totalAmt = Number(inv?.total_amount || 0);
-        const base = gstRate > 0 ? totalAmt / (1 + gstRate / 100) : Math.max(totalAmt - invoiceTax, 0);
-        return names.map((s: string) => ({ name: s, qty: 1, price: base / names.length, hsn: "", gst: gstRate }));
-      })();
-  const rows = raw.map((it: any) => {
-    const qty = Number(it.qty) || 1;
-    const price = Number(it.price) || 0;
-    const amount = qty * price;
-    const hsn = it.hsn || "";
-    // Fall back to the Tax Master rate for this HSN when the line has no GST snapshot.
-    const gst = Number(it.gst) || hsnRateCache[String(hsn).trim()] || 0;
-    // A saved line_items snapshot can itself carry the same literal
-    // "Service" placeholder displayServices() guards against (e.g. a
-    // Salesforce import saved before that fix existed) - resolve it here
-    // too, not just when synthesizing fallback rows from scratch.
-    const rawName = it.name || "";
-    const name = rawName && rawName !== "Service" ? rawName : cleanApptService(inv?.appointments?.service) || "Service";
-    return { name, hsn, qty, price, amount, gst, tax: (amount * gst) / 100, total: 0 };
-  });
-
-  const taxSum = rows.reduce((s, r) => s + r.tax, 0);
-  const amountSum = rows.reduce((s, r) => s + r.amount, 0);
-  // Fall back to the invoice-level tax when the lines carry no GST snapshot.
-  if (taxSum === 0 && invoiceTax > 0 && amountSum > 0) {
-    rows.forEach((r) => { r.tax = (r.amount / amountSum) * invoiceTax; });
-  }
-  rows.forEach((r) => { r.total = r.amount + r.tax; });
-  return rows;
-};
 
 // ─── PDF Generation ───────────────────────────────
-const generateInvoicePDF = (inv: any) => {
+// Returns the printable invoice as a document rather than putting it
+// anywhere. openInvoicePDF shows it in the preview dialog when the builder
+// cannot be reached; handing back a string keeps it free of any assumption
+// about tabs, which is what kept failing.
+const invoicePrintableHtml = (inv: any): string => {
   const date = new Date(inv.created_at).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" });
   const balance = Number(inv.total_amount) - Number(inv.paid_amount);
   const drName = inv.appointments?.doctors ? withDrPrefix(`${inv.appointments.doctors.first_name || ""} ${inv.appointments.doctors.last_name || ""}`) : "";
@@ -256,12 +232,7 @@ const generateInvoicePDF = (inv: any) => {
 </body>
 </html>`;
 
-  const printWindow = window.open("", "_blank");
-  if (printWindow) {
-    printWindow.document.write(html);
-    printWindow.document.close();
-    setTimeout(() => printWindow.print(), 300);
-  }
+  return html;
 };
 
 // ─── Types ────────────────────────────────────────
@@ -308,23 +279,6 @@ const getPatientName = (inv: any, patientById?: Map<string, any>) => {
   return "";
 };
 
-// Salesforce's appointment "service" field is really a free-text clinical
-// note, not a clean procedure name, and often carries a trailing "last
-// session on <date>" annotation - strip that when the field is used as a
-// display fallback (never touches the stored data itself).
-const cleanApptService = (raw: string | null | undefined): string =>
-  String(raw || "").replace(/\s*last\s+session\s+on\s+\d{1,2}\/\d{1,2}\/\d{2,4}\s*$/i, "").trim();
-
-/** Older Salesforce imports stored a literal ["Service"] placeholder (not an
- *  empty array) when there was no real per-procedure name - prefer the
- *  linked appointment's actual service name over that placeholder. */
-const displayServices = (inv: any): string[] => {
-  const services: string[] = inv?.services || [];
-  const isPlaceholder = services.length === 1 && services[0] === "Service";
-  return services.length && !isPlaceholder ? services : [cleanApptService(inv?.appointments?.service) || "Service"];
-};
-
-
 const BILLING_FIELDS = [
   { value: "invoice_number", label: "Invoice #" },
   { value: "patient_name", label: "Patient" },
@@ -340,6 +294,11 @@ const DEFAULT_BILLING_FIELDS = ["invoice_number", "patient_name", "total_amount"
 const PAGE_SIZE = 50;
 
 const Billing = () => {
+  // A doctor only sees their own rows, so a doctor filter offers choices that
+  // change nothing and implies data they cannot reach. Same scope the database
+  // enforces, rather than a role-name test here.
+  const { dataScope } = useAuth();
+  const ownScopeOnly = dataScope === "own";
   const invoiceTableRef = useStackedTable<HTMLTableElement>();
   const queryClient = useQueryClient();
   const invalidateInvoices = () => {
@@ -347,11 +306,15 @@ const Billing = () => {
     queryClient.invalidateQueries({ queryKey: ["invoices-bounded"] });
     queryClient.invalidateQueries({ queryKey: ["invoices-search"] });
     queryClient.invalidateQueries({ queryKey: ["invoice-stats"] });
+    // The appointments list's Bill Amount / Payment Mode columns. Nothing
+    // invalidated this, so a bill taken here only reached that screen when its
+    // query happened to refetch on remount or window focus.
+    queryClient.invalidateQueries({ queryKey: ["invoices-for-appointments"] });
   };
   const [searchParams, setSearchParams] = useSearchParams();
 
   const {
-    allViews, userId: viewsUserId, activeView, selectView, saveView, saveCharts, deleteView, pinDefault, updateStandardColumns,
+    allViews, userId: viewsUserId, activeView, selectView, saveView, saveCharts, deleteView, pinDefault, unpinDefault, updateStandardColumns,
   } = useModuleListViews("billing", "Invoices", DEFAULT_BILLING_VIEW_COLUMNS);
   const [viewEditorOpen, setViewEditorOpen] = useState(false);
   const [editingView, setEditingView] = useState<ListView | null>(null);
@@ -364,29 +327,162 @@ const Billing = () => {
   const [kanban, setKanban] = useState(() => getKanbanConfig("billing", ALL_VIEW_ID));
 
   // Regenerate the official invoice PDF (same template as the WhatsApp copy) and open it.
-  const openInvoicePDF = async (inv: any) => {
+  // The clinic's own invoice, from generate-invoice-pdf, shown in the page.
+  //
+  // It is deliberately THIS document and not a local rendering. I briefly
+  // made the preview draw from invoicePrintableHtml instead, because the
+  // clinic's browser blocks the backend host - ERR_BLOCKED_BY_CLIENT, an
+  // extension - and a locally drawn page needs no request. But that put a
+  // different-looking invoice in front of staff, which is worse than one
+  // that will not display: the invoice is the clinic's document and its
+  // layout is not ours to swap out. The printable copy is a fallback for
+  // when the real one cannot be built at all, and says so when it appears.
+  //
+  // Download is the dependable route while that extension is in place: it
+  // fetches the bytes by XHR - which the same host serves happily, being how
+  // this page loads at all - and saves them through <a download>. Saving is
+  // not navigating, and navigating is what gets blocked.
+  const [pdfOpen, setPdfOpen] = useState(false);
+  const [pdfPages, setPdfPages] = useState<string[] | null>(null);
+  const pdfBytes = useRef<ArrayBuffer | null>(null);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfHtml, setPdfHtml] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [pdfNotice, setPdfNotice] = useState<string | null>(null);
+  const [pdfDownloading, setPdfDownloading] = useState(false);
+  // Only what the dialog needs: the number for its title, the id to download with.
+  const [pdfInvoice, setPdfInvoice] = useState<{ id: string; invoice_number?: string | null } | null>(null);
+
+  const openInvoicePDF = async (inv: { id: string; invoice_number?: string | null }) => {
     if (!inv?.id) {
       toast.error("Invoice id missing");
       return;
     }
+    setPdfInvoice(inv);
+    setPdfUrl(null);
+    setPdfPages(null);
+    pdfBytes.current = null;
+    setPdfHtml(null);
+    setPdfError(null);
+    setPdfNotice(null);
+    setPdfOpen(true);
+    // Everything the generator writes from here on belongs to this print.
+    const askedAt = new Date();
+    try {
+      let url: string | undefined;
+      let reason: string | null = null;
+      try {
+        const { data, error } = await supabase.functions.invoke("generate-invoice-pdf", {
+          body: { invoiceId: inv.id, wait: true },
+        });
+        if (error) {
+          throw new Error(
+            await edgeFunctionErrorMessage(error, "The invoice PDF could not be prepared."),
+          );
+        }
+        url = (data as { url?: string } | null)?.url;
+        if (!url) throw new Error("The invoice PDF was prepared but its address came back empty.");
+      } catch (callFailed) {
+        // The generator is slow under load and usually finishes anyway - on
+        // 3 October one invoice's PDF landed 82 minutes after the bill. Rather
+        // than drop straight to the fallback template, wait a little and take
+        // the document it writes. Only one written after we asked is accepted,
+        // so an older PDF from before an edit can never stand in.
+        reason = callFailed instanceof Error ? callFailed.message : String(callFailed);
+        url =
+          (await waitForInvoicePdf({
+            askedAt,
+            read: async () => {
+              const { data } = await supabase
+                .from("invoices")
+                .select("pdf_url, updated_at")
+                .eq("id", inv.id)
+                .maybeSingle();
+              return data ?? null;
+            },
+          })) ?? undefined;
+        if (!url) throw new Error(reason);
+      }
+      const stamped = `${url}?t=${Date.now()}`;
+      setPdfUrl(stamped);
+      // Fetched as bytes and drawn, rather than handed to the browser to
+      // open. The bytes are kept for Download so it needs no second trip.
+      const res = await fetch(stamped);
+      if (!res.ok) throw new Error(`The invoice PDF could not be fetched (${res.status})`);
+      const bytes = await res.arrayBuffer();
+      pdfBytes.current = bytes;
+      setPdfPages(await renderPdfToImages(bytes));
+    } catch (e) {
+      console.error(e);
+      // Only when the real invoice cannot be built or drawn. This template is
+      // not the clinic's invoice and must never stand in for it silently
+      // while the proper one is available.
+      //
+      // The reason is shown, not only logged. It used to go to the console and
+      // a toast that named nothing, so every report of this was a fresh guess
+      // at which of the four steps had failed.
+      const reason = e instanceof Error ? e.message : String(e);
+      // A notice, not an error: the fallback copy is still shown and still
+      // prints, because there is a patient at the desk waiting for a bill.
+      setPdfNotice(`${reason} Showing the plain printable copy instead.`);
+      toast.message("The invoice PDF could not be shown - showing the plain printable copy");
+      setPdfHtml(invoicePrintableHtml(inv));
+    }
+  };
+
+  const saveBytes = (bytes: ArrayBuffer, filename: string) => {
+    const objUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objUrl);
+  };
+
+  const downloadInvoicePDF = async () => {
+    const inv = pdfInvoice;
+    if (!inv?.id) return;
+    const filename = `${inv.invoice_number || "invoice"}.pdf`;
+    // Already fetched to draw the preview - no need to ask again.
+    if (pdfBytes.current) {
+      saveBytes(pdfBytes.current, filename);
+      toast.success("Invoice downloaded");
+      return;
+    }
+    setPdfDownloading(true);
     const t = toast.loading("Generating invoice PDF…");
     try {
       const { data, error } = await supabase.functions.invoke("generate-invoice-pdf", {
         body: { invoiceId: inv.id, wait: true },
+        timeout: 45000,
       });
-      if (error) throw error;
+      if (error) {
+        throw new Error(
+          await edgeFunctionErrorMessage(error, "The invoice PDF could not be prepared."),
+        );
+      }
       const url = (data as any)?.url;
       if (!url) throw new Error("PDF url missing");
+      // Fetched, not linked to: a cross-origin href would make the browser
+      // navigate to the file, which is the blocked path.
+      const res = await fetch(`${url}?t=${Date.now()}`);
+      if (!res.ok) throw new Error(`The PDF could not be fetched (${res.status})`);
+      saveBytes(await res.arrayBuffer(), filename);
       toast.dismiss(t);
-      window.open(`${url}?t=${Date.now()}`, "_blank");
+      toast.success("Invoice downloaded");
     } catch (e: any) {
       console.error(e);
       toast.dismiss(t);
-      toast.message("Falling back to the printable invoice");
-      generateInvoicePDF(inv);
+      toast.error(
+        e?.message ||
+          "The PDF could not be downloaded. The invoice on screen can still be printed.",
+      );
+    } finally {
+      setPdfDownloading(false);
     }
   };
-
 
   const [open, setOpen] = useState(false);
   // Seeded from ?q= so global search can hand a term to this list view
@@ -394,11 +490,16 @@ const Billing = () => {
   const [paymentInv, setPaymentInv] = useState<any>(null);
   const [addPaymentAmount, setAddPaymentAmount] = useState(0);
   const [addPaymentMode, setAddPaymentMode] = useState("Cash");
-  const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
+  // In the address, so Back closes the panel instead of leaving Billing.
+  const { openId: selectedAppointmentId, open: openAppointment, close: closeAppointment } = useUrlPanel("appointment");
 
   // View/Edit Sheet
   const [viewInvoice, setViewInvoice] = useState<any>(null);
   const [isEditing, setIsEditing] = useState(false);
+  // What the invoice held when Edit was opened: the lines as stored, to tell
+  // whether they were changed at all, and the product quantities, to put the
+  // difference back on the shelf.
+  const editedLinesOriginal = useRef<{ lineItems: string; products: { inventory_id: string; quantity: number; uom_factor: number }[] }>({ lineItems: "[]", products: [] });
   const [editData, setEditData] = useState<any>({});
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
@@ -422,10 +523,14 @@ const Billing = () => {
   // Form state
   const [patientId, setPatientId] = useState("");
   const [doctorId, setDoctorId] = useState("");
-  const [serviceInputs, setServiceInputs] = useState<{ name: string; price: number; hsn: string; gst: number; service_id?: string; doctor_fee?: boolean }[]>([{ name: "", price: 0, hsn: "", gst: 0 }]);
+  const [serviceInputs, setServiceInputs] = useState<{ name: string; price: number; hsn: string; gst: number; service_id?: string; material_percent?: string }[]>([{ name: "", price: 0, hsn: "", gst: 0 }]);
   const [paidAmount, setPaidAmount] = useState(0);
   const [paymentType, setPaymentType] = useState("One-time");
   const [paymentMode, setPaymentMode] = useState("Cash");
+  // Which of the three front desk staff raised the bill. Internal - see
+  // src/lib/billedBy.ts. Empty until somebody picks, so a bill nobody stamped
+  // says so rather than naming whoever happens to be first in the list.
+  const [billedBy, setBilledBy] = useState("");
   const [notes, setNotes] = useState("");
   // Split payment (Create Invoice — One-time only). Empty array = single mode flow.
   const [splits, setSplits] = useState<{ mode: string; amount: number }[]>([]);
@@ -464,7 +569,6 @@ const Billing = () => {
   const [sourceAppointmentId, setSourceAppointmentId] = useState<string | null>(null);
   const [serviceSearchOpen, setServiceSearchOpen] = useState<number | null>(null);
   const [invoiceDate, setInvoiceDate] = useState<Date>(new Date());
-  const [invoiceSeq, setInvoiceSeq] = useState<string>(() => Date.now().toString().slice(-6));
 
   const handleRecurringCountChange = (count: number) => {
     // 0 is allowed so the field can sit empty (placeholder) until the user types.
@@ -528,7 +632,41 @@ const Billing = () => {
   const hasActiveFilters = !!(filterDateFrom || filterDateTo) || needsServerSearch;
   const needsClientRows = !isAllView || hasActiveFilters || display === "kanban";
 
+  /**
+   * The date window the active saved view itself implies, pushed to the server.
+   *
+   * "Today's Billing" was fetching the WHOLE invoices table - fetchAll pages at
+   * 1,000 rows, so 46,938 invoices meant about 47 sequential round trips - and
+   * only then keeping today's dozen in memory. That is why it took so long, and
+   * why it showed 0: until all of those requests finish the query has no data,
+   * so the table honestly reports nothing found, and any one of them failing
+   * leaves it empty.
+   *
+   * The view's own condition is a date range the database can apply, so it goes
+   * to the database. A view whose window cannot be expressed exactly still
+   * fetches everything and filters in memory, which is slow but never wrong.
+   */
+  const viewDateRange = (() => {
+    const preset = viewDatePreset(activeView?.filters, "created_at");
+    if (!preset || preset.preset === "all") return null;
+    if (preset.preset === "specific") {
+      return preset.specificDate ? dateRangeFor("on", preset.specificDate.toISOString()) : null;
+    }
+    if (preset.preset === "range") {
+      return preset.rangeFrom && preset.rangeTo
+        ? dateRangeFor("between", preset.rangeFrom.toISOString(), preset.rangeTo.toISOString())
+        : null;
+    }
+    return dateRangeFor(preset.preset);
+  })();
+
+  // What the user picked wins over what the view implies, so narrowing a view
+  // by hand still works.
+  const fetchDateFrom = filterDateFrom ?? viewDateRange?.from;
+  const fetchDateTo = filterDateTo ?? viewDateRange?.to;
+
   const {
+    isLoading: pagedLoading,
     data: pagedData,
     error: pagedError,
   } = useQuery({
@@ -538,15 +676,17 @@ const Billing = () => {
   });
 
   const {
+    isLoading: boundedLoading,
     data: boundedInvoices = [],
     error: boundedError,
   } = useQuery({
-    queryKey: ["invoices-bounded", filterDateFrom, filterDateTo],
-    queryFn: () => fetchInvoicesBounded({ dateFrom: filterDateFrom, dateTo: filterDateTo, limit: 3000 }),
+    queryKey: ["invoices-bounded", fetchDateFrom, fetchDateTo],
+    queryFn: () => fetchInvoicesInRange({ dateFrom: fetchDateFrom, dateTo: fetchDateTo }),
     enabled: needsClientRows && !needsServerSearch,
   });
 
   const {
+    isLoading: searchLoading,
     data: searchedInvoices = [],
     error: searchError,
   } = useQuery({
@@ -564,6 +704,11 @@ const Billing = () => {
   });
 
   const invoices: any[] = needsServerSearch ? searchedInvoices : needsClientRows ? boundedInvoices : pagedData?.rows ?? [];
+  // Which query is feeding the table decides whether it is still loading. An
+  // empty result and a result that has not arrived look identical in the data,
+  // and the table was reporting both as "No invoices found" - so a slow view
+  // read as an empty day.
+  const invoicesLoading = needsServerSearch ? searchLoading : needsClientRows ? boundedLoading : pagedLoading;
   const invoicesError = needsServerSearch ? searchError : needsClientRows ? boundedError : pagedError;
 
   useEffect(() => {
@@ -573,23 +718,83 @@ const Billing = () => {
     }
   }, [invoicesError]);
 
-  // Appointments belonging to the invoice's patient — used to re-link an
-  // installment to a different visit of the SAME patient.
+  // Appointments belonging to a patient — used to re-link an installment to a
+  // different visit of the SAME patient when editing, and to attach a bill
+  // raised from this page to the visit it pays for when creating.
+  const fetchPatientAppointments = async (id: string | null) => {
+    if (!id) return [];
+    const { data, error } = await supabase
+      .from("appointments")
+      // staff_id is what separates two visits on one day when the bill has to
+      // choose between them - see pickAppointmentForInvoice.
+      // reason_for_consultation too: it is the "Investigation" the appointments
+      // list labels a visit by, and every appointment booked in this app leaves
+      // `service` empty - see visitLabel.ts.
+      .select("id, service, reason_for_consultation, start_time, status, staff_id")
+      .eq("patient_id", id)
+      .order("start_time", { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    return data || [];
+  };
+
+  /** The picker needs the display fields as well as what the guess reads. */
+  type PickerAppointment = LinkableAppointment & {
+    service?: string | null;
+    reason_for_consultation?: string | null;
+    status?: string | null;
+  };
+
   const linkPatientId = (viewInvoice as any)?.patient_id || null;
   const { data: patientAppointments = [] } = useQuery({
     queryKey: ["invoice-patient-appointments", linkPatientId],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("appointments")
-        .select("id, service, start_time, status")
-        .eq("patient_id", linkPatientId)
-        .order("start_time", { ascending: false })
-        .limit(200);
-      if (error) throw error;
-      return data || [];
-    },
+    queryFn: () => fetchPatientAppointments(linkPatientId),
     enabled: !!linkPatientId,
   });
+
+  // The same list for whoever is selected in the create form.
+  const { data: createPatientAppointments = [] } = useQuery({
+    queryKey: ["invoice-patient-appointments", patientId],
+    queryFn: () => fetchPatientAppointments(patientId),
+    enabled: !!patientId,
+  });
+
+  // A bill raised from this page used to save with appointment_id null, so the
+  // appointments list - which looks bills up by that column alone - reported
+  // the visit as unbilled. Guess the visit when the guess is unambiguous, and
+  // show it in the form so staff can correct it before saving.
+  const suggestedAppointmentId = useMemo(
+    () =>
+      pickAppointmentForInvoice(createPatientAppointments as LinkableAppointment[], {
+        invoiceDate,
+        doctorId,
+      }),
+    [createPatientAppointments, invoiceDate, doctorId],
+  );
+
+  // undefined = nobody has touched the picker, so follow the suggestion;
+  // "" = deliberately unlinked. Keeping the two apart is what lets the
+  // suggestion update as the patient or date changes without overriding a
+  // choice staff already made.
+  const [linkAppointmentChoice, setLinkAppointmentChoice] = useState<string | undefined>(undefined);
+
+  const createApptIds = useMemo(
+    () => new Set((createPatientAppointments as PickerAppointment[]).map((a) => a.id)),
+    [createPatientAppointments],
+  );
+
+  // A chosen id only counts while it still belongs to the patient on the form.
+  // Switching the patient after picking would otherwise bill this patient's
+  // money against someone else's appointment, and the list would show it there.
+  // An explicit "" (Not linked) is a choice and survives.
+  const choiceStillValid =
+    linkAppointmentChoice !== undefined &&
+    (linkAppointmentChoice === "" || createApptIds.has(linkAppointmentChoice));
+  const effectiveLinkAppointmentId = choiceStillValid
+    ? (linkAppointmentChoice as string)
+    // sourceAppointmentId covers the moment before the patient's appointments
+    // have loaded, when a prefilled choice cannot be confirmed yet.
+    : suggestedAppointmentId || sourceAppointmentId || "";
 
   const { data: patients = [] } = useQuery({
     queryKey: ["patients-list"],
@@ -710,7 +915,11 @@ const Billing = () => {
   const viewOptionsFor = (source?: string): PickOption[] => {
     switch (source) {
       case "status": return ["Paid", "Partial", "Pending"].map((s) => ({ value: s, label: s }));
-      case "payment_mode": return ["Cash", "Card", "Online Transfer", "Cheque"].map((s) => ({ value: s, label: s }));
+      // The modes Billing actually writes, plus "Split" for a bill taken across
+      // two of them. The old list offered "Online Transfer", which nothing
+      // stores, and omitted UPI - most of the clinic's takings - so filtering a
+      // saved view by payment mode could not find them.
+      case "payment_mode": return ["Cash", "Card", "UPI", "Bank Transfer", "Cheque", "Split"].map((s) => ({ value: s, label: s }));
       default: return [];
     }
   };
@@ -720,8 +929,12 @@ const Billing = () => {
   const kanbanOptions = viewOptionsFor(fieldDefIn(BILLING_VIEW_FIELDS, kanban.group_field)?.optionsSource);
 
   const moveKanbanCard = async (inv: any, field: string, value: string) => {
-    const { error } = await supabase.from("invoices").update({ [field]: value || null } as any).eq("id", inv.id);
+    const { data: written, error } = await supabase
+      .from("invoices").update({ [field]: value || null } as any).eq("id", inv.id).select("id");
     if (error) { toast.error(error.message); return; }
+    // Zero rows back means RLS filtered the write - no error is raised for that,
+    // so without this the card moved on screen and nothing was saved.
+    if (!written || written.length === 0) { toast.error(NOT_YOURS_MESSAGE); invalidateInvoices(); return; }
     toast.success("Invoice updated");
     invalidateInvoices();
   };
@@ -753,23 +966,72 @@ const Billing = () => {
     },
   });
 
+  const resetForm = useCallback(() => {
+    setPatientId("");
+    setDoctorId("");
+    setInvoiceDate(new Date());
+    setServiceInputs([{ name: "", price: 0, hsn: "", gst: 0 }]);
+    setPaidAmount(0);
+    setPaymentType("One-time");
+    setPaymentMode("Cash");
+    setBilledBy("");
+    setSplits([]);
+    setNotes("");
+    // tax is per-line, nothing to reset
+    setPharmaItems([]);
+    setStages([{ label: "Stage 1", amount: 0, paid: 0 }]);
+    setRecurringCount(1);
+    setRecurringAmount(0);
+    setRecurringCollected([0]);
+    setRecurringTotalAmount(0);
+    setRecurringDueDates([new Date()]);
+    setRecurringApptDates([]);
+    setRecurringStatuses(["Pending"]);
+    setRecurringInvoiceNow([true]);
+    setSourceAppointmentId(null);
+    setLinkAppointmentChoice(undefined);
+    setServiceSearchOpen(null);
+    // Only state setters above, all stable, so this never needs to change.
+  }, []);
+
+  /**
+   * Does the Create Invoice form hold anything worth not throwing away?
+   *
+   * Opening the dialog now clears it, which makes an accidental Escape
+   * unrecoverable - so an accidental Escape is what gets prevented instead.
+   * The X in the corner stays the deliberate way out, and it discards.
+   */
+  const createFormHasContent = () =>
+    invoiceFormHasContent({
+      patientId,
+      doctorId,
+      serviceInputs,
+      pharmaItemCount: pharmaItems.length,
+      paidAmount,
+      notes,
+    });
+
   // Pre-fill from Appointments flow
   useEffect(() => {
     const prefillPatient = searchParams.get("prefillPatient");
     const prefillService = searchParams.get("prefillService");
     if (prefillPatient || prefillService) {
+      // Clear whatever the form was last left holding before filling it: the
+      // same state backs Edit Invoice and the "New Bill" prefill, so without
+      // this the new bill inherits the previous one's lines.
+      resetForm();
       if (prefillPatient) setPatientId(prefillPatient);
-      if (prefillService) {
-        const svc = (serviceMaster as any[]).find((s: any) => s?.name === prefillService);
-        setServiceInputs([{ name: prefillService, price: Number(svc?.price) || 0, hsn: svc?.hsn_code || "", gst: Number(svc?.gst_percent) || 0, service_id: svc?.id }]);
-      }
+      // The booked service is deliberately not put on the bill - see
+      // billingPrefill.ts. Answering the prompt opens the form on the right
+      // patient; what gets charged is typed here.
+
       // Payment Type stays at its "One-time" default here - a visit being
       // recurring doesn't imply the bill should be split into installments;
       // staff picks "Recurring" (installment plan) explicitly when needed.
       setOpen(true);
       setSearchParams({}, { replace: true });
     }
-  }, [searchParams, serviceMaster]);
+  }, [searchParams, resetForm]);
 
   // Open a specific invoice via ?viewInvoice=<id> (e.g. from Patient detail).
   // Default (server-paginated) mode only holds one page of invoices in
@@ -800,124 +1062,53 @@ const Billing = () => {
     };
   }, [searchParams, invoices]);
 
-  // Pre-fill the Create Invoice form from an appointment ("New Bill" flow).
-  // Payload is stashed in sessionStorage to avoid huge URLs.
-  const [pendingPrefill, setPendingPrefill] = useState<any | null>(null);
+  // Open the Create Invoice form on the right patient and the right visit
+  // ("New Bill" / "Create Invoice" flow). Payload is stashed in sessionStorage
+  // to avoid huge URLs.
   useEffect(() => {
     if (searchParams.get("newInvoice") !== "1") return;
-    const raw = sessionStorage.getItem("billing_prefill");
-    let payload: any = null;
-    if (raw) { try { payload = JSON.parse(raw); } catch { payload = null; } }
+    // Only the patient, the doctor and the visit - never a line item. The rule
+    // and the reasoning are in billingPrefill.ts.
+    const payload = readBillingPrefill(sessionStorage.getItem("billing_prefill"));
     sessionStorage.removeItem("billing_prefill");
 
-    if (payload?.patientId) setPatientId(payload.patientId);
-    if (payload?.doctorId) setDoctorId(payload.doctorId);
-    if (payload?.appointmentId) setSourceAppointmentId(payload.appointmentId);
+    // Same reason as the route above: empty the form first, then fill it from
+    // this appointment only.
+    resetForm();
+
+    // Billing a patient from their own record arrives as ?patientId=...&newInvoice=1
+    // with no stashed payload, and resetForm() above has just cleared the id the
+    // effect at the top of this file set. Without this the form opened empty and
+    // a bill could be saved with no patient at all - INV-49169 was exactly that.
+    const queryPatientId = searchParams.get("patientId");
+    if (payload.patientId) setPatientId(payload.patientId);
+    else if (queryPatientId) setPatientId(queryPatientId);
+    if (payload.doctorId) setDoctorId(payload.doctorId);
+    if (payload.appointmentId) {
+      setSourceAppointmentId(payload.appointmentId);
+      // Show it in the picker too, so the form states which visit it will bill
+      // rather than linking silently.
+      setLinkAppointmentChoice(payload.appointmentId);
+    }
 
     // Payment Type is left at its "One-time" default regardless of whether the
     // source procedure/appointment is a recurring visit - visit cadence and
     // billing plan are independent; staff picks "Recurring" (installment
     // plan) explicitly, e.g. for a high-value package split into payments.
-    setPendingPrefill(payload || {});
     setInvoiceDate(new Date());
-    setInvoiceSeq(Date.now().toString().slice(-6));
     setOpen(true);
     setSearchParams({}, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  // Resolve prefilled service / product lines once the master lists have loaded,
-  // so price + HSN are auto-filled from Service Master.
+  // The visit already records who saw the patient, so the bill does not have to
+  // ask. Only fills a blank - a doctor chosen by hand is never overridden - and
+  // says nothing when that day's visits disagree about the doctor.
   useEffect(() => {
-    const payload = pendingPrefill;
-    if (!payload) return;
-    if ((serviceMaster as any[]).length === 0) return; // masters still loading
-
-    const norm = (v: any) =>
-      String(v || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, " ")
-        .trim();
-
-    const names: string[] = Array.isArray(payload?.services) ? payload.services.filter(Boolean) : [];
-    if (names.length) {
-      setServiceInputs(
-        names.map((n: string) => {
-          const key = norm(n);
-          const list = serviceMaster as any[];
-          const svc =
-            list.find((s: any) => norm(s?.name) === key) ||
-            list.find((s: any) => norm(s?.name).startsWith(key) || key.startsWith(norm(s?.name))) ||
-            list.find((s: any) => norm(s?.name).includes(key) || key.includes(norm(s?.name)));
-          return {
-            name: svc?.name || n,
-            price: Number(svc?.price) || 0,
-            hsn: svc?.hsn_code || "",
-            gst: Number(svc?.gst_percent) || 0,
-            service_id: svc?.id,
-          };
-        }),
-      );
-    }
-
-    const products: any[] = Array.isArray(payload?.products) ? payload.products : [];
-    if (products.length) {
-      const lines: PharmaLineItem[] = [];
-      for (const p of products) {
-        const pname = String(p?.name || "").toLowerCase();
-        if (!pname) continue;
-        const master = (pharmaProducts as any[]).find(
-          (m: any) => String(m?.name || "").toLowerCase() === pname || m?.id === p?.product_id,
-        );
-        const batch = (pharmaInventory as any[])
-          .filter(
-            (inv: any) =>
-              inv.quantity > 0 &&
-              new Date(inv.expiry_date) > new Date() &&
-              String(inv.pharma_products?.name || "").toLowerCase() === pname,
-          )
-          .sort((a: any, b: any) => String(a.expiry_date).localeCompare(String(b.expiry_date)))[0];
-        if (!batch && !master) {
-          // Custom ("Others") medicine name with no master-list match -
-          // carry it over as a free-text pharma line instead of dropping it.
-          lines.push({
-            inventory_id: "",
-            product_id: OTHERS_VALUE,
-            product_name: p.name,
-            batch_number: "",
-            quantity: Math.max(1, Number(p.quantity) || 1),
-            unit_price: 0,
-            available: 0,
-            uom: "Unit",
-            uom_factor: 1,
-          });
-          continue;
-        }
-        const saleUom = getSaleUom(master, unitsByProduct[(batch?.product_id || master?.id) as string]);
-        const basePrice =
-          Number(batch?.selling_price) ||
-          Number(batch?.mrp) ||
-          Number(master?.selling_price) ||
-          Number(master?.mrp) ||
-          0;
-        lines.push({
-          inventory_id: batch?.id || "",
-          product_id: batch?.product_id || master?.id || "",
-          product_name: batch?.pharma_products?.name || master?.name || p.name,
-          batch_number: batch?.batch_number || "",
-          quantity: Math.max(1, Number(p.quantity) || 1),
-          unit_price: basePrice / (saleUom.factor || 1),
-          available: toUomQty(Number(batch?.quantity || 0), saleUom.factor),
-          uom: saleUom.name,
-          uom_factor: saleUom.factor,
-        });
-      }
-      if (lines.length) setPharmaItems(lines);
-    }
-
-    setPendingPrefill(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingPrefill, serviceMaster, pharmaInventory, pharmaProducts]);
+    if (!open || !patientId || doctorId) return;
+    const fromVisit = doctorForInvoice(createPatientAppointments as LinkableAppointment[], invoiceDate);
+    if (fromVisit) setDoctorId(fromVisit);
+  }, [open, patientId, doctorId, createPatientAppointments, invoiceDate]);
 
   // Doctor/service filter dropdown options - sourced from the doctors/
   // services master lists (already fetched regardless) rather than scanned
@@ -967,12 +1158,17 @@ const Billing = () => {
   };
 
   // HSN-based tax (Tax Master): service → HSN code → SGST + CGST + IGST
-  /** Active HSN codes as dropdown options; keeps any legacy code already on a line. */
-  const hsnOptions = useMemo(() => {
-    const codes = (hsnTaxes as any[]).map((h) => String(h.hsn_code));
-    const extra = serviceInputs.map((s) => (s.hsn || "").trim()).filter((c) => c && !codes.includes(c));
-    return [...new Set([...codes, ...extra])].map((c) => ({ id: c, name: c }));
-  }, [hsnTaxes, serviceInputs]);
+  /**
+   * The codes the Tax Master currently allows, and only those.
+   *
+   * This used to also offer whatever code was already on the line, which put a
+   * retired code (9997) back in front of the front desk every time a service
+   * still stored it. Retiring a code in the Tax Master is now the end of it -
+   * see liveHsn(), which keeps a retired code off the line as well as out of
+   * this list.
+   */
+  const activeCodes = useMemo(() => activeHsnCodes(hsnTaxes), [hsnTaxes]);
+  const hsnOptions = useMemo(() => buildHsnOptions(hsnTaxes), [hsnTaxes]);
 
   const hsnTaxMap = useMemo(() => {
     const m = new Map<string, any>();
@@ -1103,6 +1299,58 @@ const Billing = () => {
   }, [serviceInputs, pharmaItems, serviceMaster, pharmaProducts, pharmaInventory, hsnTaxes, taxProductLinks, taxServiceLinks, taxes]);
 
   const pharmaSubtotal = pharmaItems.reduce((s, i) => s + i.quantity * i.unit_price, 0);
+  /**
+   * The stored shape of every billed line, built in one place.
+   *
+   * Create and Edit both write this. Two implementations would be two chances
+   * for the record and the printed copy to disagree about what was charged,
+   * which is exactly the failure Edit already had - it could change the total
+   * without touching the lines the PDF is drawn from.
+   */
+  const lineItemsSnapshotFor = (
+    services: typeof serviceInputs,
+    products: PharmaLineItem[],
+    // Json, not a looser shape: this goes straight into the jsonb column, and
+    // the compiler should say so if a line ever stops being storable.
+  ): Json[] => [
+        ...services
+          .filter((s) => s.name.trim())
+          .map((s) => ({
+            kind: "service",
+            name: s.name,
+            qty: 1,
+            price: Number(s.price) || 0,
+            hsn: s.hsn || "",
+            gst: Number(s.gst) || 0,
+            service_id: s.service_id && s.service_id !== OTHERS_VALUE ? s.service_id : null,
+            // Read by the material_cost_lines view, which prefers it over the
+            // visit's override and the Service Master default. Omitted rather
+            // than stored as 0 when it was left blank, so "not recorded" stays
+            // distinguishable from "no material cost".
+            ...(String(s.material_percent ?? "").trim() === ""
+              ? {}
+              : { material_percent: Number(s.material_percent) || 0 }),
+          })),
+        ...products
+          .filter((i) => i.product_name)
+          .map((i) => ({
+            kind: "product",
+            name: i.product_name,
+            qty: i.quantity,
+            price: Number(i.unit_price) || 0,
+            hsn: i.product_id === OTHERS_VALUE ? "" : getProductHsn(i.product_id, i.inventory_id),
+            gst: i.product_id === OTHERS_VALUE ? 0 : getProductLineTax(i.product_id, 100, i.inventory_id).rate,
+            product_id: i.product_id && i.product_id !== OTHERS_VALUE ? i.product_id : null,
+            batch_number: i.batch_number || null,
+            uom: i.uom || null,
+            uom_factor: i.uom_factor || 1,
+          })),
+  ];
+
+  // Tax and total straight off lineTaxRows, so the figure on the Edit form is
+  // the same arithmetic the create summary and the save path both use.
+  const lineTaxTotal = lineTaxRows.reduce((sum, r) => sum + r.tax, 0);
+  const linesGrandTotal = lineTaxRows.reduce((sum, r) => sum + r.amount, 0) + lineTaxTotal;
   const servicesSubtotal = useMemo(() => serviceInputs.reduce((sum, s) => sum + (Number(s.price) || 0), 0), [serviceInputs]);
 
   // Internal-only material cost: % (from Service Master) of the pre-tax service value.
@@ -1335,39 +1583,28 @@ const Billing = () => {
       const allServices = [...services, ...pharmaServiceNames];
       if (allServices.length === 0) throw new Error("Add at least one service or product");
 
-      // Persist a structured snapshot of every line so the PDF doesn't have to guess prices/HSN later.
-      const lineItemsSnapshot: any[] = [
-        ...serviceInputs
-          .filter((s) => s.name.trim())
-          .map((s) => ({
-            kind: "service",
-            name: s.name,
-            qty: 1,
-            price: Number(s.price) || 0,
-            hsn: s.hsn || "",
-            gst: Number(s.gst) || 0,
-            doctor_fee: !!s.doctor_fee,
-            service_id: s.service_id && s.service_id !== OTHERS_VALUE ? s.service_id : null,
-          })),
-        ...pharmaItems
-          .filter((i) => i.product_name)
-          .map((i) => ({
-            kind: "product",
-            name: i.product_name,
-            qty: i.quantity,
-            price: Number(i.unit_price) || 0,
-            hsn: i.product_id === OTHERS_VALUE ? "" : getProductHsn(i.product_id, i.inventory_id),
-            gst: i.product_id === OTHERS_VALUE ? 0 : getProductLineTax(i.product_id, 100, i.inventory_id).rate,
-            product_id: i.product_id && i.product_id !== OTHERS_VALUE ? i.product_id : null,
-            batch_number: i.batch_number || null,
-            uom: i.uom || null,
-            uom_factor: i.uom_factor || 1,
-          })),
-      ];
+      const lineItemsSnapshot = lineItemsSnapshotFor(serviceInputs, pharmaItems);
 
       const patient = patients.find((p) => p.id === patientId);
       const patientName = patient ? `${patient.first_name} ${patient.last_name}` : null;
-      const baseNum = invoiceSeq;
+      // Settled here, not read out of state: the patient's appointments are
+      // fetched when the patient is picked, and a biller who saves before that
+      // returns would otherwise write appointment_id null and the visit would
+      // read "No bill". See invoiceAppointmentLink.ts.
+      const linkedAppointmentId = await resolveInvoiceAppointmentId({
+        explicitChoice: linkAppointmentChoice,
+        formValue: effectiveLinkAppointmentId,
+        patientId,
+        invoiceDate,
+        doctorId,
+        loadAppointments: fetchPatientAppointments,
+      });
+      // One number per invoice row, drawn from the database so the series stays
+      // unbroken however many people are billing at once. Taken here, at save,
+      // so an abandoned dialog does not spend one.
+      const rowCount =
+        paymentType === "Staged" ? stages.length : paymentType === "Recurring" ? recurringCount : 1;
+      const invoiceNumbers = await allocateInvoiceNumbers(rowCount);
       const createdAt = invoiceDate ? invoiceDate.toISOString() : new Date().toISOString();
       // Per-line tax aggregation: sum cgst/sgst/igst from each service & pharma line by its own mapped rate
       const aggregateLineTax = (svcAmounts: { name: string; price: number }[], pharma: PharmaLineItem[], scale: number) => {
@@ -1400,18 +1637,22 @@ const Billing = () => {
           if (stage.paid >= stageTotal && stageTotal > 0) status = "Paid";
           else if (stage.paid > 0) status = "Partial";
           return {
-            invoice_number: `INV-${baseNum}-S${i + 1}`,
+            invoice_number: invoiceNumbers[i],
             created_at: createdAt,
             patient_id: patientId || null,
             patient_name: patientName,
             services: allServices,
             line_items: lineItemsSnapshot,
             doctor_id: doctorId || null,
+            // Staged rows used to save with no appointment_id at all, so every
+            // stage of a treatment plan read "No bill" on the visit it paid for.
+            appointment_id: linkedAppointmentId,
             total_amount: stageTotal,
             paid_amount: stage.paid,
             status,
             payment_type: "Staged",
             payment_mode: paymentMode,
+            billed_by: billedBy || null,
             notes: `${stage.label}${notes ? ` — ${notes}` : ""}`,
             tax_id: null,
             tax_rate: null,
@@ -1422,7 +1663,7 @@ const Billing = () => {
         if (error) throw error;
         // Return a summary for downstream WhatsApp notification
         var summary: any = {
-          invoiceNumber: `INV-${baseNum} (${stages.length} stages)`,
+          invoiceNumber: `${invoiceNumbers[0]} (${stages.length} stages)`,
           totalAmount: rows.reduce((s, r: any) => s + Number(r.total_amount), 0),
           paidAmount: rows.reduce((s, r: any) => s + Number(r.paid_amount), 0),
           status: "Staged plan",
@@ -1522,14 +1763,14 @@ const Billing = () => {
           if (collected >= lineTotal && lineTotal > 0) status = "Paid";
           else if (collected > 0 && instStatus === "Pending") status = "Partial";
           return {
-            invoice_number: `INV-${baseNum}-R${i + 1}`,
+            invoice_number: invoiceNumbers[i],
             created_at: createdAt,
             patient_id: patientId || null,
             patient_name: patientName,
             services: allServices,
             line_items: lineItemsSnapshot,
             doctor_id: doctorId || null,
-            appointment_id: appointmentIds[i],
+            appointment_id: appointmentIds[i] || (i === 0 ? linkedAppointmentId : null),
             recurring_group_id: groupId,
             installment_number: i + 1,
             installment_count: recurringCount,
@@ -1539,6 +1780,7 @@ const Billing = () => {
             status,
             payment_type: "Recurring",
             payment_mode: paymentMode,
+            billed_by: billedBy || null,
             notes: `${chargedNow ? "Installment" : "Scheduled amount"} ${i + 1} of ${recurringCount} | Due: ${format(dueDate, "dd MMM yyyy")}${withPharma ? " | Includes pharmacy (paid in full)" : ""}${notes ? ` — ${notes}` : ""}`,
             tax_id: null,
             tax_rate: chargedNow ? null : Math.round(effRate * 100) / 100,
@@ -1548,7 +1790,7 @@ const Billing = () => {
         const { error } = await supabase.from("invoices").insert(rows as any);
         if (error) throw error;
         var summary: any = {
-          invoiceNumber: `INV-${baseNum} (${recurringCount} installments)`,
+          invoiceNumber: `${invoiceNumbers[0]} (${recurringCount} installments)`,
           totalAmount: rows.reduce((s, r: any) => s + Number(r.total_amount), 0),
           paidAmount: rows.reduce((s, r: any) => s + Number(r.paid_amount), 0),
           status: "Recurring plan",
@@ -1568,33 +1810,25 @@ const Billing = () => {
         else if (paidAmount > 0) status = "Partial";
 
         const splitsActive = splits.length > 0;
-        const splitTotal = splits.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-        if (splitsActive) {
-          if (splits.some((r) => !r.mode || !(Number(r.amount) > 0))) {
-            throw new Error("Each split row needs a payment mode and amount");
-          }
-          if (Math.round(splitTotal * 100) !== Math.round(paidAmount * 100)) {
-            throw new Error("Split amounts must equal paid amount");
-          }
-        }
-        const effectivePaymentMode = splitsActive
-          ? (splits.length === 1 ? splits[0].mode : "Split")
-          : paymentMode;
+        const problem = splitProblem(splits, paidAmount);
+        if (problem) throw new Error(problem);
+        const effectivePaymentMode = paymentModeForSplits(splits, paymentMode);
 
         const { data: insertedInv, error } = await supabase.from("invoices").insert({
-          invoice_number: `INV-${baseNum}`,
+          invoice_number: invoiceNumbers[0],
           created_at: createdAt,
           patient_id: patientId || null,
           patient_name: patientName,
           services: allServices,
           line_items: lineItemsSnapshot,
           doctor_id: doctorId || null,
-          appointment_id: sourceAppointmentId || null,
+          appointment_id: linkedAppointmentId,
           total_amount: grandTotal,
           paid_amount: paidAmount,
           status,
           payment_type: "One-time",
           payment_mode: effectivePaymentMode,
+          billed_by: billedBy || null,
           payment_splits: splitsActive ? splits : null,
           notes: notes || null,
           tax_id: null,
@@ -1603,7 +1837,7 @@ const Billing = () => {
         } as any).select("id").single();
         if (error) throw error;
         var summary: any = {
-          invoiceNumber: `INV-${baseNum}`,
+          invoiceNumber: invoiceNumbers[0],
           totalAmount: grandTotal,
           paidAmount: paidAmount,
           status,
@@ -1826,12 +2060,13 @@ const Billing = () => {
       if (newPaid >= total) status = "Paid";
       else if (newPaid <= 0) status = "Pending";
 
-      const { error } = await supabase.from("invoices").update({
+      const { data: written, error } = await supabase.from("invoices").update({
         paid_amount: Math.min(newPaid, total),
         status,
         payment_mode: addPaymentMode,
-      }).eq("id", paymentInv.id);
+      }).eq("id", paymentInv.id).select("id");
       if (error) throw error;
+      assertWrote(written);
       return { invoiceId: paymentInv.id, becamePaid: status === "Paid" && paymentInv.status !== "Paid" };
     },
     onSuccess: async (res: any) => {
@@ -1848,11 +2083,12 @@ const Billing = () => {
 
   const markAsPaid = useMutation({
     mutationFn: async (inv: any) => {
-      const { error } = await supabase.from("invoices").update({
+      const { data: written, error } = await supabase.from("invoices").update({
         paid_amount: inv.total_amount,
         status: "Paid",
-      }).eq("id", inv.id);
+      }).eq("id", inv.id).select("id");
       if (error) throw error;
+      assertWrote(written);
       return { invoiceId: inv.id, becamePaid: inv.status !== "Paid" };
     },
     onSuccess: async (res: any) => {
@@ -1873,8 +2109,9 @@ const Billing = () => {
         const { data: invRow } = await supabase.from("invoices").select("total_amount").eq("id", id).maybeSingle();
         if (invRow) updates.paid_amount = Number((invRow as any).total_amount) || 0;
       }
-      const { error } = await supabase.from("invoices").update(updates).eq("id", id);
+      const { data: written, error } = await supabase.from("invoices").update(updates).eq("id", id).select("id");
       if (error) throw error;
+      assertWrote(written);
       return { invoiceId: id, becamePaid: status === "Paid" && prevStatus !== "Paid" };
     },
     onSuccess: async (res: any) => {
@@ -1893,13 +2130,14 @@ const Billing = () => {
   const cancelInvoice = useMutation({
     mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
       const { data: userData } = await supabase.auth.getUser();
-      const { error } = await supabase.from("invoices").update({
+      const { data: written, error } = await supabase.from("invoices").update({
         status: "Cancelled",
         cancellation_reason: reason,
         cancelled_at: new Date().toISOString(),
         cancelled_by_name: userData?.user?.email || null,
-      } as any).eq("id", id);
+      } as any).eq("id", id).select("id");
       if (error) throw error;
+      assertWrote(written);
     },
     onSuccess: () => {
       invalidateInvoices();
@@ -1913,23 +2151,94 @@ const Billing = () => {
   const updateInvoice = useMutation({
     mutationFn: async () => {
       if (!viewInvoice) return;
-      const newPaid = Number(editData.paid_amount);
-      const newTotal = Number(editData.total_amount);
+      // While rows are active they ARE the payment, so the paid amount is their
+      // total - the create form does the same, and a figure that disagreed with
+      // the rows beneath it would be the fault this is here to end.
+      const newPaid = splits.length > 0 ? splitTotal(splits) : Number(editData.paid_amount);
+      const problem = splitProblem(splits, newPaid);
+      if (problem) throw new Error(problem);
+      // A saved bill must keep its patient. Clearing the picker here would
+      // write patient_id null and the bill would vanish from that patient's
+      // Invoices tab while still showing in Billing - the fault this change
+      // exists to end.
+      if (!String(editData.patient_id ?? "").trim()) {
+        throw new Error("Choose the patient this bill belongs to before saving.");
+      }
+
+      // What the form now holds. Built by the same snapshot the create path
+      // writes, so an edited invoice is shaped exactly like a new one.
+      const editedLines = lineItemsSnapshotFor(serviceInputs, pharmaItems);
+      // Renaming a line is not repricing it. Now that a name can be typed,
+      // correcting a spelling would otherwise re-resolve the GST from today's
+      // Tax Master and could flip a Paid invoice to Partial - see
+      // invoiceLineChanges.ts.
+      const changed = invoiceLineChanges(
+        JSON.parse(editedLinesOriginal.current.lineItems) as unknown[],
+        editedLines as unknown[],
+      );
+
+      // Untouched lines are left completely alone. Recomputing on every save
+      // would rewrite 46,936 imported invoices the first time anyone opened
+      // one, and those already match Salesforce to the rupee.
+      const newTotal = changed.money ? linesGrandTotal : Number(viewInvoice.total_amount);
       let status = "Pending";
       if (newPaid >= newTotal && newTotal > 0) status = "Paid";
       else if (newPaid > 0) status = "Partial";
 
-      const { error } = await supabase.from("invoices").update({
+      const billedChanges = changed.lines
+        ? {
+            line_items: editedLines,
+            services: serviceInputs.filter((s) => s.name.trim()).map((s) => s.name.trim()),
+            // Only when what was charged moved. A corrected name leaves the
+            // bill's own figures exactly as they were.
+            ...(changed.money
+              ? {
+                  cgst_amount: lineTaxRows.reduce((sum, r) => sum + r.cgst, 0),
+                  sgst_amount: lineTaxRows.reduce((sum, r) => sum + r.sgst, 0),
+                  igst_amount: lineTaxRows.reduce((sum, r) => sum + r.igst, 0),
+                  tax_amount: lineTaxTotal,
+                }
+              : {}),
+          }
+        : {};
+
+      const { data: written, error } = await supabase.from("invoices").update({
         patient_name: editData.patient_name,
+        patient_id: editData.patient_id || null,
+        doctor_id: editData.doctor_id || null,
         total_amount: newTotal,
         paid_amount: newPaid,
-        payment_mode: editData.payment_mode,
+        // Derived from the rows, the same way a new bill derives it, so an
+        // edited invoice is shaped like one that was just created - and the
+        // mode can never say "Cash" above two payments that say otherwise.
+        payment_mode: paymentModeForSplits(splits, editData.payment_mode),
+        payment_splits: splits.length > 0 ? splits : null,
         payment_type: editData.payment_type,
+        billed_by: editData.billed_by || null,
         notes: editData.notes || null,
         appointment_id: editData.appointment_id || null,
         status,
-      }).eq("id", viewInvoice.id);
+        ...billedChanges,
+      }).eq("id", viewInvoice.id).select("id");
       if (error) throw error;
+      assertWrote(written);
+
+      // Stock follows the change: what was taken off the shelf when this
+      // invoice was raised comes back, and what it now bills goes out. Rows
+      // whose total did not move are not written at all.
+      if (changed.lines) {
+        const delta = stockDelta(
+          editedLinesOriginal.current.products,
+          pharmaItems.map((p) => ({ inventory_id: p.inventory_id, quantity: p.quantity, uom_factor: p.uom_factor || 1 })),
+        );
+        for (const [inventoryId, amount] of Object.entries(delta)) {
+          const row = inventoryRow(inventoryId);
+          if (!row) continue;
+          await supabase.from("pharma_inventory")
+            .update({ quantity: Math.max(0, Number(row.quantity) + amount) })
+            .eq("id", inventoryId);
+        }
+      }
       return {
         invoiceId: viewInvoice.id,
         becamePaid: status === "Paid" && viewInvoice.status !== "Paid",
@@ -1947,62 +2256,24 @@ const Billing = () => {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const resetForm = () => {
-    setPatientId("");
-    setDoctorId("");
-    setInvoiceDate(new Date());
-    setInvoiceSeq(Date.now().toString().slice(-6));
-    setServiceInputs([{ name: "", price: 0, hsn: "", gst: 0 }]);
-    setPaidAmount(0);
-    setPaymentType("One-time");
-    setPaymentMode("Cash");
-    setSplits([]);
-    setNotes("");
-    // tax is per-line, nothing to reset
-    setPharmaItems([]);
-    setStages([{ label: "Stage 1", amount: 0, paid: 0 }]);
-    setRecurringCount(1);
-    setRecurringAmount(0);
-    setRecurringCollected([0]);
-    setRecurringTotalAmount(0);
-    setRecurringDueDates([new Date()]);
-    setRecurringApptDates([]);
-    setRecurringStatuses(["Pending"]);
-    setRecurringInvoiceNow([true]);
-    setSourceAppointmentId(null);
-    setServiceSearchOpen(null);
-  };
 
   const addServiceInput = () => setServiceInputs([...serviceInputs, { name: "", price: 0, hsn: "", gst: 0 }]);
-  const updateServiceInput = (i: number, patch: Partial<{ name: string; price: number; hsn: string; gst: number; service_id?: string; doctor_fee?: boolean }>) => {
+  const updateServiceInput = (i: number, patch: Partial<{ name: string; price: number; hsn: string; gst: number; service_id?: string; material_percent?: string }>) => {
     setServiceInputs((prev) => prev.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
   };
   const removeServiceInput = (i: number) => setServiceInputs(serviceInputs.filter((_, idx) => idx !== i));
 
   // Doctor selection: maintain a single auto "Consultation - Dr. X" line item
-  // marked with `doctor_fee: true`. Replacing the doctor replaces that row.
+  // Choosing a doctor no longer bills a consultation.
+  //
+  // It used to add a "Consultation - Dr X" row automatically, priced from the
+  // Staff Master, and the row's remove button was disabled so nobody could
+  // take it off. The clinic's instruction is that no consultation line should
+  // appear by default for any doctor - they add one from the Service Master
+  // when they mean to. Any row left over from the old behaviour is stripped.
   const handleDoctorChange = (newDoctorId: string) => {
     setDoctorId(newDoctorId);
-    setServiceInputs((prev) => {
-      // Strip any existing doctor-fee row first
-      const stripped = prev.filter((r) => !r.doctor_fee);
-      if (!newDoctorId) {
-        return stripped.length > 0 ? stripped : [{ name: "", price: 0, hsn: "", gst: 0 }];
-      }
-      const doc: any = (doctorsList as any[]).find((d: any) => d.id === newDoctorId);
-      const fee = Number(doc?.consultation_fee) || 0;
-      const docName = doc ? withDrPrefix(`${doc.first_name || ""} ${doc.last_name || ""}`) || "Doctor" : "Doctor";
-      const feeRow = {
-        name: `Consultation - ${docName}`,
-        price: fee,
-        hsn: doc?.consultation_hsn ? String(doc.consultation_hsn) : "",
-        gst: 0,
-        doctor_fee: true as const,
-      };
-      // If user only had the empty initial blank row, drop it.
-      const cleaned = stripped.filter((r) => r.name.trim() || r.price > 0);
-      return [feeRow, ...cleaned];
-    });
+    setServiceInputs((prev) => (prev.length > 0 ? prev : [{ name: "", price: 0, hsn: "", gst: 0 }]));
   };
 
   const addStage = () => setStages([...stages, { label: `Stage ${stages.length + 1}`, amount: 0, paid: 0 }]);
@@ -2017,10 +2288,15 @@ const Billing = () => {
     const hasServices = serviceInputs.some(s => s.name.trim());
     const hasPharma = pharmaItems.some(i => i.product_id && i.quantity > 0 && i.unit_price > 0);
     const hasLineItems = hasServices || hasPharma;
-    if (!hasLineItems) return false;
-    if (paymentType === "Staged") return stages.some((s) => s.amount > 0);
-    if (paymentType === "Recurring") return recurringCount > 0 && recurringAmount > 0;
-    return (servicesSubtotal + pharmaSubtotal) > 0;
+    const amountIsPositive =
+      paymentType === "Staged" ? stages.some((s) => s.amount > 0)
+      : paymentType === "Recurring" ? recurringCount > 0 && recurringAmount > 0
+      : (servicesSubtotal + pharmaSubtotal) > 0;
+    // The patient and whoever raised it are both part of being saveable.
+    // Without the first, Save was live with the patient box empty and the bill
+    // went in unlinked - see invoiceFormState.ts, which also says why the name
+    // is required here rather than by the column.
+    return invoiceCanBeSaved({ patientId, billedBy, hasLineItems, amountIsPositive });
   };
 
   // All-time totals, independent of pagination/filters/search - fetched
@@ -2108,7 +2384,7 @@ const Billing = () => {
     } else {
       toast.loading("Preparing export…", { id: "export-csv" });
       try {
-        const all = await fetchInvoicesBounded({ dateFrom: filterDateFrom, dateTo: filterDateTo, limit: 100000 });
+        const all = await fetchInvoicesInRange({ dateFrom: filterDateFrom, dateTo: filterDateTo });
         exportSet = applyViewFilters(all.filter(matchesQuickFilters));
       } catch (err: any) {
         toast.error(`Export failed: ${err.message}`, { id: "export-csv" });
@@ -2119,19 +2395,23 @@ const Billing = () => {
     const headers = ["Invoice", "Date", "Patient", "Doctor", "Services", "Type", "Mode", "Total", "Paid", "Balance", "Status"];
     const rows = exportSet.map((inv: any) => [
       inv.invoice_number,
-      format(new Date(inv.created_at), "yyyy-MM-dd"),
+      displayDate(inv.created_at),
       getPatientName(inv, patientById),
       getDrName(inv, staffById),
       displayServices(inv).join("; "),
       inv.payment_type,
-      inv.payment_mode || "",
+      // The named instruments, not the bare word "Split", which told a reader
+      // nothing about what was actually taken.
+      paymentModeLabel(inv),
       Number(inv.total_amount),
       Number(inv.paid_amount),
       Number(inv.total_amount) - Number(inv.paid_amount),
       inv.status,
     ]);
     const csv = [headers, ...rows].map(r => r.map((c: any) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
+    // The byte order mark is what tells Excel the file is UTF-8; without it a
+    // rupee sign or an accented name arrives as mojibake.
+    const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -2151,13 +2431,60 @@ const Billing = () => {
     setIsEditing(false);
     setEditData({
       patient_name: getPatientName(inv, patientById),
+      patient_id: inv.patient_id || "",
+      doctor_id: inv.doctor_id || "",
       total_amount: inv.total_amount,
       paid_amount: inv.paid_amount,
       payment_mode: inv.payment_mode || "Cash",
       payment_type: inv.payment_type || "One-time",
       notes: inv.notes || "",
       appointment_id: inv.appointment_id || "",
+      // Carried into the form so saving an edit cannot blank it.
+      billed_by: inv.billed_by || "",
     });
+  };
+
+  /**
+   * Edit Invoice, loaded into the form that made it.
+   *
+   * The services and products go into the very same state the create form
+   * drives, so the totals, the tax split and the stored snapshot are all
+   * computed by code that already exists rather than a second implementation
+   * that could disagree with it. The originals are kept so the save can tell
+   * whether the lines were actually touched, and so pharmacy stock can be
+   * reconciled against what was taken off the shelf when the invoice was
+   * raised.
+   */
+  const inventoryRow = (id: string): { id: string; quantity: number } | undefined =>
+    (pharmaInventory as { id: string; quantity: number }[]).find((r) => r.id === id);
+
+  const startEditingInvoice = (inv: { line_items?: unknown; payment_splits?: unknown }) => {
+    const seeded = seedInvoiceLines(inv?.line_items);
+    // The split rows this bill was actually paid with. Cleared when it has none,
+    // because `splits` is shared with the create form - the rows left over from
+    // the last bill someone raised would otherwise turn up on this one.
+    setSplits(splitsFromInvoice(inv?.payment_splits));
+    setServiceInputs(seeded.services.length ? seeded.services : [{ name: "", price: 0, hsn: "", gst: 0 }]);
+    setPharmaItems(
+      seeded.products.map((p) => ({
+        ...p,
+        // What is left on the shelf now, so the quantity field can still warn
+        // about overselling while the invoice is being corrected.
+        available: Number(inventoryRow(p.inventory_id)?.quantity) || 0,
+      })),
+    );
+    editedLinesOriginal.current = {
+      // Baseline must be the SAME snapshot shape the save path compares
+      // against (lineItemsSnapshotFor of the seeded form state), not the raw
+      // stored JSON. Stored lines predate the current snapshot shape (no
+      // `kind`, different key set/order), so comparing against them made
+      // linesChanged true on every edit of an existing bill - which then
+      // rewrote the total, tax and pharmacy stock from a recompute nobody
+      // asked for.
+      lineItems: JSON.stringify(lineItemsSnapshotFor(seeded.services, seeded.products)),
+      products: seeded.products.map((p) => ({ inventory_id: p.inventory_id, quantity: p.quantity, uom_factor: p.uom_factor })),
+    };
+    setIsEditing(true);
   };
 
   // Get columns to display based on active saved view or default
@@ -2201,83 +2528,105 @@ const Billing = () => {
     ? viewFiltered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
     : invoices;
 
-  return (
+  /**
+   * The Payment Mode control, for both forms.
+   *
+   * Edit Invoice used to carry its own, offering a mode list with no "Split" in
+   * it - so a split bill opened with the box blank and no way to change either
+   * amount. Rendered from one place now, the way the Services and Pharmacy
+   * blocks below already are, so the two cannot drift apart again.
+   *
+   * `mode`/`onMode` differ between the forms (paymentMode here,
+   * editData.payment_mode there); the split rows are the shared `splits` state.
+   */
+  const renderPaymentMode = (mode: string, onMode: (v: string) => void, allowSplit: boolean) => (
     <div>
-      <div className="page-header flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="page-title">Billing</h1>
-          <p className="page-subtitle">Manage invoices and payments</p>
-        </div>
-        <div className="flex gap-2 w-fit flex-wrap">
-          <SalesforceSyncButton />
-          <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (o) setInvoiceSeq(Date.now().toString().slice(-6)); }}>
-            <DialogTrigger asChild>
-              <Button className="gap-2 w-fit">
-                <IndianRupee className="h-4 w-4" />
-                Create Invoice
+      <div className="flex items-center justify-between">
+        <Label>Payment Mode</Label>
+        {allowSplit && (
+          splits.length === 0 ? (
+            <button
+              type="button"
+              className="text-xs text-primary hover:underline"
+              onClick={() => setSplits([{ mode: mode || "Cash", amount: 0 }, { mode: "UPI", amount: 0 }])}
+            >
+              + Split Payment
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:underline"
+              onClick={() => setSplits([])}
+            >
+              Use single mode
+            </button>
+          )
+        )}
+      </div>
+      {splits.length === 0 ? (
+        <Select value={mode} onValueChange={onMode}>
+          <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {PAYMENT_MODES.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      ) : (
+        <div className="mt-1.5 space-y-2">
+          {splits.map((row, idx) => (
+            <div key={idx} className="flex gap-2 items-center">
+              <Select
+                value={row.mode}
+                onValueChange={(v) => setSplits(splits.map((r, i) => (i === idx ? { ...r, mode: v } : r)))}
+              >
+                <SelectTrigger className="flex-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PAYMENT_MODES.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Input
+                type="number"
+                placeholder="Amount"
+                className="w-28"
+                value={row.amount || ""}
+                onChange={(e) =>
+                  setSplits(splits.map((r, i) => (i === idx ? { ...r, amount: parseFloat(e.target.value) || 0 } : r)))
+                }
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                onClick={() => setSplits(splits.filter((_, i) => i !== idx))}
+              >
+                <X className="h-4 w-4" />
               </Button>
-            </DialogTrigger>
-          <DialogContent className="max-w-none w-screen h-screen sm:rounded-none p-0 gap-0 overflow-hidden">
-            <DialogHeader className="px-6 pt-6 pb-3 border-b">
-              <DialogTitle className="font-display">Create Invoice</DialogTitle>
-            </DialogHeader>
-            <div className="lg:grid lg:grid-cols-[1fr_360px] lg:gap-0 max-h-[calc(100vh-5rem)] overflow-x-auto">
-            <div className="space-y-4 px-6 py-4 overflow-y-auto overflow-x-auto lg:max-h-[calc(100vh-5rem)] min-w-0">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label>Invoice #</Label>
-                  <Input value={`INV-${invoiceSeq}`} readOnly className="mt-1.5 bg-muted/50 font-mono" />
-                </div>
-                <div>
-                  <Label>Invoice Date</Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" className={cn("mt-1.5 w-full justify-start text-left font-normal", !invoiceDate && "text-muted-foreground")}>
-                        <CalendarClock className="mr-2 h-4 w-4" />
-                        {invoiceDate ? format(invoiceDate, "dd MMM yyyy") : "Pick a date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar mode="single" selected={invoiceDate} onSelect={(d) => d && setInvoiceDate(d)} initialFocus className={cn("p-3 pointer-events-auto")} />
-                    </PopoverContent>
-                  </Popover>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label>Patient</Label>
-                  <PatientCombobox
-                    value={patientId}
-                    onValueChange={setPatientId}
-                    placeholder="Select patient"
-                    className="mt-1.5"
-                  />
-                </div>
-                <div>
-                <Label>Doctor</Label>
-                <StaffCombobox
-                  value={doctorId}
-                  onValueChange={handleDoctorChange}
-                  allowNone
-                  noneLabel="No doctor"
-                  placeholder="Select doctor"
-                  className="mt-1.5"
-                  roleFilter={["Doctor"]}
-                />
-                {doctorId && (() => {
-                  const d: any = (doctorsList as any[]).find((x: any) => x.id === doctorId);
-                  const fee = Number(d?.consultation_fee) || 0;
-                  return (
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                      {fee > 0
-                        ? `Consultation fee ₹${fee.toLocaleString()} added as a line item.`
-                        : "This doctor has no consultation fee set in Staff Master."}
-                    </p>
-                  );
-                })()}
-                </div>
-              </div>
+            </div>
+          ))}
+          {splits.length < 3 && (
+            <button
+              type="button"
+              className="text-xs text-primary hover:underline"
+              onClick={() => setSplits([...splits, { mode: "Cash", amount: 0 }])}
+            >
+              + Add row
+            </button>
+          )}
+          <div className="text-xs text-muted-foreground">
+            Split total {formatMoney(splitTotalAmount)} — auto-applied as Paid Amount
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
+  // Hoisted so Edit Invoice renders the same Services and Pharmacy blocks the
+  // create form does, rather than a second, thinner form that could drift
+  // from it - which is how Edit ended up unable to change what was billed.
+  // A JSX const, not a component: no props to thread through, and no risk of
+  // React remounting the inputs and losing what someone is typing.
+  const serviceAndProductSections = (
+    <>
               {/* Services */}
               <div className="rounded-xl border-2 border-accent-foreground/20 bg-accent/40 p-4">
                 <div className="flex items-center justify-between gap-2 mb-3">
@@ -2306,15 +2655,46 @@ const Billing = () => {
                 {serviceInputs.map((s, i) => (
                   <div key={i} className="mb-2">
                     <div className="flex gap-2 items-center">
-                      <Popover open={serviceSearchOpen === i} onOpenChange={(open) => setServiceSearchOpen(open ? i : null)}>
-                        <PopoverTrigger asChild>
-                          <Button variant="outline" role="combobox" className="w-full justify-between font-normal h-10">
-                            {s.service_id === OTHERS_VALUE
-                              ? (s.name || "Others (type manually)")
-                              : (s.name || <span className="text-muted-foreground">Select service...</span>)}
-                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                          </Button>
-                        </PopoverTrigger>
+                      {/* The name is typed, not only picked. A billed line was
+                          read-only once saved: the one text box here appeared
+                          only for an "Others" row, and a row loaded from a
+                          saved bill never is one, so a name could not be
+                          corrected at all. The master list stays, on the
+                          chevron, and still fills price, HSN, GST and material
+                          % when a service is chosen. Typing makes the line a
+                          one-off - which 1,466 of the 1,480 names billed this
+                          year already are. */}
+                      <Popover modal open={serviceSearchOpen === i} onOpenChange={(open) => setServiceSearchOpen(open ? i : null)}>
+                        <PopoverAnchor asChild>
+                          <div className="relative w-full">
+                            <Input
+                              className="h-10 pr-9"
+                              placeholder="Service / procedure name"
+                              value={s.name}
+                              onChange={(e) =>
+                                updateServiceInput(i, {
+                                  name: e.target.value,
+                                  // Not the master's service any more, once the
+                                  // name is somebody's own.
+                                  ...(s.service_id && s.service_id !== OTHERS_VALUE
+                                    ? { service_id: undefined }
+                                    : {}),
+                                })
+                              }
+                            />
+                            <PopoverTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                aria-label="Choose from Service Master"
+                                className="absolute right-0 top-0 h-10 w-9 px-0 text-muted-foreground hover:bg-transparent"
+                              >
+                                <ChevronsUpDown className="h-4 w-4 opacity-50" />
+                              </Button>
+                            </PopoverTrigger>
+                          </div>
+                        </PopoverAnchor>
                         <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
                           <Command>
                             <CommandInput placeholder="Search services..." />
@@ -2327,9 +2707,13 @@ const Billing = () => {
                                     updateServiceInput(i, {
                                       name: svc.name,
                                       price: Number(svc.price) || 0,
-                                      hsn: svc.hsn_code || "",
+                                      hsn: liveHsn(svc.hsn_code, activeCodes),
                                       gst: Number(svc.gst_percent) || 0,
                                       service_id: svc.id,
+                                      material_percent:
+                                        svc.material_percent === null || svc.material_percent === undefined
+                                          ? ""
+                                          : String(svc.material_percent),
                                     });
                                     setServiceSearchOpen(null);
                                   }}>
@@ -2368,16 +2752,35 @@ const Billing = () => {
                         options={hsnOptions}
                       />
                       {serviceInputs.length > 1 && (
-                        <Button type="button" variant="ghost" size="sm" className="text-destructive text-xs shrink-0 w-8 px-0" disabled={!!s.doctor_fee} onClick={() => removeServiceInput(i)}>✕</Button>
+                        <Button type="button" variant="ghost" size="sm" className="text-destructive text-xs shrink-0 w-8 px-0" onClick={() => removeServiceInput(i)}>✕</Button>
                       )}
                     </div>
-                    {s.service_id === OTHERS_VALUE && (
-                      <Input
-                        className="mt-1"
-                        placeholder="Service / procedure name"
-                        value={s.name}
-                        onChange={(e) => updateServiceInput(i, { name: e.target.value })}
-                      />
+                    {/* Filled from the Service Master when a service is picked, typed in
+                        for a one-off. Recorded on the line itself so a bill raised by
+                        hand - which is most of them - carries its own figure rather than
+                        depending on a master entry whose name happens to match. It never
+                        reaches the invoice: invoiceLineRows builds a fixed shape that both
+                        the on-screen invoice and the printed one render from, and
+                        generate-invoice-pdf maps only name/qty/price/hsn/gst. */}
+                    {(s.name.trim() || s.service_id) && (
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="text-[11px] text-muted-foreground shrink-0">Material cost</span>
+                        <div className="relative w-24">
+                          <Input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step="0.01"
+                            inputMode="decimal"
+                            className="h-8 pr-6 text-xs"
+                            placeholder="e.g. 20"
+                            value={numVal(s.material_percent)}
+                            onChange={(e) => updateServiceInput(i, { material_percent: e.target.value })}
+                          />
+                          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground pointer-events-none">%</span>
+                        </div>
+                        <span className="text-[11px] text-muted-foreground">Internal only — not shown on the invoice.</span>
+                      </div>
                     )}
                     {s.price > 0 && (() => {
                       const lineTax = getServiceLineTax(s.name, s.price, (s as any).hsn);
@@ -2535,6 +2938,174 @@ const Billing = () => {
                   </div>
                 )}
               </div>
+    </>
+  );
+
+
+  return (
+    <div>
+      <div className="page-header flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="page-title">Billing</h1>
+          <p className="page-subtitle">Manage invoices and payments</p>
+        </div>
+        <div className="flex gap-2 w-fit flex-wrap">
+          {/*
+            Every time staff open this dialog themselves, it starts empty.
+
+            The create form's state is shared with Edit Invoice
+            (startEditingInvoice seeds the very same serviceInputs/pharmaItems)
+            and with the "New Bill" prefill, and nothing used to clear it
+            except a successful save. So merely opening an existing invoice to
+            edit it, or abandoning a half-made bill, left that invoice's
+            service and product lines sitting in state - and the next Create
+            Invoice opened already carrying treatments nobody had chosen for
+            that patient. That is what was reported as services being added
+            automatically "not sure from where it came from", and it is why
+            those bills had to be deleted.
+
+            Resetting on open and not on close is deliberate: a programmatic
+            setOpen(true) from the two prefill routes does not fire
+            onOpenChange, so those still land on a clean form (they call
+            resetForm themselves) and then fill it.
+          */}
+          <Dialog open={open} onOpenChange={(o) => { if (o) resetForm(); setOpen(o); }}>
+            <DialogTrigger asChild>
+              <Button className="gap-2 w-fit">
+                <IndianRupee className="h-4 w-4" />
+                Create Invoice
+              </Button>
+            </DialogTrigger>
+          <DialogContent
+            className="max-w-none w-screen h-screen sm:rounded-none p-0 gap-0 overflow-hidden"
+            onEscapeKeyDown={(e) => {
+              if (!createFormHasContent()) return;
+              e.preventDefault();
+              toast.info("This invoice is still open", {
+                description: "Use the X in the corner to discard it.",
+              });
+            }}
+            onInteractOutside={(e) => {
+              if (createFormHasContent()) e.preventDefault();
+            }}
+          >
+            <DialogHeader className="px-6 pt-6 pb-3 border-b">
+              <DialogTitle className="font-display">Create Invoice</DialogTitle>
+            </DialogHeader>
+            <div className="lg:grid lg:grid-cols-[1fr_360px] lg:gap-0 max-h-[calc(100vh-5rem)] overflow-x-auto">
+            <div className="space-y-4 px-6 py-4 overflow-y-auto overflow-x-auto lg:max-h-[calc(100vh-5rem)] min-w-0">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label>Invoice #</Label>
+                  {/* The number is drawn from the database when the bill is saved,
+                      so there is nothing honest to show yet - this box used to
+                      display one that was not the number the bill got. */}
+                  <Input value="Assigned on save" readOnly className="mt-1.5 bg-muted/50 font-mono text-muted-foreground" />
+                </div>
+                <div>
+                  <Label>Invoice Date</Label>
+                  <CalendarPopover
+                    selected={invoiceDate}
+                    onSelect={(d) => d && setInvoiceDate(d)}
+                    trigger={
+                      <Button variant="outline" className={cn("mt-1.5 w-full justify-start text-left font-normal", !invoiceDate && "text-muted-foreground")}>
+                        <CalendarClock className="mr-2 h-4 w-4" />
+                        {invoiceDate ? format(invoiceDate, "dd MMM yyyy") : "Pick a date"}
+                      </Button>
+                    }
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label>Patient <span className="text-destructive">*</span></Label>
+                  <PatientCombobox
+                    value={patientId}
+                    onValueChange={setPatientId}
+                    placeholder="Select patient"
+                    className="mt-1.5"
+                  />
+                </div>
+                <div>
+                <Label>Doctor</Label>
+                <StaffCombobox
+                  value={doctorId}
+                  onValueChange={handleDoctorChange}
+                  allowNone
+                  noneLabel="No doctor"
+                  placeholder="Select doctor"
+                  className="mt-1.5"
+                  roleFilter={["Doctor"]}
+                />
+                {doctorId && (() => {
+                  const d: any = (doctorsList as any[]).find((x: any) => x.id === doctorId);
+                  const fee = Number(d?.consultation_fee) || 0;
+                  return (
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      {fee > 0
+                        ? `Consultation fee for this doctor is ₹${fee.toLocaleString()} — add it as a service if you are billing it.`
+                        : "This doctor has no consultation fee set in Staff Master."}
+                    </p>
+                  );
+                })()}
+                </div>
+              </div>
+
+              {/* Which visit this bill pays for. Without it the bill saves with
+                  appointment_id null and the appointments list - which reads
+                  that column alone - shows the visit as unbilled. */}
+              {patientId && (
+                <div>
+                  <Label>Linked Appointment</Label>
+                  <Select
+                    value={effectiveLinkAppointmentId || "none"}
+                    onValueChange={(v) => setLinkAppointmentChoice(v === "none" ? "" : v)}
+                  >
+                    <SelectTrigger className="mt-1.5"><SelectValue placeholder="Select appointment" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not linked</SelectItem>
+                      {(createPatientAppointments as PickerAppointment[]).map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {format(new Date(a.start_time), "dd MMM yyyy, h:mm a")} · {visitLabel(a)}{a.status ? ` · ${a.status}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {(() => {
+                    // The mistake this is here to catch: Vaishnavi's 5 October
+                    // bill went onto her 13 June visit, 114 days away, because
+                    // that was the only row in this list that named the
+                    // treatment. It warns rather than blocks - billing a visit a
+                    // day late is ordinary.
+                    const picked = (createPatientAppointments as PickerAppointment[]).find(
+                      (a) => a.id === effectiveLinkAppointmentId,
+                    );
+                    const otherDay =
+                      picked?.start_time &&
+                      invoiceDate &&
+                      !isSameDay(new Date(picked.start_time), invoiceDate);
+                    if (otherDay) {
+                      return (
+                        <p className="text-[11px] text-amber-700 dark:text-amber-500 mt-1">
+                          This bill is dated {format(invoiceDate, "dd MMM yyyy")} — the visit you have picked is{" "}
+                          {format(new Date(picked!.start_time as string), "dd MMM yyyy")}. Check it is the right one.
+                        </p>
+                      );
+                    }
+                    return (
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        {effectiveLinkAppointmentId
+                          ? "This bill will show against that appointment in the appointments list."
+                          : (createPatientAppointments as PickerAppointment[]).length
+                            ? "Not linked. Pick the visit this bill is for, so the appointments list shows it against the right one."
+                            : "This patient has no appointments to link to."}
+                      </p>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {serviceAndProductSections}
 
               {/* Commercial */}
               <div className="rounded-xl border bg-muted/20 p-4 space-y-4">
@@ -2552,81 +3123,17 @@ const Billing = () => {
                     </SelectContent>
                   </Select>
                 </div>
+                {renderPaymentMode(paymentMode, setPaymentMode, true)}
+                {/* Who raised it - for the clinic, not the patient. Deliberately
+                    absent from the invoice, the PDF and the WhatsApp message. */}
                 <div>
-                  <div className="flex items-center justify-between">
-                    <Label>Payment Mode</Label>
-                    {paymentType === "One-time" && (
-                      splits.length === 0 ? (
-                        <button
-                          type="button"
-                          className="text-xs text-primary hover:underline"
-                          onClick={() => setSplits([{ mode: "Cash", amount: paidAmount || 0 }, { mode: "UPI", amount: 0 }])}
-                        >
-                          + Split Payment
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="text-xs text-muted-foreground hover:underline"
-                          onClick={() => setSplits([])}
-                        >
-                          Use single mode
-                        </button>
-                      )
-                    )}
-                  </div>
-                  {splits.length === 0 ? (
-                    <Select value={paymentMode} onValueChange={setPaymentMode}>
-                      <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {["Cash", "Card", "UPI", "Cheque", "Bank Transfer"].map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <div className="mt-1.5 space-y-2">
-                      {splits.map((row, idx) => (
-                        <div key={idx} className="flex gap-2 items-center">
-                          <Select
-                            value={row.mode}
-                            onValueChange={(v) => setSplits(splits.map((r, i) => i === idx ? { ...r, mode: v } : r))}
-                          >
-                            <SelectTrigger className="flex-1"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {["Cash", "Card", "UPI", "Cheque", "Bank Transfer"].map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                            </SelectContent>
-                          </Select>
-                          <Input
-                            type="number"
-                            placeholder="Amount"
-                            className="w-28"
-                            value={row.amount || ""}
-                            onChange={(e) => setSplits(splits.map((r, i) => i === idx ? { ...r, amount: parseFloat(e.target.value) || 0 } : r))}
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-9 w-9 shrink-0"
-                            onClick={() => setSplits(splits.filter((_, i) => i !== idx))}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      ))}
-                      {splits.length < 3 && (
-                        <button
-                          type="button"
-                          className="text-xs text-primary hover:underline"
-                          onClick={() => setSplits([...splits, { mode: "Cash", amount: 0 }])}
-                        >
-                          + Add row
-                        </button>
-                      )}
-                      <div className="text-xs text-muted-foreground">
-                        Split total {formatMoney(splitTotalAmount)} — auto-applied as Paid Amount
-                      </div>
-                    </div>
-                  )}
+                  <Label>Billed By <span className="text-destructive">*</span></Label>
+                  <Select value={billedBy || undefined} onValueChange={setBilledBy}>
+                    <SelectTrigger className="mt-1.5"><SelectValue placeholder="Not recorded" /></SelectTrigger>
+                    <SelectContent>
+                      {BILLED_BY_OPTIONS.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -2744,22 +3251,21 @@ const Billing = () => {
                         return (
                           <div key={i} className={cn("grid grid-cols-[3rem_1fr_5rem_5rem_5rem] gap-2 items-center border rounded-lg p-2", invoiceNow ? "border-primary/50 bg-primary/5" : "bg-muted/30")}>
                             <span className="text-xs font-medium text-muted-foreground">#{i + 1}</span>
-                            <Popover>
-                              <PopoverTrigger asChild>
+                            <CalendarPopover
+                              selected={dueDate}
+                              onSelect={(d) => {
+                                if (d) {
+                                  const updated = [...recurringDueDates];
+                                  updated[i] = d;
+                                  setRecurringDueDates(updated);
+                                }
+                              }}
+                              trigger={
                                 <Button variant="outline" size="sm" className="h-7 text-xs justify-start font-normal w-full">
                                   {format(dueDate, "dd MMM yyyy")}
                                 </Button>
-                              </PopoverTrigger>
-                              <PopoverContent className="w-auto p-0" align="start">
-                                <Calendar mode="single" selected={dueDate} onSelect={(d) => {
-                                  if (d) {
-                                    const updated = [...recurringDueDates];
-                                    updated[i] = d;
-                                    setRecurringDueDates(updated);
-                                  }
-                                }} className="p-3 pointer-events-auto" />
-                              </PopoverContent>
-                            </Popover>
+                              }
+                            />
                             <span className="text-xs text-right">{money(recurringAmount)}</span>
                             <Select value={instStatus} onValueChange={(v) => {
                               const updated = [...recurringStatuses];
@@ -2827,26 +3333,20 @@ const Billing = () => {
                                 <span className="flex items-center gap-1">
                                   <CalendarClock className="h-3 w-3" />
                                   Recurring appointment on
-                                  <Popover>
-                                    <PopoverTrigger asChild>
+                                  <CalendarPopover
+                                    selected={recurringApptDates[i] || dueDate}
+                                    onSelect={(d) => {
+                                      if (!d) return;
+                                      const updated = [...recurringApptDates];
+                                      updated[i] = d;
+                                      setRecurringApptDates(updated);
+                                    }}
+                                    trigger={
                                       <Button variant="outline" size="sm" className="h-6 px-2 text-[11px] font-medium">
                                         {format(recurringApptDates[i] || dueDate, "dd MMM yyyy")}
                                       </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent className="w-auto p-0" align="start">
-                                      <Calendar
-                                        mode="single"
-                                        selected={recurringApptDates[i] || dueDate}
-                                        onSelect={(d) => {
-                                          if (!d) return;
-                                          const updated = [...recurringApptDates];
-                                          updated[i] = d;
-                                          setRecurringApptDates(updated);
-                                        }}
-                                        className="p-3 pointer-events-auto"
-                                      />
-                                    </PopoverContent>
-                                  </Popover>
+                                    }
+                                  />
                                   {recurringApptDates[i] && (
                                     <button
                                       type="button"
@@ -3020,11 +3520,11 @@ const Billing = () => {
               </div>
               <div>
                 <Label>Payment Amount (₹) *</Label>
-                <Input type="number" className="mt-1.5" placeholder={`Max: ₹${(Number(paymentInv.total_amount) - Number(paymentInv.paid_amount)).toLocaleString()}`} value={addPaymentAmount} onChange={(e) => setAddPaymentAmount(parseFloat(e.target.value) || 0)} max={Number(paymentInv.total_amount) - Number(paymentInv.paid_amount)} />
+                <Input type="number" className="mt-1.5" placeholder={`Max: ₹${(Number(paymentInv.total_amount) - Number(paymentInv.paid_amount)).toLocaleString()}`} value={numVal(addPaymentAmount)} onChange={(e) => setAddPaymentAmount(parseFloat(e.target.value) || 0)} max={Number(paymentInv.total_amount) - Number(paymentInv.paid_amount)} />
               </div>
               <div>
                 <Label>Payment Mode</Label>
-                <Select value={addPaymentMode} onValueChange={setAddPaymentMode}>
+                <Select value={numVal(addPaymentMode)} onValueChange={setAddPaymentMode}>
                   <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {["Cash", "Card", "UPI", "Cheque", "Bank Transfer"].map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
@@ -3054,6 +3554,7 @@ const Billing = () => {
           onEdit={(v) => { setEditingView(v); setViewEditorOpen(true); }}
           onDelete={(v) => setDeleteViewTarget(v)}
           onPin={pinDefault}
+          onUnpin={unpinDefault}
           onClone={(v) => { setEditingView({ ...v, id: undefined as any, name: `${v.name} (Copy)`, is_default: false }); setViewEditorOpen(true); }}
           onFields={() => setViewFieldsOpen(true)}
           onRefresh={invalidateInvoices}
@@ -3062,6 +3563,7 @@ const Billing = () => {
           displayModes={["table", "kanban"]}
           onKanbanSettings={() => setKanbanOpen(true)}
           count={total}
+          countLoading={invoicesLoading}
           search={search}
           onSearchChange={setSearch}
           itemLabel="Invoices"
@@ -3094,6 +3596,9 @@ const Billing = () => {
                   onChange={(charts) => saveCharts(activeView.id, charts)}
                   onClose={() => setViewChartsOpen(false)}
                   fields={BILLING_VIEW_FIELDS}
+                  // A chart grouped by a picklist shows the names behind the
+                  // ids the column stores - the doctor field holds a staff id.
+                  optionsFor={viewOptionsFor}
                   itemLabel="Invoices"
                   defaultGroupField="status"
                 />
@@ -3129,30 +3634,29 @@ const Billing = () => {
                 </div>
                 <div className="space-y-2">
                   <Label className="text-xs">Date From</Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
+                  <CalendarPopover
+                    selected={filterDateFrom}
+                    onSelect={setFilterDateFrom}
+                    trigger={
                       <Button variant="outline" size="sm" className="w-full justify-start text-left font-normal">
                         {filterDateFrom ? format(filterDateFrom, "PPP") : "Any"}
                       </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar mode="single" selected={filterDateFrom} onSelect={setFilterDateFrom} className="p-3 pointer-events-auto" />
-                    </PopoverContent>
-                  </Popover>
+                    }
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label className="text-xs">Date To</Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
+                  <CalendarPopover
+                    selected={filterDateTo}
+                    onSelect={setFilterDateTo}
+                    trigger={
                       <Button variant="outline" size="sm" className="w-full justify-start text-left font-normal">
                         {filterDateTo ? format(filterDateTo, "PPP") : "Any"}
                       </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar mode="single" selected={filterDateTo} onSelect={setFilterDateTo} className="p-3 pointer-events-auto" />
-                    </PopoverContent>
-                  </Popover>
+                    }
+                  />
                 </div>
+                {!ownScopeOnly && (
                 <div className="space-y-2">
                   <Label className="text-xs">Doctor</Label>
                   <Select value={filterDoctor || "all"} onValueChange={(v) => setFilterDoctor(v === "all" ? "" : v)}>
@@ -3163,6 +3667,7 @@ const Billing = () => {
                     </SelectContent>
                   </Select>
                 </div>
+                )}
                 <div className="space-y-2">
                   <Label className="text-xs">Service</Label>
                   <Select value={filterService || "all"} onValueChange={(v) => setFilterService(v === "all" ? "" : v)}>
@@ -3227,19 +3732,22 @@ const Billing = () => {
                 <th className="text-left text-xs font-medium text-muted-foreground p-4 hidden md:table-cell">Services</th>
                 <th className="text-left text-xs font-medium text-muted-foreground p-4 hidden sm:table-cell">Type</th>
                 <th className="text-right text-xs font-medium text-muted-foreground p-4">Amount</th>
+                <th className="text-left text-xs font-medium text-muted-foreground p-4 hidden sm:table-cell">Mode</th>
                 <th className="text-left text-xs font-medium text-muted-foreground p-4">Status</th>
                 <th className="text-right text-xs font-medium text-muted-foreground p-4">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {total === 0 ? (
-                <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">No invoices found</td></tr>
+                <tr><td colSpan={9} className="text-center py-8 text-muted-foreground">
+                  {invoicesLoading ? "Loading invoices…" : "No invoices found"}
+                </td></tr>
               ) : (
                 pagedInvoices.map((inv: any) => (
                   <tr key={inv.id} className="hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => openViewSheet(inv)}>
                     <td className="p-4">
                       <p className="font-medium text-sm text-primary hover:underline">{inv.invoice_number}</p>
-                      <p className="text-xs text-muted-foreground">{new Date(inv.created_at).toLocaleDateString()}</p>
+                      <p className="text-xs text-muted-foreground">{displayDate(inv.created_at)}</p>
                     </td>
                     <td className="p-4 text-sm">{getPatientName(inv, patientById) || "—"}</td>
                     <td className="p-4 hidden lg:table-cell">
@@ -3264,6 +3772,11 @@ const Billing = () => {
                       {inv.status !== "Pending" && (
                         <p className="text-xs text-muted-foreground">Paid: ₹{Number(inv.paid_amount).toLocaleString()}</p>
                       )}
+                    </td>
+                    {/* A bill taken across two instruments stores the literal
+                        "Split" in payment_mode, so the parts are named here. */}
+                    <td className="p-4 hidden sm:table-cell">
+                      <span className="text-xs text-muted-foreground">{paymentModeLabel(inv) || "—"}</span>
                     </td>
                     <td className="p-4" onClick={(e) => e.stopPropagation()}>
                       {inv.status === "Cancelled" ? (
@@ -3373,6 +3886,9 @@ const Billing = () => {
                       <span className="font-medium">{viewInvoice.payment_mode || "Cash"}</span>
                     )}
                   </div>
+                  {/* The clinic's own record of who raised it. It is not on the
+                      invoice the patient receives, nor in its PDF. */}
+                  <div><span className="text-muted-foreground text-xs block">Billed By</span><span className="font-medium">{billedByLabel(viewInvoice.billed_by)}</span></div>
                   <div><span className="text-muted-foreground text-xs block">Type</span><Badge variant="outline" className="text-xs mt-0.5">{viewInvoice.payment_type}</Badge></div>
                   <div><span className="text-muted-foreground text-xs block">Status</span><span className={`text-xs px-2.5 py-1 rounded-full font-medium ${statusStyles[viewInvoice.status] || ""}`}>{viewInvoice.status}</span></div>
                 </div>
@@ -3419,11 +3935,11 @@ const Billing = () => {
                             <td className="px-3 py-2">{r.name}</td>
                             <td className="px-3 py-2 text-muted-foreground text-xs">{r.hsn || "—"}</td>
                             <td className="px-3 py-2 text-right">{r.qty}</td>
-                            <td className="px-3 py-2 text-right">{formatMoney(r.price)}</td>
-                            <td className="px-3 py-2 text-right">{formatMoney(r.amount)}</td>
+                            <td className="px-3 py-2 text-right">{formatMoneyPrecise(r.price)}</td>
+                            <td className="px-3 py-2 text-right">{formatMoneyPrecise(r.amount)}</td>
                             <td className="px-3 py-2 text-right">{r.gst ? `${r.gst}%` : "—"}</td>
-                            <td className="px-3 py-2 text-right">{formatMoney(r.tax)}</td>
-                            <td className="px-3 py-2 text-right font-medium">{formatMoney(r.total)}</td>
+                            <td className="px-3 py-2 text-right">{formatMoneyPrecise(r.tax)}</td>
+                            <td className="px-3 py-2 text-right font-medium">{formatMoneyPrecise(r.total)}</td>
                           </tr>
                         ))}
                         {/* Tax breakdown - shown as its own row(s) right above Total,
@@ -3431,21 +3947,21 @@ const Billing = () => {
                         {Number(viewInvoice.cgst_amount) > 0 && (
                           <tr className="border-t text-muted-foreground">
                             <td className="px-3 py-1.5" colSpan={6}>CGST</td>
-                            <td className="px-3 py-1.5 text-right">{formatMoney(Number(viewInvoice.cgst_amount))}</td>
+                            <td className="px-3 py-1.5 text-right">{formatMoneyPrecise(Number(viewInvoice.cgst_amount))}</td>
                             <td className="px-3 py-1.5" />
                           </tr>
                         )}
                         {Number(viewInvoice.sgst_amount) > 0 && (
                           <tr className="border-t text-muted-foreground">
                             <td className="px-3 py-1.5" colSpan={6}>SGST</td>
-                            <td className="px-3 py-1.5 text-right">{formatMoney(Number(viewInvoice.sgst_amount))}</td>
+                            <td className="px-3 py-1.5 text-right">{formatMoneyPrecise(Number(viewInvoice.sgst_amount))}</td>
                             <td className="px-3 py-1.5" />
                           </tr>
                         )}
                         {Number(viewInvoice.igst_amount) > 0 && (
                           <tr className="border-t text-muted-foreground">
                             <td className="px-3 py-1.5" colSpan={6}>IGST</td>
-                            <td className="px-3 py-1.5 text-right">{formatMoney(Number(viewInvoice.igst_amount))}</td>
+                            <td className="px-3 py-1.5 text-right">{formatMoneyPrecise(Number(viewInvoice.igst_amount))}</td>
                             <td className="px-3 py-1.5" />
                           </tr>
                         )}
@@ -3457,12 +3973,12 @@ const Billing = () => {
                                 rather than a flat, unlabeled "Tax" line. */}
                             <tr className="border-t text-muted-foreground">
                               <td className="px-3 py-1.5" colSpan={6}>CGST</td>
-                              <td className="px-3 py-1.5 text-right">{formatMoney(Math.round(t.tax) / 2)}</td>
+                              <td className="px-3 py-1.5 text-right">{formatMoneyPrecise(t.tax / 2)}</td>
                               <td className="px-3 py-1.5" />
                             </tr>
                             <tr className="border-t text-muted-foreground">
                               <td className="px-3 py-1.5" colSpan={6}>SGST</td>
-                              <td className="px-3 py-1.5 text-right">{formatMoney(Math.round(t.tax) / 2)}</td>
+                              <td className="px-3 py-1.5 text-right">{formatMoneyPrecise(t.tax / 2)}</td>
                               <td className="px-3 py-1.5" />
                             </tr>
                           </>
@@ -3490,7 +4006,7 @@ const Billing = () => {
               {/* Linked appointment */}
               {viewInvoice.appointments && (
                 <button
-                  onClick={() => { setSelectedAppointmentId(viewInvoice.appointments.id); setViewInvoice(null); }}
+                  onClick={() => { setViewInvoice(null); openAppointment(viewInvoice.appointments.id); }}
                   className="w-full flex items-center gap-2 text-sm text-primary bg-primary/5 hover:bg-primary/10 rounded-lg px-3 py-2 transition-colors"
                 >
                   <CalendarClock className="h-4 w-4" />
@@ -3515,18 +4031,60 @@ const Billing = () => {
           {/* Edit Mode */}
           {viewInvoice && isEditing && (
             <div className="space-y-4">
-              <div>
-                <Label>Patient Name</Label>
-                <Input className="mt-1.5" value={editData.patient_name} disabled />
+              {/* Both were unreachable from here: the patient was a disabled box -
+                  blank whenever the bill had no patient, which is precisely when
+                  it needs correcting - and the doctor was not on the form at all. */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label>Patient <span className="text-destructive">*</span></Label>
+                  <PatientCombobox
+                    value={editData.patient_id || ""}
+                    onValueChange={(v) => {
+                      const p = patientById.get(v) as { first_name?: string; last_name?: string } | undefined;
+                      setEditData({
+                        ...editData,
+                        patient_id: v,
+                        // The bill keeps its own copy of the name; move it with
+                        // the link or the two disagree.
+                        patient_name: p ? `${p.first_name} ${p.last_name || ""}`.trim() : editData.patient_name,
+                      });
+                    }}
+                    placeholder="Select patient"
+                    className="mt-1.5"
+                  />
+                </div>
+                <div>
+                  <Label>Doctor</Label>
+                  <StaffCombobox
+                    value={editData.doctor_id || ""}
+                    onValueChange={(v) => setEditData({ ...editData, doctor_id: v })}
+                    allowNone
+                    noneLabel="No doctor"
+                    placeholder="Select doctor"
+                    className="mt-1.5"
+                    roleFilter={["Doctor"]}
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Total Amount (₹)</Label>
-                  <Input type="number" className="mt-1.5" value={editData.total_amount} onChange={(e) => setEditData({ ...editData, total_amount: parseFloat(e.target.value) || 0 })} />
+                  {/* Read-only now that the lines below are editable. It used
+                      to be free text while the lines were not, so an invoice
+                      could be edited to 600 while its lines still said 800 -
+                      and the printed copy is built from the lines. */}
+                  <Input type="number" className="mt-1.5" value={numVal(linesGrandTotal)} disabled />
+                  <p className="text-[11px] text-muted-foreground mt-1">Adds up from the services and products below.</p>
                 </div>
                 <div>
                   <Label>Paid Amount (₹)</Label>
-                  <Input type="number" className="mt-1.5" value={editData.paid_amount} onChange={(e) => setEditData({ ...editData, paid_amount: parseFloat(e.target.value) || 0 })} />
+                  <Input
+                    type="number"
+                    className={`mt-1.5 ${splits.length > 0 ? "bg-muted" : ""}`}
+                    value={splits.length > 0 ? numVal(splitTotalAmount) : numVal(editData.paid_amount)}
+                    readOnly={splits.length > 0}
+                    onChange={(e) => setEditData({ ...editData, paid_amount: parseFloat(e.target.value) || 0 })}
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -3539,12 +4097,20 @@ const Billing = () => {
                     </SelectContent>
                   </Select>
                 </div>
+                {renderPaymentMode(
+                  editData.payment_mode,
+                  (v) => setEditData({ ...editData, payment_mode: v }),
+                  editData.payment_type === "One-time",
+                )}
                 <div>
-                  <Label>Payment Mode</Label>
-                  <Select value={editData.payment_mode} onValueChange={(v) => setEditData({ ...editData, payment_mode: v })}>
-                    <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
+                  <Label>Billed By</Label>
+                  <Select
+                    value={editData.billed_by || undefined}
+                    onValueChange={(v) => setEditData({ ...editData, billed_by: v })}
+                  >
+                    <SelectTrigger className="mt-1.5"><SelectValue placeholder="Not recorded" /></SelectTrigger>
                     <SelectContent>
-                      {["Cash", "Card", "UPI", "Cheque", "Bank Transfer"].map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                      {BILLED_BY_OPTIONS.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
@@ -3552,6 +4118,12 @@ const Billing = () => {
               <div>
                 <Label>Notes</Label>
                 <Textarea className="mt-1.5" value={editData.notes} onChange={(e) => setEditData({ ...editData, notes: e.target.value })} rows={2} />
+              </div>
+
+              {/* The same blocks the create form uses, so what was billed can
+                  actually be changed here - and so the two forms cannot drift. */}
+              <div className="space-y-4">
+                {serviceAndProductSections}
               </div>
               <div>
                 <Label>Linked Appointment</Label>
@@ -3566,7 +4138,7 @@ const Billing = () => {
                         <SelectItem value="none">Not linked</SelectItem>
                         {(patientAppointments as any[]).map((a: any) => (
                           <SelectItem key={a.id} value={a.id}>
-                            {format(new Date(a.start_time), "dd MMM yyyy, h:mm a")} · {a.service || "Visit"}{a.status ? ` · ${a.status}` : ""}
+                            {format(new Date(a.start_time), "dd MMM yyyy, h:mm a")} · {visitLabel(a)}{a.status ? ` · ${a.status}` : ""}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -3631,7 +4203,7 @@ const Billing = () => {
                   </Button>
                 ) : (
                   <>
-                    <Button className="w-full gap-1.5" onClick={() => setIsEditing(true)}>
+                    <Button className="w-full gap-1.5" onClick={() => startEditingInvoice(viewInvoice)}>
                       <Pencil className="h-3.5 w-3.5" /> Edit Invoice
                     </Button>
                     <Button
@@ -3661,7 +4233,7 @@ const Billing = () => {
 
       <AppointmentDetailSheet
         appointmentId={selectedAppointmentId}
-        onClose={() => setSelectedAppointmentId(null)}
+        onClose={closeAppointment}
       />
 
       <KanbanSettingsDialog
@@ -3762,6 +4334,21 @@ const Billing = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <PdfPreviewDialog
+        open={pdfOpen}
+        onClose={() => { setPdfOpen(false); setPdfUrl(null); setPdfHtml(null); setPdfError(null); setPdfNotice(null); }}
+        title={pdfInvoice?.invoice_number ? `Invoice ${pdfInvoice.invoice_number}` : "Invoice"}
+        preparing="Preparing the invoice…"
+        pages={pdfPages}
+        url={pdfUrl}
+        html={pdfHtml}
+        error={pdfError}
+        notice={pdfNotice}
+        onDownload={downloadInvoicePDF}
+        downloading={pdfDownloading}
+        onRetry={() => pdfInvoice && openInvoicePDF(pdfInvoice)}
+      />
     </div>
   );
 };

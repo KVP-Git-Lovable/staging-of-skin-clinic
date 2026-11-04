@@ -49,24 +49,27 @@ export async function fetchInvoicesPage({
   return { rows: data || [], total: count || 0 };
 }
 
-export interface FetchInvoicesBoundedParams extends InvoiceDateRange {
-  limit: number;
-}
-
 /**
- * Bounded fetch for when a quick filter, search, custom saved view, or
- * Kanban display needs the full (client-side-filterable) set in memory -
- * capped well below the full table so a handful of requests replace
- * fetchAll()'s dozens, while keeping every existing client-side filter
- * predicate (doctor/service/search/saved-view engine) working unchanged.
+ * Every invoice in the date range, for when a custom saved view or Kanban
+ * display needs the whole client-side-filterable set in memory.
+ *
+ * The date range is the only bound, and deliberately so. This used to end with
+ * `all.slice(0, 3000)`, which hid roughly 26,000 of the table's ~29,000 invoices
+ * from any saved view - the view's own predicates run AFTER this, so they were
+ * searching a third of the table and reporting what they found there as the
+ * whole answer. The row count under the table came from the same truncated set,
+ * so nothing on screen suggested anything was missing.
+ *
+ * The cap bought nothing either: fetchAll() takes no limit, so every row had
+ * already been fetched over ~30 requests by the time the slice threw most of
+ * them away. Removing it costs no extra request and no extra server work.
  */
-export async function fetchInvoicesBounded({ dateFrom, dateTo, limit }: FetchInvoicesBoundedParams): Promise<any[]> {
-  const all = await fetchAll<any>((from, to) => {
+export async function fetchInvoicesInRange({ dateFrom, dateTo }: InvoiceDateRange): Promise<any[]> {
+  return await fetchAll<any>((from, to) => {
     let q = supabase.from("invoices").select(INVOICE_SELECT);
     q = applyDateRange(q, { dateFrom, dateTo });
     return q.order("created_at", { ascending: false }).range(from, to);
   });
-  return all.slice(0, limit);
 }
 
 export interface FetchInvoicesSearchParams extends InvoiceDateRange {
@@ -80,7 +83,7 @@ export interface FetchInvoicesSearchParams extends InvoiceDateRange {
 
 /**
  * Server-side narrowed fetch for the Billing page's search box and quick
- * filters. fetchInvoicesBounded() only keeps the newest N rows, so an older
+ * filters. The saved-view path fetches by date range only, so an older
  * invoice was unreachable via search/filter; here every mappable predicate
  * (date range, status, payment type, service, doctor, and the free-text
  * search across invoice number / patient / payment fields) is pushed to

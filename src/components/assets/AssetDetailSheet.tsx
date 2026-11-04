@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { displayDate } from "@/lib/dateInput";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { moveToTrash } from "@/lib/trash";
@@ -13,7 +14,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Package, AlertTriangle, Link2, Plus, Trash2, Shield, Wrench } from "lucide-react";
+import { Package, AlertTriangle, Link2, Plus, Trash2, Shield, Wrench, Pencil } from "lucide-react";
 import { IssueFormDialog } from "./IssueFormDialog";
 import { toast } from "sonner";
 
@@ -22,9 +23,11 @@ interface AssetDetailSheetProps {
   onOpenChange: (open: boolean) => void;
   asset: any;
   vendors: any[];
+  /** Open this asset in the form to correct it. */
+  onEdit?: () => void;
 }
 
-export function AssetDetailSheet({ open, onOpenChange, asset, vendors }: AssetDetailSheetProps) {
+export function AssetDetailSheet({ open, onOpenChange, asset, vendors, onEdit }: AssetDetailSheetProps) {
   const queryClient = useQueryClient();
   const [issueFormOpen, setIssueFormOpen] = useState(false);
   const [linkServiceOpen, setLinkServiceOpen] = useState(false);
@@ -129,9 +132,16 @@ export function AssetDetailSheet({ open, onOpenChange, asset, vendors }: AssetDe
         <SheetContent className="w-screen max-w-none sm:max-w-none overflow-y-auto">
           <SheetHeader>
             <Badge variant="outline" className="text-[10px] text-muted-foreground w-fit font-normal">Asset</Badge>
-            <SheetTitle className="font-display flex items-center gap-2">
-              <Package className="h-5 w-5" /> {asset.name}
-            </SheetTitle>
+            <div className="flex items-start justify-between gap-2">
+              <SheetTitle className="font-display flex items-center gap-2">
+                <Package className="h-5 w-5" /> {asset.name}
+              </SheetTitle>
+              {onEdit && (
+                <Button variant="outline" size="sm" className="gap-1.5 shrink-0" onClick={onEdit}>
+                  <Pencil className="h-3.5 w-3.5" /> Edit
+                </Button>
+              )}
+            </div>
           </SheetHeader>
 
           {/* Quick info badges */}
@@ -170,7 +180,7 @@ export function AssetDetailSheet({ open, onOpenChange, asset, vendors }: AssetDe
                   ["Location", asset.location],
                   ["Condition", asset.condition],
                   ["Vendor", asset.vendor?.name],
-                  ["Purchase Date", asset.purchase_date ? new Date(asset.purchase_date).toLocaleDateString() : null],
+                  ["Purchase Date", asset.purchase_date ? displayDate(asset.purchase_date) : null],
                   ["Purchase Price", asset.purchase_price ? `₹${Number(asset.purchase_price).toLocaleString()}` : null],
                   ["Invoice #", asset.invoice_number],
                 ].map(([label, value]) => (
@@ -186,8 +196,8 @@ export function AssetDetailSheet({ open, onOpenChange, asset, vendors }: AssetDe
                 <div className="border rounded-lg p-4">
                   <h4 className="text-sm font-semibold flex items-center gap-1.5 mb-2"><Shield className="h-4 w-4" /> Warranty</h4>
                   <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div><p className="text-xs text-muted-foreground">Start</p><p>{asset.warranty_start_date ? new Date(asset.warranty_start_date).toLocaleDateString() : "—"}</p></div>
-                    <div><p className="text-xs text-muted-foreground">End</p><p>{new Date(asset.warranty_end_date).toLocaleDateString()}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Start</p><p>{asset.warranty_start_date ? displayDate(asset.warranty_start_date) : "—"}</p></div>
+                    <div><p className="text-xs text-muted-foreground">End</p><p>{displayDate(asset.warranty_end_date)}</p></div>
                   </div>
                   {asset.warranty_terms && <p className="text-xs text-muted-foreground mt-2">{asset.warranty_terms}</p>}
                 </div>
@@ -198,8 +208,8 @@ export function AssetDetailSheet({ open, onOpenChange, asset, vendors }: AssetDe
                 <div className="border rounded-lg p-4">
                   <h4 className="text-sm font-semibold flex items-center gap-1.5 mb-2"><Wrench className="h-4 w-4" /> AMC</h4>
                   <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div><p className="text-xs text-muted-foreground">Start</p><p>{asset.amc_start_date ? new Date(asset.amc_start_date).toLocaleDateString() : "—"}</p></div>
-                    <div><p className="text-xs text-muted-foreground">End</p><p>{new Date(asset.amc_end_date).toLocaleDateString()}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Start</p><p>{asset.amc_start_date ? displayDate(asset.amc_start_date) : "—"}</p></div>
+                    <div><p className="text-xs text-muted-foreground">End</p><p>{displayDate(asset.amc_end_date)}</p></div>
                     <div><p className="text-xs text-muted-foreground">AMC Vendor</p><p>{asset.amc_vendor?.name || "—"}</p></div>
                     <div><p className="text-xs text-muted-foreground">Cost</p><p>{asset.amc_cost ? `₹${Number(asset.amc_cost).toLocaleString()}` : "—"}</p></div>
                   </div>
@@ -256,7 +266,7 @@ export function AssetDetailSheet({ open, onOpenChange, asset, vendors }: AssetDe
                         </div>
                       </div>
                       <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
-                        <span>{new Date(issue.reported_date).toLocaleDateString()}</span>
+                        <span>{displayDate(issue.reported_date)}</span>
                         {issue.reported_by && <span>By: {issue.reported_by}</span>}
                         {issue.vendor?.name && <span>Vendor: {issue.vendor.name}</span>}
                         {issue.cost > 0 && <span>Cost: ₹{Number(issue.cost).toLocaleString()}</span>}

@@ -9,7 +9,6 @@ export default function ProcedureNew() {
   const patientId = params.get("patient_id") || undefined;
   const appointmentId = params.get("appointment_id") || undefined;
   const staffId = params.get("staff_id") || undefined;
-  const serviceName = params.get("service") || undefined;
 
   return (
     <div className="space-y-4">
@@ -27,7 +26,6 @@ export default function ProcedureNew() {
         defaultPatientId={patientId}
         defaultAppointmentId={appointmentId}
         defaultStaffId={staffId}
-        defaultServiceName={serviceName}
         onSaved={(id) => navigate(`/procedures?id=${id}`)}
       />
     </div>

@@ -1,6 +1,11 @@
 import type { Config } from "tailwindcss";
 
 export default {
+  /* Without this, `hover:` compiles with no `@media (hover: hover)` guard and
+     the state LATCHES on touch: tap "Start My Day" and button.tsx's
+     hover:-translate-y-px keeps it visibly lifted until you tap elsewhere -
+     for the whole 20-second check-in. */
+  future: { hoverOnlyWhenSupported: true },
   darkMode: ["class"],
   content: ["./pages/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./app/**/*.{ts,tsx}", "./src/**/*.{ts,tsx}"],
   prefix: "",

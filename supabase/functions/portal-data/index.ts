@@ -100,7 +100,7 @@ Deno.serve(async (req) => {
       case "appointments":
         return json({
           data: await rows(
-            `appointments?select=*,staff(first_name,last_name)&patient_id=eq.${pid}&order=start_time.desc`,
+            `appointments?select=*,staff:staff!appointments_staff_id_fkey(first_name,last_name)&patient_id=eq.${pid}&order=start_time.desc`,
           ),
         });
 

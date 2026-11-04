@@ -1,21 +1,23 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Phone, Loader2, ArrowRight, Lock, KeyRound, ArrowLeft } from "lucide-react";
+import { Phone, Loader2, ArrowRight, Lock, KeyRound, ArrowLeft, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
-import { useClinicSettings } from "@/hooks/useClinicSettings";
+import clinicLogo from "@/assets/skin-clinic-logo.png";
 
-type Step = "phone" | "enter_pin" | "create_pin" | "forgot_request" | "forgot_verify";
+type Step = "phone" | "choose_patient" | "enter_pin" | "create_pin" | "forgot_request" | "forgot_verify";
+
+/** One person on a shared number. */
+interface Candidate { id: string; name: string }
 
 const SESSION_DAYS = 30;
 
 const PortalLogin = () => {
   const navigate = useNavigate();
-  const { name: clinicName, logoUrl: clinicLogo } = useClinicSettings();
   const [step, setStep] = useState<Step>("phone");
   const [phone, setPhone] = useState("");
   const [pin, setPin] = useState("");
@@ -25,6 +27,16 @@ const PortalLogin = () => {
   const [loading, setLoading] = useState(false);
   const [resendIn, setResendIn] = useState(0);
   const [lockedUntil, setLockedUntil] = useState<string | null>(null);
+  /**
+   * Who is logging in, when one number reaches several patients.
+   *
+   * A fifth of this clinic's patients share a phone with somebody else -
+   * families, up to fourteen on a number - and the PIN belongs to the
+   * person, not the phone. Empty for a number that reaches one patient, so
+   * nothing changes for most people.
+   */
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [patientId, setPatientId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (resendIn <= 0) return;
@@ -48,20 +60,69 @@ const PortalLogin = () => {
     navigate("/portal/dashboard");
   };
 
+  /**
+   * The two answers every portal call can now give before anything else.
+   *
+   * Returns true when it has dealt with the response, so each handler can
+   * stop. "incomplete_number" exists because a half-typed number used to
+   * come back as "not registered", which sent people to the clinic to check
+   * a number that was fine.
+   */
+  const handledCommonStatus = (data: { status?: string; patients?: Candidate[] }): boolean => {
+    if (data?.status === "incomplete_number") {
+      toast.error("That number looks incomplete. Please enter all 10 digits.");
+      return true;
+    }
+    if (data?.status === "not_registered") {
+      toast.error("Not registered. Please contact the clinic.");
+      return true;
+    }
+    if (data?.status === "choose_patient") {
+      setCandidates(data.patients ?? []);
+      setStep("choose_patient");
+      return true;
+    }
+    return false;
+  };
+
   const handlePhoneNext = async () => {
     if (!phone.trim()) return toast.error("Please enter your phone number");
     setLoading(true);
+    setPatientId(undefined);
     try {
       const { data, error } = await supabase.functions.invoke("portal-auth", {
         body: { action: "check", phone },
       });
       if (error) throw error;
-      if (data?.status === "not_registered") {
-        toast.error("Not registered. Please contact the clinic.");
-        return;
-      }
+      if (handledCommonStatus(data)) return;
       if (data?.status === "set_pin") setStep("create_pin");
       else if (data?.status === "pin_required") setStep("enter_pin");
+    } catch (e: any) {
+      toast.error(e?.message || "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * A person picked from a shared number.
+   *
+   * The same "check" call is made again carrying the id, so the decision of
+   * whether they need to create a PIN or enter one is made in exactly one
+   * place - and so the server re-validates that the id really is on this
+   * number rather than taking the browser's word for it.
+   */
+  const choosePatient = async (id: string) => {
+    setPatientId(id);
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("portal-auth", {
+        body: { action: "check", phone, patientId: id },
+      });
+      if (error) throw error;
+      if (data?.status === "set_pin") setStep("create_pin");
+      else if (data?.status === "pin_required") setStep("enter_pin");
+      else toast.error(data?.error || "Could not continue. Please try again.");
     } catch (e: any) {
       toast.error(e?.message || "Something went wrong");
     } finally {
@@ -75,7 +136,7 @@ const PortalLogin = () => {
     setLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke("portal-auth", {
-        body: { action: "set_pin", phone, pin },
+        body: { action: "set_pin", phone, pin, patientId },
       });
       if (error) throw error;
       if (data?.status === "ok") completeLogin(data.patientId, data.patientName, data.sessionToken);
@@ -92,7 +153,7 @@ const PortalLogin = () => {
     setLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke("portal-auth", {
-        body: { action: "verify", phone, pin },
+        body: { action: "verify", phone, pin, patientId },
       });
       if (error) throw error;
       if (data?.status === "ok") {
@@ -120,13 +181,10 @@ const PortalLogin = () => {
     setLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke("portal-otp-send", {
-        body: { phone },
+        body: { phone, patientId },
       });
       if (error) throw error;
-      if (data?.status === "not_registered") {
-        toast.error("Not registered. Please contact the clinic.");
-        return;
-      }
+      if (handledCommonStatus(data)) return;
       if (data?.status === "throttled") {
         toast.error(`Please wait ${data.retryAfter}s before requesting another code.`);
         setResendIn(data.retryAfter);
@@ -148,7 +206,7 @@ const PortalLogin = () => {
     setLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke("portal-otp-verify", {
-        body: { phone, otp, newPin },
+        body: { phone, otp, newPin, patientId },
       });
       if (error) throw error;
       if (data?.status === "ok") completeLogin(data.patientId, data.patientName, data.sessionToken);
@@ -166,6 +224,10 @@ const PortalLogin = () => {
 
   const back = (to: Step) => () => {
     setPin(""); setConfirmPin(""); setOtp(""); setNewPin("");
+    // Going back to the number clears who was chosen on the old one, or the
+    // next number entered would carry the previous family member's id and
+    // be rejected by the server as not belonging to it.
+    if (to === "phone") { setPatientId(undefined); setCandidates([]); }
     setStep(to);
   };
 
@@ -179,9 +241,9 @@ const PortalLogin = () => {
       >
         {/* Logo */}
         <div className="text-center mb-8">
-          <img src={clinicLogo} alt={clinicName} className="h-16 w-16 mx-auto rounded-2xl object-contain shadow-lg mb-4" />
+          <img src={clinicLogo} alt="The Skin Clinic" className="h-16 w-16 mx-auto rounded-2xl object-contain shadow-lg mb-4" />
           <h1 className="text-2xl font-bold text-foreground" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-            {clinicName}
+            The Skin Clinic
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
             Access your health records securely
@@ -206,6 +268,38 @@ const PortalLogin = () => {
               </div>
               <Button className="w-full h-12 text-base gap-2" onClick={handlePhoneNext} disabled={loading || !phone}>
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <>Continue <ArrowRight className="h-4 w-4" /></>}
+              </Button>
+            </>
+          )}
+
+          {/* One number, several patients - a family. The PIN belongs to the
+              person, so the portal has to know which of them is signing in.
+              Most numbers reach one patient and never see this step. */}
+          {step === "choose_patient" && (
+            <>
+              <div className="text-center">
+                <Users className="h-8 w-8 text-primary mx-auto" />
+                <h2 className="text-lg font-semibold mt-2">Who is signing in?</h2>
+                <p className="text-xs text-muted-foreground mt-1">
+                  This number is registered for more than one person.
+                </p>
+              </div>
+              <div className="space-y-2">
+                {candidates.map((c) => (
+                  <Button
+                    key={c.id}
+                    variant="outline"
+                    className="w-full h-12 justify-between text-base"
+                    disabled={loading}
+                    onClick={() => choosePatient(c.id)}
+                  >
+                    {c.name || "Unnamed patient"}
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                ))}
+              </div>
+              <Button variant="ghost" className="w-full h-11" onClick={back("phone")}>
+                Use a different number
               </Button>
             </>
           )}

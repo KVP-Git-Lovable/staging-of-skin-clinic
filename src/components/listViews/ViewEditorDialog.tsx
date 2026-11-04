@@ -4,6 +4,7 @@
 // PATIENT_FIELDS/GENDER_OPTIONS/etc.) so any module's saved views can reuse
 // the same filter builder, field picker and sharing UI.
 import { useEffect, useMemo, useState } from "react";
+import { DateInput } from "@/components/shared/DateInput";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -255,7 +256,15 @@ export default function ViewEditorDialog({
   const [columns, setColumns] = useState<string[]>(defaultColumns);
   const [sortField, setSortField] = useState<string>("created_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [visibility, setVisibility] = useState<"private" | "everyone" | "selected">("private");
+  // New views are shared with everyone by default.
+  //
+  // They used to default to "Only me", and the clinic is small enough that
+  // nobody expected that: each doctor ended up creating their own private copy
+  // of the same list - "Todays appointments", "Todays Appointments Dr Punya",
+  // "Todays bill" - because none of them could see the others', and it read as
+  // views randomly not appearing. Editing an existing view still shows whatever
+  // that view was saved with.
+  const [visibility, setVisibility] = useState<"private" | "everyone" | "selected">("everyone");
   const [sharedIds, setSharedIds] = useState<string[]>([]);
   const [peopleSearch, setPeopleSearch] = useState("");
 
@@ -267,7 +276,7 @@ export default function ViewEditorDialog({
     setColumns(view?.columns?.length ? view.columns : defaultColumns);
     setSortField(view?.sort_field ?? "created_at");
     setSortDir(view?.sort_dir ?? "desc");
-    setVisibility(view?.visibility ?? "private");
+    setVisibility(view?.visibility ?? "everyone");
     setSharedIds(view?.shared_user_ids ?? []);
     setPeopleSearch("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -389,9 +398,9 @@ export default function ViewEditorDialog({
                           </Select>
                         ) : def?.type === "date" && !["last_n_days", "next_n_days"].includes(c.operator) ? (
                           <>
-                            <Input type="date" className="h-9 text-sm" value={c.value} onChange={(e) => updateCond(i, { value: e.target.value })} />
+                            <DateInput className="h-9 text-sm" value={c.value} onChange={(isoDate) => updateCond(i, { value: isoDate })} />
                             {c.operator === "between" && (
-                              <Input type="date" className="h-9 text-sm" value={c.value2 ?? ""} onChange={(e) => updateCond(i, { value2: e.target.value })} />
+                              <DateInput className="h-9 text-sm" value={c.value2 ?? ""} onChange={(isoDate) => updateCond(i, { value2: isoDate })} />
                             )}
                           </>
                         ) : (

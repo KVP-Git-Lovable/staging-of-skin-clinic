@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { format } from "date-fns";
 import type { ReportColumn } from "@/lib/reportsCatalog";
 import { cn } from "@/lib/utils";
-import { formatMoneyCompact, formatNumber } from "@/lib/currency";
+import { formatMoneyExact, formatNumber } from "@/lib/currency";
 import { useNavigate } from "react-router-dom";
+import { displayDate } from "@/lib/dateInput";
 
 interface Props {
   columns: ReportColumn[];
@@ -27,13 +28,15 @@ function renderCell(col: ReportColumn, row: any) {
   if (v === null || v === undefined || v === "") return <span className="text-muted-foreground">—</span>;
   switch (col.type) {
     case "currency":
-      return formatMoneyCompact(Number(v));
+      return formatMoneyExact(Number(v));
     case "number":
       return formatNumber(Number(v));
+    // dd/MM/yyyy, matching the rest of the app and the report's own PDF and
+    // CSV - three formats for one date is how a report stops being checkable.
     case "date":
-      try { return format(new Date(v), "dd MMM yyyy"); } catch { return String(v); }
+      return displayDate(v as string) || String(v);
     case "datetime":
-      try { return format(new Date(v), "dd MMM yyyy h:mm a"); } catch { return String(v); }
+      try { return `${displayDate(v as string)} ${format(new Date(v as string), "h:mm a")}`.trim(); } catch { return String(v); }
     case "badge":
       return <Badge variant="secondary" className="text-[10px]">{String(v)}</Badge>;
     default:

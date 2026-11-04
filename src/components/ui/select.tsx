@@ -17,7 +17,7 @@ const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
+      "flex h-10 w-full items-center justify-between rounded-lg border border-input/80 bg-background/60 px-3 py-2 text-sm shadow-sm backdrop-blur-sm ring-offset-background transition-[background-color,border-color,box-shadow] duration-200 placeholder:text-muted-foreground hover:border-primary/25 hover:bg-background/75 focus:border-primary/45 focus:bg-background/90 focus:outline-none focus:ring-2 focus:ring-ring/20 focus:shadow-[var(--shadow-control)] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none motion-reduce:transition-none [&>span]:line-clamp-1",
       className,
     )}
     {...props}
@@ -66,7 +66,16 @@ const SelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        "relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+        // Never taller than the room actually below or above the trigger.
+        //
+        // With a flat max-h-96 a long list (the medicine picker runs to
+        // hundreds of products) asks for 384px wherever it opens. Near the
+        // bottom of a scrolled form that does not fit, so Radix flips it above
+        // the trigger, where it lies over the fields the doctor is typing into
+        // - reported as "the medicine menu is covering the space as we scroll
+        // down to write more". Bounded by the available height it stays below
+        // the trigger and scrolls internally instead.
+        "overlay-surface relative z-50 max-h-[min(24rem,var(--radix-select-content-available-height))] min-w-[8rem] overflow-hidden rounded-md border text-popover-foreground shadow-[var(--glass-shadow-hover)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
         position === "popper" &&
           "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
         className,

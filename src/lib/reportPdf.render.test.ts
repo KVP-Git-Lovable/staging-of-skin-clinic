@@ -90,6 +90,19 @@ function drawnText(bytes: Buffer): string[] {
   return out;
 }
 
+/** Every drawn string with the y it was drawn at (PDF y grows upwards). */
+function drawnTextAt(bytes: Buffer): { text: string; y: number }[] {
+  const out: { text: string; y: number }[] = [];
+  for (const [, body] of bytes.toString("latin1").matchAll(/stream\r?\n([\s\S]*?)endstream/g)) {
+    let data = body;
+    try { data = zlib.inflateSync(Buffer.from(body, "latin1")).toString("latin1"); } catch { /* uncompressed */ }
+    for (const [, y, text] of data.matchAll(/[\d.-]+\s+([\d.-]+)\s+Td\s*\((.*?)\)\s*Tj/g)) {
+      out.push({ text: text.replace(/\\([()])/g, "$1"), y: Number(y) });
+    }
+  }
+  return out;
+}
+
 const imageCount = (bytes: Buffer) => (bytes.toString("latin1").match(/\/Subtype\s*\/Image/g) || []).length;
 
 /** Drawing operators inside the page content, after inflating it. */
@@ -104,6 +117,147 @@ function drawOps(bytes: Buffer) {
 }
 
 describe("report PDF", () => {
+  it("draws the totals line once, at the end, lined up under its figures", async () => {
+    const { buildReportPdf } = await import("./reportPdf");
+    const doc = await buildReportPdf({
+      report,
+      rows: rows.slice(0, 3),
+      summary: [],
+      filterState: { search: "", dateFrom: null, dateTo: null, datePreset: "all", selects: {} },
+      dayOnly: false,
+      totals: { invoice_number: "TOTAL", total_amount: 7404 },
+      recordCount: 3,
+    });
+
+    const buf = Buffer.from(doc.output("arraybuffer"));
+    const at = drawnTextAt(buf);
+    // Once: autoTable repeats a foot on every page unless told otherwise.
+    expect(at.filter((r) => r.text === "TOTAL")).toHaveLength(1);
+
+    const figure = at.find((r) => r.text === "7,404")!;
+    expect(figure).toBeTruthy();
+    // Under the rows, not among them. The page's origin is bottom-left, so
+    // further down the page is a smaller y.
+    const lastRow = at.find((r) => r.text === "INV-1002")!;
+    expect(figure.y).toBeLessThan(lastRow.y);
+
+    // Right-aligned to the same edge as the figures above it. columnStyles
+    // does not reach a foot row either, so this is what catches a totals line
+    // styled the wrong way.
+    const runs = drawnRuns(buf);
+    const foot = runs.find((r) => r.text === "7,404")!;
+    const body = runs.find((r) => r.text === "3,702")!;
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    const footRight = foot.x + doc.getTextWidth("7,404");
+    doc.setFont("helvetica", "normal");
+    const bodyRight = body.x + doc.getTextWidth("3,702");
+    expect(Math.abs(footRight - bodyRight)).toBeLessThan(1);
+
+    // The count is the records asked for, not the rows drawn.
+    expect(at.some((r) => /^3 record\(s\)/.test(r.text))).toBe(true);
+  });
+
+  it("draws no totals line when a report has none", async () => {
+    const { buildReportPdf } = await import("./reportPdf");
+    const doc = await buildReportPdf({
+      report,
+      rows: rows.slice(0, 3),
+      summary: [],
+      filterState: { search: "", dateFrom: null, dateTo: null, datePreset: "all", selects: {} },
+      dayOnly: false,
+    });
+    expect(drawnTextAt(Buffer.from(doc.output("arraybuffer"))).some((r) => r.text === "TOTAL")).toBe(false);
+  });
+
+  it("draws the hint under the figure, inside its box", async () => {
+    const { buildReportPdf, SUMMARY_BOX_HEIGHT, SUMMARY_BOX_HEIGHT_WITH_HINT } = await import("./reportPdf");
+    const doc = await buildReportPdf({
+      report,
+      rows: rows.slice(0, 3),
+      summary: [
+        { label: "Invoices", value: "35" },
+        { label: "Total Billed", value: "Rs 1,94,800" },
+        { label: "UPI", value: "Rs 1,44,000" },
+        { label: "Other", value: "Rs 15,650", hint: "Part-Payment" },
+      ],
+      filterState: { search: "", dateFrom: null, dateTo: null, datePreset: "all", selects: {} },
+      dayOnly: false,
+    });
+
+    const at = drawnTextAt(Buffer.from(doc.output("arraybuffer")));
+    const yOf = (label: string) => at.find((t) => t.text === label)?.y;
+
+    // The hint is drawn, below its own figure, and still above the box floor.
+    expect(yOf("Part-Payment")).toBeDefined();
+    expect(yOf("Part-Payment")!).toBeLessThan(yOf("Rs 15,650")!);
+    expect(yOf("OTHER")! - yOf("Part-Payment")!).toBeLessThan(SUMMARY_BOX_HEIGHT_WITH_HINT);
+    // A hint makes the boxes taller, so the table has to start lower than it
+    // would without one.
+    expect(yOf("Invoice #")!).toBeLessThan(yOf("Part-Payment")!);
+    expect(SUMMARY_BOX_HEIGHT_WITH_HINT).toBeGreaterThan(SUMMARY_BOX_HEIGHT);
+  });
+
+  it("keeps the old box geometry for a summary with no hint", async () => {
+    const { buildReportPdf, SUMMARY_BOX_HEIGHT } = await import("./reportPdf");
+    const summary = [
+      { label: "Invoices", value: "35" },
+      { label: "Total Billed", value: "Rs 1,94,800" },
+      { label: "UPI", value: "Rs 1,44,000" },
+      { label: "Cash", value: "Rs 10,900" },
+      { label: "Card", value: "Rs 24,250" },
+    ];
+    const doc = await buildReportPdf({
+      report,
+      rows: rows.slice(0, 3),
+      summary,
+      filterState: { search: "", dateFrom: null, dateTo: null, datePreset: "all", selects: {} },
+      dayOnly: false,
+    });
+    const at = drawnTextAt(Buffer.from(doc.output("arraybuffer")));
+    const yOf = (label: string) => at.find((t) => t.text === label)?.y;
+    // Two rows of boxes, one gap between them - the untaller layout.
+    expect(yOf("INVOICES")! - yOf("CARD")!).toBe(SUMMARY_BOX_HEIGHT + 10);
+  });
+
+
+  it("wraps a long summary onto a second row instead of squeezing it", async () => {
+    // The Invoices report shows one box per payment instrument, so seven boxes
+    // is now an ordinary day. On one row each would be ~55pt wide - narrower
+    // than the figure printed inside it.
+    const { buildReportPdf } = await import("./reportPdf");
+    const doc = await buildReportPdf({
+      report,
+      rows: rows.slice(0, 3),
+      summary: [
+        { label: "Invoices", value: "35" },
+        { label: "Total Billed", value: "Rs 1.95 L" },
+        { label: "UPI", value: "Rs 1.1 L" },
+        { label: "Cash", value: "Rs 32K" },
+        { label: "Card", value: "Rs 28K" },
+        { label: "Bank Transfer", value: "Rs 15K" },
+        { label: "Cheque", value: "Rs 9K" },
+      ],
+      filterState: { search: "", dateFrom: null, dateTo: null, datePreset: "all", selects: {} },
+      dayOnly: false,
+    });
+
+    const at = drawnTextAt(Buffer.from(doc.output("arraybuffer")));
+    const yOf = (label: string) => at.find((t) => t.text === label)?.y;
+
+    // All seven labels made it in - nothing was dropped off the edge.
+    for (const label of ["INVOICES", "TOTAL BILLED", "UPI", "CASH", "CARD", "BANK TRANSFER", "CHEQUE"]) {
+      expect(yOf(label), label).toBeDefined();
+    }
+    // Four across, then the rest on a row below it.
+    expect(yOf("INVOICES")).toBe(yOf("CASH"));
+    expect(yOf("CARD")).toBe(yOf("CHEQUE"));
+    expect(yOf("CARD")!).toBeLessThan(yOf("INVOICES")!);
+    // And the table starts below the boxes rather than on top of them.
+    expect(yOf("Invoice #")!).toBeLessThan(yOf("CARD")!);
+  });
+
+
   it("draws the clinic header, filters, summary and every row", async () => {
     const { buildReportPdf } = await import("./reportPdf");
     const doc = await buildReportPdf({
@@ -135,7 +289,7 @@ describe("report PDF", () => {
     expect(text.some((t) => /^120 record\(s\) - generated \d{2} \w{3} \d{4} \d{1,2}:\d{2} [AP]M$/.test(t))).toBe(true);
     expect(text).toContain("Total (Rs)");
     expect(text).toContain("1,234");       // Indian grouping, no symbol
-    expect(text).toContain("11 Sep 2026"); // dates formatted, not raw ISO
+    expect(text).toContain("11/09/2026"); // dates formatted, not raw ISO
     expect(text).toContain("Rs 3.34 L");   // summary symbol swapped, not dropped
 
     // Every row made it in, across pages - not just the 50 shown on screen.

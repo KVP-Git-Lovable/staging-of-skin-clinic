@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { moveToTrash } from "@/lib/trash";
@@ -25,11 +26,25 @@ interface ContactRow {
 
 const emptyContact: ContactRow = { contact_name: "", phone: "", email: "" };
 
+/**
+ * Every field a vendor row carries, because this screen is now the only place
+ * one is created or edited.
+ *
+ * City, state, category and notes used to be editable only in a second Add
+ * Vendor dialog on the Assets tab - which could create but never edit, and
+ * never wrote the contacts table. That dialog is gone, so without these four
+ * here they would have been editable nowhere while the Assets tab still
+ * displayed them.
+ */
 const emptyVendor = {
   name: "",
   gst_number: "",
   address: "",
   website: "",
+  city: "",
+  state: "",
+  category: "General",
+  notes: "",
 };
 
 export default function Vendors() {
@@ -82,6 +97,7 @@ export default function Vendors() {
       if (editingVendor) {
         const { error } = await supabase.from("vendors").update({
           name: form.name, gst_number: form.gst_number || null, address: form.address || null, website: (form as any).website || null,
+          city: form.city || null, state: form.state || null, category: form.category || null, notes: form.notes || null,
         }).eq("id", editingVendor.id);
         if (error) throw error;
         // Delete old contacts and re-insert
@@ -96,6 +112,7 @@ export default function Vendors() {
       } else {
         const { data: newVendor, error } = await supabase.from("vendors").insert({
           name: form.name, gst_number: form.gst_number || null, address: form.address || null, website: (form as any).website || null,
+          city: form.city || null, state: form.state || null, category: form.category || null, notes: form.notes || null,
         }).select().single();
         if (error) throw error;
         const validContacts = contacts.filter(c => c.contact_name.trim());
@@ -143,11 +160,43 @@ export default function Vendors() {
 
   const openEdit = async (vendor: any) => {
     setEditingVendor(vendor);
-    setForm({ name: vendor.name, gst_number: vendor.gst_number || "", address: vendor.address || "", website: vendor.website || "" });
+    setForm({
+      name: vendor.name, gst_number: vendor.gst_number || "", address: vendor.address || "", website: vendor.website || "",
+      city: vendor.city || "", state: vendor.state || "", category: vendor.category || "General", notes: vendor.notes || "",
+    });
     const { data } = await supabase.from("vendor_contacts").select("*").eq("vendor_id", vendor.id).order("created_at");
     setContacts(data && data.length > 0 ? data.map(c => ({ contact_name: c.contact_name, phone: c.phone || "", email: c.email || "" })) : [{ ...emptyContact }]);
     setDialogOpen(true);
   };
+
+  /**
+   * Opened from somewhere else, with a vendor to edit or a new one to add.
+   *
+   * The Assets tab lists the same vendors and used to carry its own
+   * create-only dialog; it now hands over here so there is one form. The
+   * parameter is cleared once acted on, so a refresh or a Back does not
+   * reopen the dialog over whatever the person moved on to.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const handedOver = useRef(false);
+  useEffect(() => {
+    if (handedOver.current) return;
+    if (searchParams.get("new")) {
+      handedOver.current = true;
+      openAdd();
+      setSearchParams({}, { replace: true });
+      return;
+    }
+    const editId = searchParams.get("edit");
+    if (!editId) return;
+    // Wait for the list: the vendor to edit has to be in hand first.
+    const vendor = vendors.find((v: any) => v.id === editId);
+    if (!vendor) return;
+    handedOver.current = true;
+    void openEdit(vendor);
+    setSearchParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, vendors]);
 
   const openDetail = (vendor: any) => {
     setSelectedVendor(vendor);
@@ -234,6 +283,27 @@ export default function Vendors() {
             <div>
               <Label>Office Address</Label>
               <Textarea className="mt-1" value={form.address} onChange={e => setForm(p => ({ ...p, address: e.target.value }))} rows={2} placeholder="Full address" />
+            </div>
+            {/* City, state, category and notes: the Assets tab shows city and
+                category, and until now only its own create-only dialog could
+                set them. */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>City</Label>
+                <Input className="mt-1" value={form.city} onChange={e => setForm(p => ({ ...p, city: e.target.value }))} placeholder="e.g. Mangalore" />
+              </div>
+              <div>
+                <Label>State</Label>
+                <Input className="mt-1" value={form.state} onChange={e => setForm(p => ({ ...p, state: e.target.value }))} placeholder="e.g. Karnataka" />
+              </div>
+            </div>
+            <div>
+              <Label>Category</Label>
+              <Input className="mt-1" value={form.category} onChange={e => setForm(p => ({ ...p, category: e.target.value }))} placeholder="e.g. Medical Equipment" />
+            </div>
+            <div>
+              <Label>Notes</Label>
+              <Textarea className="mt-1" value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} placeholder="Anything worth remembering about this vendor" />
             </div>
 
             <Separator />

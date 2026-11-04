@@ -13,16 +13,19 @@ import { wrapMarketingEmail, htmlToText, loadCompanyFooter, buildCompanyAddressL
 import { resolveEmailAudience, type EmailRecipient } from "../_shared/comms-email-audience.ts";
 import {
   MC_BATCH_LIMIT,
+  createMailchimpClient,
+  dcFromKey,
   describeMcError,
-  mailchimpFromEnv,
+  mailchimpFromStoredKey,
   roundUpToQuarterHour,
   syncCampaignReport,
   toMailchimpMergeTags,
   type McClient,
 } from "../_shared/comms-mailchimp.ts";
+import { decryptSecret, encryptSecret } from "../_shared/meta-crypto.ts";
 
 const MANAGER_ROLE = /admin|manager/i;
-const GATED_ACTIONS = new Set(["disconnect", "domain_add", "domain_verify", "list_create", "set_default_list", "confirm_consent", "ensure_webhook", "launch", "control"]);
+const GATED_ACTIONS = new Set(["save_api_key", "clear_api_key", "disconnect", "domain_add", "domain_verify", "list_create", "set_default_list", "confirm_consent", "ensure_webhook", "launch", "control"]);
 
 // deno-lint-ignore no-explicit-any
 type Db = any;
@@ -60,11 +63,13 @@ async function loadCampaign(db: Db, id: string): Promise<Row> {
   return data;
 }
 
-/** The browser never sees the webhook secret. */
+/** The browser never sees the webhook secret, nor the encrypted API key. */
 function publicConnection(conn: Row | null): Row | null {
   if (!conn) return null;
+  // loadConnection does select("*"), so anything secret has to be stripped here or it
+  // rides along in the status response.
   // deno-lint-ignore no-unused-vars
-  const { webhook_secret, ...rest } = conn;
+  const { webhook_secret, api_key_enc, ...rest } = conn;
   return { ...rest, webhook_registered: !!conn.webhook_id };
 }
 
@@ -203,13 +208,92 @@ Deno.serve(async (req) => {
       if (!MANAGER_ROLE.test(roleName)) return json({ error: "Only an admin or manager can do this" }, 403);
     }
 
-    const apiKeyAvailable = !!Deno.env.get("MAILCHIMP_API_KEY");
     let conn = await loadConnection(db);
+
+    /* ------------------------------------------------- the key itself
+       These two run before the client is built, because when you are saving a key
+       for the first time there is nothing to build one from. Both are in
+       GATED_ACTIONS, so only an admin or manager reaches here. */
+    if (action === "save_api_key") {
+      const apiKey = String(payload.api_key ?? "").trim();
+      if (!apiKey) return json({ error: "Enter your Mailchimp API key" });
+
+      // Shape first, so an obvious typo fails before we call Mailchimp at all.
+      let probe: McClient;
+      try {
+        dcFromKey(apiKey);
+        probe = createMailchimpClient({ apiKey });
+      } catch (e) {
+        return json({ error: (e as Error).message });
+      }
+
+      // Then prove the key actually works. Nothing is written until it does - a key
+      // that fails here must not displace one that is currently working.
+      const ping = await probe.call<{ health_status?: string }>("/ping");
+      if (!ping.ok) return json({ error: describeMcError(ping.status, ping.json, ping.text) });
+
+      const acct = await probe.must<McAccount>("/", {
+        query: { fields: "account_id,account_name,email,pricing_plan_type,total_subscribers" },
+      });
+
+      // A key for a different Mailchimp account must not inherit the previous
+      // account's audience, webhook or consent.
+      const switched = !!conn?.account_id && conn.account_id !== acct.account_id;
+      conn = await saveConnection(db, conn, {
+        api_key_enc: await encryptSecret(apiKey),
+        api_key_last4: apiKey.slice(-4),
+        dc: probe.dc,
+        account_id: acct.account_id ?? null,
+        account_name: acct.account_name ?? null,
+        login_email: acct.email ?? null,
+        pricing_plan_type: acct.pricing_plan_type ?? null,
+        total_subscribers: acct.total_subscribers ?? null,
+        status: "connected",
+        last_error: null,
+        last_ping_at: new Date().toISOString(),
+        ...(switched
+          ? {
+            default_list_id: null,
+            default_list_name: null,
+            webhook_id: null,
+            webhook_secret: null,
+            consent_confirmed_at: null,
+            consent_confirmed_by: null,
+          }
+          : {}),
+      });
+      return json({ ok: true, switched, connection: publicConnection(conn) });
+    }
+
+    if (action === "clear_api_key") {
+      if (conn?.id) {
+        conn = await saveConnection(db, conn, {
+          api_key_enc: null,
+          api_key_last4: null,
+          account_id: null,
+          account_name: null,
+          login_email: null,
+          pricing_plan_type: null,
+          total_subscribers: null,
+          default_list_id: null,
+          default_list_name: null,
+          webhook_id: null,
+          webhook_secret: null,
+          consent_confirmed_at: null,
+          consent_confirmed_by: null,
+          status: "revoked",
+          last_error: null,
+        });
+      }
+      return json({ ok: true, connection: publicConnection(conn) });
+    }
+
+    const apiKeyAvailable = !!conn?.api_key_enc;
     let mc: McClient;
     try {
-      mc = mailchimpFromEnv();
+      mc = await mailchimpFromStoredKey(conn, decryptSecret);
     } catch (e) {
-      if (action === "status") return json({ ok: false, error: (e as Error).message, connection: publicConnection(conn), api_key_available: false });
+      if (action === "status") return json({ ok: false, error: (e as Error).message, connection: publicConnection(conn), api_key_available: apiKeyAvailable });
       return json({ error: (e as Error).message });
     }
     const currentAccountId: string | null = conn?.account_id || null;

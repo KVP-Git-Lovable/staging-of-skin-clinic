@@ -1,0 +1,1 @@
+ALTER TABLE public.survey_assignments ADD CONSTRAINT survey_assignments_template_id_fkey FOREIGN KEY (template_id) REFERENCES public.survey_templates(id) NOT VALID;

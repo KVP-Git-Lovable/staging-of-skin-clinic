@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { DateInput } from "@/components/shared/DateInput";
+import { onlyCountableInvoices } from "@/lib/revenueScope";
+import { numVal } from "@/lib/numberInput";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -67,9 +70,10 @@ export default function CampaignDetail() {
     queryFn: async () => {
       if (linkedPatients.length === 0) return { total: 0 };
       const ids = linkedPatients.map((p: any) => p.id);
-      const { data, error } = await supabase.from("invoices").select("total_amount").in("patient_id", ids);
+      const { data, error } = await supabase.from("invoices").select("total_amount, status").in("patient_id", ids);
       if (error) throw error;
-      const total = (data || []).reduce((s, inv: any) => s + Number(inv.total_amount || 0), 0);
+      // Cancelled bills are not campaign revenue - see src/lib/revenueScope.ts.
+      const total = onlyCountableInvoices(data || []).reduce((s, inv: any) => s + Number(inv.total_amount || 0), 0);
       return { total };
     },
     enabled: linkedPatients.length > 0,
@@ -80,10 +84,10 @@ export default function CampaignDetail() {
     queryFn: async () => {
       if (linkedPatients.length === 0) return {} as Record<string, number>;
       const ids = linkedPatients.map((p: any) => p.id);
-      const { data, error } = await supabase.from("invoices").select("patient_id, total_amount").in("patient_id", ids);
+      const { data, error } = await supabase.from("invoices").select("patient_id, total_amount, status").in("patient_id", ids);
       if (error) throw error;
       const map: Record<string, number> = {};
-      (data || []).forEach((inv: any) => {
+      onlyCountableInvoices(data || []).forEach((inv: any) => {
         map[inv.patient_id] = (map[inv.patient_id] || 0) + Number(inv.total_amount || 0);
       });
       return map;
@@ -248,7 +252,7 @@ export default function CampaignDetail() {
           <Card><CardContent className="p-6 space-y-3">
             <Label>Update Amount Spent (₹)</Label>
             <div className="flex gap-2 max-w-md">
-              <Input type="number" placeholder={String(spent)} value={spentEdit} onChange={(e) => setSpentEdit(e.target.value)} />
+              <Input type="number" placeholder={String(spent)} value={numVal(spentEdit)} onChange={(e) => setSpentEdit(e.target.value)} />
               <Button onClick={async () => {
                 await updateMutation.mutateAsync({ amount_spent: Number(spentEdit) || 0 });
                 setSpentEdit("");
@@ -350,16 +354,16 @@ export default function CampaignDetail() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Start Date</Label>
-                <Input type="date" value={editForm.start_date || ""} onChange={(e) => setEditForm({ ...editForm, start_date: e.target.value })} className="mt-1.5" />
+                <DateInput value={editForm.start_date || ""} onChange={(isoDate) => setEditForm({ ...editForm, start_date: isoDate })} className="mt-1.5" />
               </div>
               <div>
                 <Label>End Date</Label>
-                <Input type="date" value={editForm.end_date || ""} onChange={(e) => setEditForm({ ...editForm, end_date: e.target.value })} className="mt-1.5" />
+                <DateInput value={editForm.end_date || ""} onChange={(isoDate) => setEditForm({ ...editForm, end_date: isoDate })} className="mt-1.5" />
               </div>
             </div>
             <div>
               <Label>Budget (₹)</Label>
-              <Input type="number" value={editForm.budget ?? 0} onChange={(e) => setEditForm({ ...editForm, budget: e.target.value })} className="mt-1.5" />
+              <Input type="number" value={numVal(editForm.budget ?? 0)} onChange={(e) => setEditForm({ ...editForm, budget: e.target.value })} className="mt-1.5" />
             </div>
             <div>
               <Label>Target Audience</Label>

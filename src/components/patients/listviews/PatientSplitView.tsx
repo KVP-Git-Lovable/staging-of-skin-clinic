@@ -5,6 +5,8 @@
 import GenericListSplitView from "@/components/listViews/ListSplitView";
 import { PATIENT_FIELDS, rawValue } from "@/lib/patientFields";
 import { PatientAvatar } from "@/components/patients/PatientAvatar";
+import { VipBadge } from "@/components/shared/VipBadge";
+import { isVipPatient } from "@/lib/vipPatient";
 import { Mail, Phone } from "lucide-react";
 
 interface Props {
@@ -38,6 +40,7 @@ export default function PatientSplitView({ rows, columns, avatars = {}, onOpen }
           className={size === "lg" ? "h-12 w-12" : "h-8 w-8"}
         />
       )}
+      renderTitleAfter={(row) => (isVipPatient(row) ? <VipBadge /> : null)}
       renderHeaderMeta={(row) => (
         <>
           {row.phone && (

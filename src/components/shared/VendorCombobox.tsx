@@ -25,8 +25,13 @@ export function VendorCombobox({ value, onChange, placeholder = "Select vendor..
     },
   });
 
+  // The dropdown is portalled to the body, so when it opens inside a Dialog or
+  // Sheet that container's scroll lock swallows wheel events over the list -
+  // clicks work, the mouse wheel does nothing. `modal` gives the popover its own
+  // lock, which restores scrolling. Verified in a browser; dropping it silently
+  // breaks scrolling on long lists.
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover modal open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" role="combobox" aria-expanded={open} className="w-full justify-between font-normal">
           {vendors.find((v) => v.id === value)?.name || <span className="text-muted-foreground">{placeholder}</span>}

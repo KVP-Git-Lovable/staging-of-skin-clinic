@@ -4,7 +4,8 @@
 // with a GET request, which must answer 2xx. Payloads are form-encoded.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { mailchimpFromEnv, syncCampaignReport } from "../_shared/comms-mailchimp.ts";
+import { mailchimpFromStoredKey, syncCampaignReport, type McClient } from "../_shared/comms-mailchimp.ts";
+import { decryptSecret } from "../_shared/meta-crypto.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -87,8 +88,13 @@ Deno.serve(async (req) => {
       const mcCampaign = String(data.id || "");
       if (mcCampaign) {
         const { data: c } = await db.from("comms_email_campaigns").select("*").eq("mailchimp_campaign_id", mcCampaign).maybeSingle();
-        let mc: ReturnType<typeof mailchimpFromEnv> | null = null;
-        try { mc = mailchimpFromEnv(); } catch { mc = null; }
+        // Best effort: without a saved key there is nothing to sync the report with,
+        // and the status update below still runs.
+        let mc: McClient | null = null;
+        try {
+          const { data: keyRow } = await db.from("comms_mailchimp_connection").select("api_key_enc").limit(1).maybeSingle();
+          mc = await mailchimpFromStoredKey(keyRow, decryptSecret);
+        } catch { mc = null; }
         if (c && mc) {
           await syncCampaignReport(db, mc, { ...c, mailchimp_report_synced_at: null });
         } else if (c) {

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { DateInput } from "@/components/shared/DateInput";
+import { numVal } from "@/lib/numberInput";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -199,20 +201,20 @@ export default function Campaigns() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Start Date</Label>
-                <Input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} className="mt-1.5" />
+                <DateInput value={form.start_date} onChange={(isoDate) => setForm({ ...form, start_date: isoDate })} className="mt-1.5" />
               </div>
               <div>
                 <Label>End Date</Label>
-                <Input type="date" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} className="mt-1.5" />
+                <DateInput value={form.end_date} onChange={(isoDate) => setForm({ ...form, end_date: isoDate })} className="mt-1.5" />
               </div>
             </div>
             <div>
               <Label>Budget (₹)</Label>
-              <Input type="number" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} className="mt-1.5" />
+              <Input type="number" value={numVal(form.budget)} onChange={(e) => setForm({ ...form, budget: e.target.value })} className="mt-1.5" />
             </div>
             <div>
               <Label>Target Audience</Label>
-              <Input value={form.target_audience} onChange={(e) => setForm({ ...form, target_audience: e.target.value })} placeholder="e.g. Women 25-40, Bangalore" className="mt-1.5" />
+              <Input value={numVal(form.target_audience)} onChange={(e) => setForm({ ...form, target_audience: e.target.value })} placeholder="e.g. Women 25-40, Bangalore" className="mt-1.5" />
             </div>
             <div>
               <Label>Goals / Description</Label>

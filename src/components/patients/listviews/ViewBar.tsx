@@ -13,7 +13,8 @@ interface Props {
   onNew: () => void;
   onEdit: (v: ListView) => void;
   onDelete: (v: ListView) => void;
-  onPin: (v: ListView | null) => void;
+  onPin: (v: ListView) => void;
+  onUnpin: () => void;
   onClone: (v: ListView) => void;
   onFields: () => void;
   onRefresh: () => void;
@@ -21,6 +22,8 @@ interface Props {
   onDisplayChange: (d: ListDisplayMode) => void;
   onKanbanSettings: () => void;
   count: number;
+  /** True while the rows behind `count` are still being fetched. */
+  countLoading?: boolean;
   search: string;
   onSearchChange: (v: string) => void;
   chartsOpen?: boolean;

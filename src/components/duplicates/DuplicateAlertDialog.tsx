@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, ShieldAlert, ArrowRight, CalendarPlus } from "lucide-react";
+import { AlertTriangle, ArrowRight, CalendarPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -43,7 +43,9 @@ export default function DuplicateAlertDialog({
 }: Props) {
   const navigate = useNavigate();
   const obj = getObject(objectKey);
-  const blocking = matches.some((m) => m.severity === "block");
+  // This clinic's duplicate engine only ever raises "alert" - see the note on severity in
+  // src/lib/duplicates/engine.ts: a duplicate warns, it never stops a save. The staging copy
+  // of this dialog still had a blocking branch; against our narrower type it was unreachable.
   const first = matches[0];
 
   return (
@@ -51,11 +53,7 @@ export default function DuplicateAlertDialog({
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {blocking ? (
-              <ShieldAlert className="h-5 w-5 text-destructive" />
-            ) : (
-              <AlertTriangle className="h-5 w-5 text-amber-500" />
-            )}
+            <AlertTriangle className="h-5 w-5 text-amber-500" />
             {first?.title || "Possible duplicate found"}
           </DialogTitle>
         </DialogHeader>
@@ -105,7 +103,7 @@ export default function DuplicateAlertDialog({
                         </Button>
                       );
                     }
-                    if (a.key === "ignore" && m.severity !== "block") {
+                    if (a.key === "ignore") {
                       return (
                         <Button key={a.key} size="sm" variant="ghost" onClick={() => { onClose(); onIgnore?.(); }}>
                           {a.label}
@@ -122,9 +120,9 @@ export default function DuplicateAlertDialog({
 
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" onClick={onClose}>
-            {blocking ? "Back to form" : "Cancel"}
+            Cancel
           </Button>
-          {!blocking && onIgnore && (
+          {onIgnore && (
             <Button onClick={() => { onClose(); onIgnore(); }}>Save anyway</Button>
           )}
         </div>

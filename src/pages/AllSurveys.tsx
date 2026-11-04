@@ -118,7 +118,7 @@ export default function AllSurveys() {
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
 
   const {
-    allViews, userId: viewsUserId, activeView, selectView, saveView, deleteView, pinDefault,
+    allViews, userId: viewsUserId, activeView, selectView, saveView, deleteView, pinDefault, unpinDefault,
   } = useModuleListViews("surveys", "Survey Responses", DEFAULT_SURVEY_VIEW_COLUMNS);
   const [viewEditorOpen, setViewEditorOpen] = useState(false);
   const [editingView, setEditingView] = useState<ListView | null>(null);
@@ -286,6 +286,7 @@ export default function AllSurveys() {
         onEdit={(v) => { setEditingView(v); setViewEditorOpen(true); }}
         onDelete={(v) => setDeleteViewTarget(v)}
         onPin={pinDefault}
+        onUnpin={unpinDefault}
         onClone={(v) => { setEditingView({ ...v, id: undefined as any, name: `${v.name} (Copy)`, is_default: false }); setViewEditorOpen(true); }}
         onRefresh={() => queryClient.invalidateQueries({ queryKey: ["all-survey-responses"] })}
         display="cards"

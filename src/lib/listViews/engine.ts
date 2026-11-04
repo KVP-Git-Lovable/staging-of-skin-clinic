@@ -239,8 +239,10 @@ function matchOne(row: any, c: FilterCondition, fields: FieldDef[], rawValue: Ra
       if (!c.value) return true;
       const target = startOfDay(new Date(c.value));
       if (isNaN(target.getTime())) return true;
-      // Compares the real stored date even for birthday fields: "born before 1995" means the
-      // actual date of birth, not the birthday moved into the target's year.
+      if (def.anniversary) {
+        const occ = new Date(target.getFullYear(), d.getMonth(), d.getDate()).getTime();
+        return c.operator === "before" ? occ < target.getTime() : occ > target.getTime();
+      }
       return c.operator === "before" ? dayValue < target.getTime() : dayValue > target.getTime();
     }
 
@@ -305,6 +307,9 @@ export function formatCell(row: any, key: string, fields: FieldDef[], rawValue: 
   const def = fieldDefIn(fields, key);
   const val = rawValue(row, key);
   if (val === null || val === undefined || val === "") return "—";
+  // A visit imported without a date carries a sentinel so it never lists under
+  // the day it was imported on. The sentinel is not a date anyone should read.
+  if (key === "procedure_date" && row?.date_not_recorded) return "Date not recorded";
   if (def?.type === "date") {
     const d = new Date(String(val));
     if (isNaN(d.getTime())) return String(val);
@@ -314,20 +319,36 @@ export function formatCell(row: any, key: string, fields: FieldDef[], rawValue: 
 }
 
 /** Group + aggregate rows for a saved view chart. */
+/** A picklist's choices, as the filter panel already resolves them. */
+export type ChartOptionsFn = (source?: string) => { value: string; label: string }[];
+
+/** What a group with no value is called. A dash says nothing to a reader. */
+export const NO_VALUE_LABEL = "Not recorded";
+
 export function computeChartData(
   rows: any[],
   chart: ViewChart,
   fields: FieldDef[],
   rawValue: RawValueFn = defaultRawValue,
+  optionsFor?: ChartOptionsFn,
 ): { name: string; value: number }[] {
+  const def = fieldDefIn(fields, chart.group_field);
+  // A picklist stores an id - the doctor field holds a staff id - so a chart
+  // grouped by it was labelled with rows of "e82d048f-9a27-4e5b-...". The
+  // choices the filter panel offers are the same list, so the label comes
+  // from there; a value with no choice keeps whatever is stored, which is
+  // what a text field holds anyway.
+  const labels = new Map<string, string>();
+  if (def?.type === "picklist" && optionsFor) {
+    for (const option of optionsFor(def.optionsSource)) labels.set(option.value, option.label);
+  }
   const buckets = new Map<string, number[]>();
   for (const row of rows) {
     const raw = rawValue(row, chart.group_field);
     let key: string;
-    const def = fieldDefIn(fields, chart.group_field);
-    if (raw === null || raw === undefined || raw === "") key = "—";
+    if (raw === null || raw === undefined || raw === "") key = NO_VALUE_LABEL;
     else if (def?.type === "date") key = new Date(String(raw)).toLocaleDateString("en-IN", { month: "short", year: "numeric" });
-    else key = String(raw);
+    else key = labels.get(String(raw)) ?? String(raw);
     const metric =
       chart.aggregate === "count"
         ? 1

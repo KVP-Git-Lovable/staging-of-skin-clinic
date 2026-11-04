@@ -33,15 +33,17 @@ import {
   MessageCircle,
   Phone,
   Mail,
-  Workflow,
   Target,
+  Workflow,
   Share2,
   Link2,
+  BookOpen,
+  CalendarCheck,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Link, useLocation } from "react-router-dom";
 import { useEffect } from "react";
-import { useClinicSettings } from "@/hooks/useClinicSettings";
+import skinClinicLogo from "@/assets/skin-clinic-logo.png";
 import {
   Sidebar,
   SidebarContent,
@@ -82,21 +84,25 @@ const mainItems = [
   { title: "Dashboards", url: "/dashboards", icon: LayoutDashboard, moduleKey: "dashboards" },
   { title: "Leads", url: "/leads", icon: Target, moduleKey: "leads" },
   { title: "Campaigns", url: "/campaigns", icon: Megaphone, moduleKey: "campaigns" },
+  { title: "WhatsApp Delivery", url: "/whatsapp-log", icon: MessageCircle, moduleKey: "campaigns" },
 ];
 
+// Journey Builder, Meta and Meta Connection join this list when their pages land; until then a
+// link here would only lead to a 404.
 const communicationsItems = [
   { title: "WhatsApp", url: "/communications/whatsapp", icon: MessageCircle },
   { title: "Voice", url: "/communications/voice", icon: Phone },
   { title: "Email", url: "/communications/email", icon: Mail },
   { title: "Journey Builder", url: "/communications/journeys", icon: Workflow },
   { title: "Calendar", url: "/communications/calendar", icon: CalendarDays },
-  { title: "Meta", url: "/communications/meta", icon: Share2, moduleKey: "meta" },
-  { title: "Meta Connection", url: "/communications/meta/connection", icon: Link2, moduleKey: "meta_connection" },
+  { title: "Meta", url: "/communications/meta", icon: Share2 },
+  { title: "Meta Connection", url: "/communications/meta/connection", icon: Link2 },
 ];
 
 const employeesSubItems = [
-  { title: "Staff", url: "/staff", icon: UserCog },
-  { title: "Leave", url: "/leave", icon: CalendarDays },
+  { title: "Staff", url: "/staff", icon: UserCog, moduleKey: "staff" },
+  { title: "My Attendance", url: "/attendance", icon: CalendarCheck, moduleKey: "staff" },
+  { title: "Leave", url: "/leave", icon: CalendarDays, moduleKey: "leave" },
 ];
 
 const surveySubItems = [
@@ -106,6 +112,7 @@ const surveySubItems = [
 
 const masterDataItems = [
   { title: "Service Master", url: "/services", icon: Stethoscope, moduleKey: "services" },
+  { title: "Knowledge Articles", url: "/knowledge", icon: BookOpen, moduleKey: "services" },
   { title: "Vendor Master", url: "/vendors", icon: Building2, moduleKey: "vendors" },
   { title: "Category Master", url: "/category-master", icon: Tags, moduleKey: "category_master" },
   { title: "Tax Master", url: "/tax-master", icon: Percent, moduleKey: "settings" },
@@ -122,7 +129,9 @@ const adminSubItems = [
   { title: "Custom Fields", url: "/custom-fields", icon: SlidersHorizontal },
   { title: "Duplicate Management", url: "/duplicate-management", icon: CopyCheck },
   { title: "History Tracking", url: "/admin/history-tracking", icon: History },
+  { title: "Knowledge Categories", url: "/admin/knowledge-categories", icon: BookOpen },
   { title: "Currency & Billing", url: "/admin/currency", icon: Coins },
+  { title: "Attendance", url: "/admin/attendance", icon: CalendarCheck },
   { title: "User Management", url: "/user-management", icon: Users },
   { title: "Trash Policy & Audit", url: "/admin/trash", icon: Trash2 },
 ];
@@ -133,7 +142,6 @@ export function AppSidebar() {
   const location = useLocation();
   const currentPath = location.pathname;
   const { isAdmin, permissions } = useAuth();
-  const { name: clinicName, logoUrl: clinicLogo } = useClinicSettings();
 
   useEffect(() => {
     if (isMobile) setOpenMobile(false);
@@ -148,15 +156,22 @@ export function AppSidebar() {
     return true;
   };
 
-  const filteredMainBeforeComms = mainItems.slice(0, -1).filter((i) => canView(i.moduleKey));
-  const filteredMainAfterComms = mainItems.slice(-1).filter((i) => canView(i.moduleKey));
+  const filteredMain = mainItems.filter((i) => canView(i.moduleKey));
+  // The Communications Center renders between "Dashboards" and "Campaigns", which one .map()
+  // cannot express - so the list is drawn in two slices with the group in between. The split is
+  // found on the filtered list, not mainItems, so it stays put if canView ever starts hiding
+  // things. A missing Campaigns entry puts the group at the end rather than losing it.
+  const campaignsAt = filteredMain.findIndex((i) => i.url === "/campaigns");
+  const commsSplitAt = campaignsAt === -1 ? filteredMain.length : campaignsAt;
+  const filteredMainBeforeComms = filteredMain.slice(0, commsSplitAt);
+  const filteredMainAfterComms = filteredMain.slice(commsSplitAt);
+  const showCommunications = canView("communications");
+  const communicationsPaths = communicationsItems.map((i) => i.url);
   const filteredMaster = masterDataItems.filter((i) => canView(i.moduleKey));
   const showSurveys = canView("surveys");
   const showEmployees = canView("staff") || canView("leave");
-  const showCommunications = canView("communications");
-  const communicationsPaths = communicationsItems.map((i) => i.url);
 
-  const employeesPaths = ["/staff", "/leave"];
+  const employeesPaths = ["/staff", "/leave", "/attendance"];
   const adminPaths = ["/admin", ...adminSubItems.map((i) => i.url)];
   const showAdmin = canView("settings");
   const masterPaths = masterDataItems.map((i) => i.url);
@@ -167,13 +182,13 @@ export function AppSidebar() {
         <div className={collapsed ? "flex items-center justify-center" : "flex items-center gap-2"}>
           {!collapsed && (
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/95 shadow-sm ring-1 ring-black/5">
-              <img src={clinicLogo} alt={clinicName} className="h-7 w-7 object-contain" />
+              <img src={skinClinicLogo} alt="The Skin Clinic" className="h-7 w-7 object-contain" />
             </span>
           )}
           {!collapsed && (
             <div className="min-w-0 flex-1">
               <h2 className="font-display text-sm font-bold leading-tight drop-shadow-sm truncate">
-                {clinicName}
+                The Skin Clinic
               </h2>
               <p className="text-xs opacity-90 leading-tight">Clinic Manager</p>
             </div>
@@ -211,14 +226,14 @@ export function AppSidebar() {
 
               {showCommunications && (
                 <Collapsible
-                  defaultOpen={communicationsPaths.some((p) => currentPath.startsWith(p))}
+                  defaultOpen={currentPath.startsWith("/communications")}
                   className="group/collapsible"
                 >
                   <SidebarMenuItem>
                     <CollapsibleTrigger asChild>
                       <SidebarMenuButton
                         tooltip="Communications Center"
-                        isActive={communicationsPaths.some((p) => currentPath.startsWith(p))}
+                        isActive={currentPath.startsWith("/communications")}
                       >
                         <MessageCircle className="mr-2 h-4 w-4" />
                         {!collapsed && <span>Communications Center</span>}
@@ -233,11 +248,15 @@ export function AppSidebar() {
                           <SidebarMenuSubItem key={sub.url}>
                             <SidebarMenuSubButton
                               asChild
+                              // The WhatsApp hub owns /communications/whatsapp, but its own
+                              // sub-pages are separate entries, so a plain prefix match would
+                              // light it up on all of them.
                               isActive={
-                                // The Meta hub owns every /communications/meta/* page except its Connection page.
-                                sub.url === "/communications/meta"
-                                  ? isActive(sub.url) && !currentPath.startsWith("/communications/meta/connection")
-                                  : isActive(sub.url)
+                                sub.url === "/communications/whatsapp"
+                                  ? currentPath === sub.url
+                                  : sub.url === "/communications/meta"
+                                    ? isActive(sub.url) && !currentPath.startsWith("/communications/meta/connection")
+                                    : isActive(sub.url)
                               }
                             >
                               <Link to={sub.url}>
@@ -292,7 +311,7 @@ export function AppSidebar() {
                     <CollapsibleContent>
                       <SidebarMenuSub>
                         {employeesSubItems
-                          .filter((sub) => canView(sub.url === "/staff" ? "staff" : "leave"))
+                          .filter((sub) => canView(sub.moduleKey))
                           .map((sub) => (
                             <SidebarMenuSubItem key={sub.url}>
                               <SidebarMenuSubButton

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, TrendingUp, ChevronDown, ChevronUp, Sparkles, HelpCircle, Calendar } from "lucide-react";
+import { Loader2, TrendingUp, ChevronDown, ChevronUp, Sparkles, HelpCircle, Calendar, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { format } from "date-fns";
@@ -110,7 +110,10 @@ const generateAITips = (data: EngagementData): string[] => {
   return tips.slice(0, 4);
 };
 
-export const EngagementScoreCard = ({ patientId }: { patientId: string }) => {
+export const EngagementScoreCard = (
+  { patientId, hideBilled = false }:
+  { patientId: string; /** Withheld when the patient is under another doctor. */ hideBilled?: boolean },
+) => {
   const [data, setData] = useState<EngagementData | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
@@ -180,15 +183,33 @@ export const EngagementScoreCard = ({ patientId }: { patientId: string }) => {
         {/* Always-visible stats row */}
         <div className="flex items-center gap-3 mt-3 pt-2.5 border-t text-xs">
           <div className="text-center flex-1">
-            <p className="text-base font-bold">{data.stats.totalAppointments}</p>
+            {/* Attended, not booked. This counted every appointment, so a patient
+                with nine forward bookings read "10 visits" here against "1" in the
+                engagement card below. The Appts tab still shows the booking count. */}
+            <p className="text-base font-bold">{data.stats.completedAppointments}</p>
             <p className="text-[10px] text-muted-foreground">Visits</p>
           </div>
           <div className="text-center flex-1">
             <p className="text-base font-bold">{data.stats.distinctServices}</p>
             <p className="text-[10px] text-muted-foreground">Services</p>
           </div>
+          {/* A doctor should not read another doctor's takings off this header.
+              Shown as withheld rather than dropped, so the row does not reshuffle
+              and read as "nothing billed". */}
           <div className="text-center flex-1">
-            <p className="text-base font-bold">₹{data.stats.totalBilled >= 1000 ? `${(data.stats.totalBilled / 1000).toFixed(1)}k` : data.stats.totalBilled}</p>
+            <p className="text-base font-bold">
+              {hideBilled ? (
+                <span
+                  className="inline-flex items-center justify-center text-muted-foreground"
+                  title="Only this patient's own doctor can see what they have been billed"
+                >
+                  <Lock className="h-3.5 w-3.5" aria-hidden />
+                  <span className="sr-only">Not shown - only this patient's own doctor can see this</span>
+                </span>
+              ) : (
+                `₹${data.stats.totalBilled >= 1000 ? `${(data.stats.totalBilled / 1000).toFixed(1)}k` : data.stats.totalBilled}`
+              )}
+            </p>
             <p className="text-[10px] text-muted-foreground">Billed</p>
           </div>
           <div className="text-center flex-1">

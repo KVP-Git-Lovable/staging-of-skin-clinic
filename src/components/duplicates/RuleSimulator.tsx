@@ -4,15 +4,17 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Check, X, FlaskConical, Loader2, ShieldAlert, AlertTriangle } from "lucide-react";
+import { Check, X, FlaskConical, Loader2, AlertTriangle } from "lucide-react";
 import { getObject } from "@/lib/validation/schema";
 import { simulateDuplicates, type RuleTrace } from "@/lib/duplicates/engine";
 import { toast } from "@/hooks/use-toast";
 
 /**
  * Rule test simulator — enter sample values and see exactly which fields
- * matched, how AND/OR resolved, the rendered notification tokens and whether
- * the save would be blocked.
+ * matched, how AND/OR resolved and the rendered notification tokens.
+ *
+ * A duplicate never blocks a save, so there is no "would be blocked" outcome
+ * to report - only whether the user would be warned.
  */
 export default function RuleSimulator({ objectKey }: { objectKey: string }) {
   const obj = getObject(objectKey)!;
@@ -40,7 +42,6 @@ export default function RuleSimulator({ objectKey }: { objectKey: string }) {
   };
 
   const hits = (result?.traces || []).filter((t) => t.isDuplicate);
-  const blocked = hits.some((t) => t.severity === "block");
   const activeKeys = [...testKeys, ...(extraKey ? [extraKey] : [])];
 
   return (
@@ -87,13 +88,13 @@ export default function RuleSimulator({ objectKey }: { objectKey: string }) {
         <Card
           className={
             "p-4 space-y-1 " +
-            (blocked ? "border-destructive/50 bg-destructive/5" : hits.length ? "border-amber-500/50 bg-amber-500/5" : "")
+            (hits.length ? "border-amber-500/50 bg-amber-500/5" : "")
           }
         >
           <div className="flex items-center gap-2 font-medium text-sm">
-            {blocked ? <ShieldAlert className="h-4 w-4 text-destructive" /> : hits.length ? <AlertTriangle className="h-4 w-4 text-amber-600" /> : <Check className="h-4 w-4 text-emerald-600" />}
+            {hits.length ? <AlertTriangle className="h-4 w-4 text-amber-600" /> : <Check className="h-4 w-4 text-emerald-600" />}
             Enforcement result:{" "}
-            {blocked ? "Save would be BLOCKED" : hits.length ? "Save allowed with warning" : "No duplicate — save proceeds"}
+            {hits.length ? "Save allowed with a warning" : "No duplicate — save proceeds"}
           </div>
           <p className="text-xs text-muted-foreground">
             {result.rulesEvaluated} active rule(s) · {result.candidatesScanned} candidate record(s) scanned · {hits.length} duplicate match(es)
@@ -104,8 +105,8 @@ export default function RuleSimulator({ objectKey }: { objectKey: string }) {
       {(result?.traces || []).map((t, i) => (
         <Card key={i} className="p-4 space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={t.isDuplicate ? (t.severity === "block" ? "destructive" : "secondary") : "outline"}>
-              {t.isDuplicate ? (t.severity === "block" ? "Blocks save" : "Alert") : "No match"}
+            <Badge variant={t.isDuplicate ? "secondary" : "outline"}>
+              {t.isDuplicate ? "Warns" : "No match"}
             </Badge>
             <span className="text-sm font-medium">{t.rule.name}</span>
             <span className="text-xs text-muted-foreground">vs {t.recordLabel}</span>

@@ -17,6 +17,7 @@ import { ShopLayout } from "@/components/shop/ShopLayout";
 import { ReactNode, Suspense } from "react";
 import { lazyWithReload } from "@/lib/lazyWithReload";
 import { useCurrencySettings } from "@/lib/currency";
+import { AppErrorBoundary } from "@/components/shared/AppErrorBoundary";
 
 // Every page is its own lazy-loaded chunk instead of one large upfront
 // bundle - the browser only downloads the page currently being visited.
@@ -47,20 +48,19 @@ const TaxMaster = lazyWithReload(() => import("./pages/TaxMaster"));
 const Expenses = lazyWithReload(() => import("./pages/Expenses"));
 const StaffManagement = lazyWithReload(() => import("./pages/StaffManagement"));
 const StaffDetail = lazyWithReload(() => import("./pages/StaffDetail"));
+const WhatsAppLog = lazyWithReload(() => import("./pages/WhatsAppLog"));
 const Leads = lazyWithReload(() => import("./pages/Leads"));
-const Campaigns = lazyWithReload(() => import("./pages/Campaigns"));
-const CampaignDetail = lazyWithReload(() => import("./pages/CampaignDetail"));
 const WhatsAppCenter = lazyWithReload(() => import("./pages/communications/WhatsAppCenter"));
-const WhatsAppConfig = lazyWithReload(() => import("./pages/communications/WhatsAppConfig"));
 const WhatsAppTemplates = lazyWithReload(() => import("./pages/communications/WhatsAppTemplates"));
+const WhatsAppConfig = lazyWithReload(() => import("./pages/communications/WhatsAppConfig"));
 const WhatsAppConversations = lazyWithReload(() => import("./pages/communications/WhatsAppConversations"));
-const JourneyAnalytics = lazyWithReload(() => import("./pages/communications/JourneyAnalytics"));
-const JourneyFailures = lazyWithReload(() => import("./pages/communications/JourneyFailures"));
-const JourneyCanvas = lazyWithReload(() => import("./pages/communications/JourneyCanvas"));
 const VoiceCenter = lazyWithReload(() => import("./pages/communications/VoiceCenter"));
 const EmailCenter = lazyWithReload(() => import("./pages/communications/EmailCenter"));
-const JourneyBuilder = lazyWithReload(() => import("./pages/communications/JourneyBuilder"));
 const CommunicationsCalendar = lazyWithReload(() => import("./pages/communications/CommunicationsCalendar"));
+const JourneyBuilder = lazyWithReload(() => import("./pages/communications/JourneyBuilder"));
+const JourneyCanvas = lazyWithReload(() => import("./pages/communications/JourneyCanvas"));
+const JourneyAnalytics = lazyWithReload(() => import("./pages/communications/JourneyAnalytics"));
+const JourneyFailures = lazyWithReload(() => import("./pages/communications/JourneyFailures"));
 const MetaHub = lazyWithReload(() => import("./pages/communications/meta/MetaHub"));
 const MetaConnection = lazyWithReload(() => import("./pages/communications/meta/MetaConnection"));
 const MetaMarketing = lazyWithReload(() => import("./pages/communications/meta/MetaMarketing"));
@@ -71,11 +71,14 @@ const AdPerformance = lazyWithReload(() => import("./pages/communications/meta/A
 const MetaOrganicPosts = lazyWithReload(() => import("./pages/communications/meta/MetaOrganicPosts"));
 const MetaDiagnostics = lazyWithReload(() => import("./pages/communications/meta/MetaDiagnostics"));
 const OAuthResult = lazyWithReload(() => import("./pages/auth/OAuthResult"));
+const Campaigns = lazyWithReload(() => import("./pages/Campaigns"));
+const CampaignDetail = lazyWithReload(() => import("./pages/CampaignDetail"));
 const PortalLanding = lazyWithReload(() => import("./pages/portal/PortalLanding"));
 const PortalLogin = lazyWithReload(() => import("./pages/portal/PortalLogin"));
 const Portal = lazyWithReload(() => import("./pages/portal/Portal"));
 const Login = lazyWithReload(() => import("./pages/auth/Login"));
 const Signup = lazyWithReload(() => import("./pages/auth/Signup"));
+const OAuthConsent = lazyWithReload(() => import("./pages/auth/OAuthConsent"));
 const ShopHome = lazyWithReload(() => import("./pages/shop/ShopHome"));
 const ShopProduct = lazyWithReload(() => import("./pages/shop/ShopProduct"));
 const ShopCart = lazyWithReload(() => import("./pages/shop/ShopCart"));
@@ -94,6 +97,13 @@ const SurveyNew = lazyWithReload(() => import("./pages/SurveyNew"));
 const Vendors = lazyWithReload(() => import("./pages/Vendors"));
 const UserManagement = lazyWithReload(() => import("./pages/UserManagement"));
 const HistoryTracking = lazyWithReload(() => import("./pages/admin/HistoryTracking"));
+const PhotoFingerprints = lazyWithReload(() => import("./pages/admin/PhotoFingerprints"));
+const KnowledgeCategories = lazyWithReload(() => import("./pages/admin/KnowledgeCategories"));
+const KnowledgeArticles = lazyWithReload(() => import("./pages/KnowledgeArticles"));
+const KnowledgeArticleDetail = lazyWithReload(() => import("./pages/KnowledgeArticleDetail"));
+const Attendance = lazyWithReload(() => import("./pages/Attendance"));
+const AttendanceAdmin = lazyWithReload(() => import("./pages/admin/AttendanceAdmin"));
+const VisitsNeedingReview = lazyWithReload(() => import("./pages/admin/VisitsNeedingReview"));
 const CurrencyBilling = lazyWithReload(() => import("./pages/admin/CurrencyBilling"));
 const UnitMaster = lazyWithReload(() => import("./pages/UnitMaster"));
 const ValidationRules = lazyWithReload(() => import("./pages/ValidationRules"));
@@ -112,9 +122,26 @@ const queryClient = new QueryClient({
     queries: {
       retry: 2,
       networkMode: "always",
+      // Without these two every query was stale the instant it resolved AND
+      // refetched whenever the window regained focus - so clicking back into
+      // the browser re-ran every query on the page, whole-table fetches
+      // included. That is most of the reported slowness, and the flicker of
+      // spinners and rows redrawing is what staff described as the app
+      // refreshing by itself.
+      //
+      // A minute of staleness is the right trade: mutations already invalidate
+      // the keys they touch, so anything this user changes is still immediate,
+      // and the clinic does not need another user's edit within the same minute.
+      staleTime: 60_000,
+      refetchOnWindowFocus: false,
     },
     mutations: {
-      retry: 1,
+      // No retry. A mutation is not idempotent: retrying a failed INSERT is how
+      // you get two invoices for one bill. It bit here because creating a
+      // record for another doctor writes the row and THEN fails, when
+      // PostgREST runs the row-scope SELECT policy over the RETURNING clause -
+      // so the retry created a second row every time.
+      retry: 0,
       networkMode: "always",
     },
   },
@@ -146,18 +173,40 @@ function PageLoader() {
 }
 
 /** Admin-only routes (user & profile management). */
+/** Signed in, but the staff record has been switched off. */
+function DeactivatedNotice() {
+  const { signOut } = useAuth();
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="max-w-sm text-center">
+        <h1 className="text-lg font-semibold">This account has been deactivated</h1>
+        <p className="text-sm text-muted-foreground mt-2">
+          Ask an administrator to reactivate it if you still need access.
+        </p>
+        <button className="mt-4 text-sm text-primary hover:underline" onClick={() => signOut()}>
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AdminRoute({ children }: { children: ReactNode }) {
-  const { isAdmin, loading } = useAuth();
+  const { isAdmin, staffDeactivated, loading } = useAuth();
   if (loading) return null;
+  if (staffDeactivated) return <DeactivatedNotice />;
   return isAdmin ? <>{children}</> : <AccessDenied />;
 }
 
 function ProtectedRoute({ moduleKey, children }: { moduleKey: string; children: ReactNode }) {
-  const { isAdmin, permissions, loading, session } = useAuth();
+  const { isAdmin, permissions, staffDeactivated, loading, session } = useAuth();
   if (loading) return null;
   // Without a session every query reaches the database as "anon", which the
   // grants deny - send the user to sign in instead of rendering empty panels.
   if (!session) return <Navigate to="/login" replace />;
+  // Before the checks below, because the last of them treats an empty
+  // permissions map as "allow everything" - which a deactivated account has.
+  if (staffDeactivated) return <DeactivatedNotice />;
   if (isAdmin) return <>{children}</>;
   if (permissions[moduleKey]?.can_view) return <>{children}</>;
   // If no permissions loaded at all (no staff profile / not logged in as staff), allow access
@@ -166,6 +215,7 @@ function ProtectedRoute({ moduleKey, children }: { moduleKey: string; children: 
 }
 
 const App = () => (
+  <AppErrorBoundary>
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <AuthProvider>
@@ -184,8 +234,10 @@ const App = () => (
 
             {/* Auth pages */}
             <Route path="/login" element={<Login />} />
+            <Route path="/.lovable/oauth/consent" element={<OAuthConsent />} />
             <Route path="/signup" element={<Signup />} />
-            {/* Popup landing for the Meta connect flow; reads the result from the URL fragment */}
+            {/* Where the Meta connect popup lands; it reads the result from the URL fragment
+                and posts it back to the opener. Deliberately outside AppLayout. */}
             <Route path="/oauth/result" element={<OAuthResult />} />
 
             {/* Public Shop — own layout */}
@@ -214,9 +266,13 @@ const App = () => (
                     <Route path="/patients" element={<ProtectedRoute moduleKey="patients"><Patients /></ProtectedRoute>} />
                     <Route path="/patients/:id" element={<ProtectedRoute moduleKey="patients"><PatientDetail /></ProtectedRoute>} />
                     <Route path="/leave" element={<ProtectedRoute moduleKey="leave"><LeaveManagement /></ProtectedRoute>} />
+                    <Route path="/admin/attendance" element={<ProtectedRoute moduleKey="staff"><AttendanceAdmin /></ProtectedRoute>} />
+                    <Route path="/admin/visits-to-review" element={<ProtectedRoute moduleKey="settings"><VisitsNeedingReview /></ProtectedRoute>} />
                     <Route path="/appointments" element={<ProtectedRoute moduleKey="appointments"><Appointments /></ProtectedRoute>} />
                     <Route path="/appointments/:id" element={<ProtectedRoute moduleKey="appointments"><AppointmentDetail /></ProtectedRoute>} />
                     <Route path="/services" element={<ProtectedRoute moduleKey="services"><Services /></ProtectedRoute>} />
+                    <Route path="/knowledge" element={<ProtectedRoute moduleKey="services"><KnowledgeArticles /></ProtectedRoute>} />
+                    <Route path="/knowledge/:id" element={<ProtectedRoute moduleKey="services"><KnowledgeArticleDetail /></ProtectedRoute>} />
                     <Route path="/billing" element={<ProtectedRoute moduleKey="billing"><Billing /></ProtectedRoute>} />
                     <Route path="/reports" element={<ProtectedRoute moduleKey="reports"><Reports /></ProtectedRoute>} />
                     <Route path="/reports/:key" element={<ProtectedRoute moduleKey="reports"><ReportView /></ProtectedRoute>} />
@@ -224,29 +280,30 @@ const App = () => (
                     <Route path="/dashboards" element={<ProtectedRoute moduleKey="dashboards"><Dashboards /></ProtectedRoute>} />
                     <Route path="/dashboards/:id" element={<ProtectedRoute moduleKey="dashboards"><DashboardView /></ProtectedRoute>} />
                     <Route path="/dashboard-explore" element={<ProtectedRoute moduleKey="dashboard"><DashboardExplore /></ProtectedRoute>} />
+                    <Route path="/whatsapp-log" element={<ProtectedRoute moduleKey="campaigns"><WhatsAppLog /></ProtectedRoute>} />
                     <Route path="/leads" element={<ProtectedRoute moduleKey="leads"><Leads /></ProtectedRoute>} />
-                    <Route path="/campaigns" element={<ProtectedRoute moduleKey="campaigns"><Campaigns /></ProtectedRoute>} />
-                    <Route path="/campaigns/:id" element={<ProtectedRoute moduleKey="campaigns"><CampaignDetail /></ProtectedRoute>} />
                     <Route path="/communications/whatsapp" element={<ProtectedRoute moduleKey="communications"><WhatsAppCenter /></ProtectedRoute>} />
-                    <Route path="/communications/whatsapp/config" element={<ProtectedRoute moduleKey="communications"><WhatsAppConfig /></ProtectedRoute>} />
                     <Route path="/communications/whatsapp/templates" element={<ProtectedRoute moduleKey="communications"><WhatsAppTemplates /></ProtectedRoute>} />
+                    <Route path="/communications/whatsapp/config" element={<ProtectedRoute moduleKey="communications"><WhatsAppConfig /></ProtectedRoute>} />
                     <Route path="/communications/whatsapp/conversations" element={<ProtectedRoute moduleKey="communications"><WhatsAppConversations /></ProtectedRoute>} />
+                    <Route path="/communications/voice" element={<ProtectedRoute moduleKey="communications"><VoiceCenter /></ProtectedRoute>} />
+                    <Route path="/communications/email" element={<ProtectedRoute moduleKey="communications"><EmailCenter /></ProtectedRoute>} />
+                    <Route path="/communications/calendar" element={<ProtectedRoute moduleKey="communications"><CommunicationsCalendar /></ProtectedRoute>} />
+                    <Route path="/communications/journeys" element={<ProtectedRoute moduleKey="communications"><JourneyBuilder /></ProtectedRoute>} />
                     <Route path="/communications/journeys/:id/analytics" element={<ProtectedRoute moduleKey="communications"><JourneyAnalytics /></ProtectedRoute>} />
                     <Route path="/communications/journeys/:id/failures" element={<ProtectedRoute moduleKey="communications"><JourneyFailures /></ProtectedRoute>} />
                     <Route path="/communications/journeys/:id" element={<ProtectedRoute moduleKey="communications"><JourneyCanvas /></ProtectedRoute>} />
-                    <Route path="/communications/voice" element={<ProtectedRoute moduleKey="communications"><VoiceCenter /></ProtectedRoute>} />
-                    <Route path="/communications/email" element={<ProtectedRoute moduleKey="communications"><EmailCenter /></ProtectedRoute>} />
-                    <Route path="/communications/journeys" element={<ProtectedRoute moduleKey="communications"><JourneyBuilder /></ProtectedRoute>} />
-                    <Route path="/communications/calendar" element={<ProtectedRoute moduleKey="communications"><CommunicationsCalendar /></ProtectedRoute>} />
                     <Route path="/communications/meta" element={<ProtectedRoute moduleKey="meta"><MetaHub /></ProtectedRoute>} />
                     <Route path="/communications/meta/connection" element={<ProtectedRoute moduleKey="meta_connection"><MetaConnection /></ProtectedRoute>} />
                     <Route path="/communications/meta/marketing" element={<ProtectedRoute moduleKey="meta"><MetaMarketing /></ProtectedRoute>} />
                     <Route path="/communications/meta/campaigns" element={<ProtectedRoute moduleKey="meta"><MetaCampaigns /></ProtectedRoute>} />
                     <Route path="/communications/meta/ad-sets" element={<ProtectedRoute moduleKey="meta"><MetaAdSets /></ProtectedRoute>} />
-                    <Route path="/communications/meta/ads" element={<ProtectedRoute moduleKey="meta"><MetaAds /></ProtectedRoute>} />
                     <Route path="/communications/meta/ads/:id/performance" element={<ProtectedRoute moduleKey="meta"><AdPerformance /></ProtectedRoute>} />
+                    <Route path="/communications/meta/ads" element={<ProtectedRoute moduleKey="meta"><MetaAds /></ProtectedRoute>} />
                     <Route path="/communications/meta/organic" element={<ProtectedRoute moduleKey="meta"><MetaOrganicPosts /></ProtectedRoute>} />
                     <Route path="/communications/meta/diagnostics" element={<ProtectedRoute moduleKey="meta"><MetaDiagnostics /></ProtectedRoute>} />
+                    <Route path="/campaigns" element={<ProtectedRoute moduleKey="campaigns"><Campaigns /></ProtectedRoute>} />
+                    <Route path="/campaigns/:id" element={<ProtectedRoute moduleKey="campaigns"><CampaignDetail /></ProtectedRoute>} />
                     <Route path="/procedures" element={<ProtectedRoute moduleKey="procedures"><Procedures /></ProtectedRoute>} />
                     <Route path="/procedures/new" element={<ProtectedRoute moduleKey="procedures"><ProcedureNew /></ProtectedRoute>} />
                     <Route path="/pharma" element={<ProtectedRoute moduleKey="pharmacy"><Pharma /></ProtectedRoute>} />
@@ -274,6 +331,8 @@ const App = () => (
                     <Route path="/admin" element={<ProtectedRoute moduleKey="settings"><Admin /></ProtectedRoute>} />
                     <Route path="/trash" element={<TrashPage />} />
                     <Route path="/admin/history-tracking" element={<ProtectedRoute moduleKey="settings"><HistoryTracking /></ProtectedRoute>} />
+                    <Route path="/admin/photo-fingerprints" element={<ProtectedRoute moduleKey="settings"><PhotoFingerprints /></ProtectedRoute>} />
+                    <Route path="/admin/knowledge-categories" element={<ProtectedRoute moduleKey="settings"><KnowledgeCategories /></ProtectedRoute>} />
                     <Route path="/admin/currency" element={<ProtectedRoute moduleKey="settings"><CurrencyBilling /></ProtectedRoute>} />
                     <Route path="/admin/trash" element={<ProtectedRoute moduleKey="settings"><TrashAdmin /></ProtectedRoute>} />
                     <Route path="/validation-rules/:id" element={<ProtectedRoute moduleKey="settings"><ValidationRuleBuilder /></ProtectedRoute>} />
@@ -282,6 +341,7 @@ const App = () => (
                     <Route path="/settings" element={<ProtectedRoute moduleKey="settings"><Settings /></ProtectedRoute>} />
                     <Route path="/settings/tax-master/new" element={<ProtectedRoute moduleKey="settings"><TaxMasterForm /></ProtectedRoute>} />
                     <Route path="/settings/tax-master/:id" element={<ProtectedRoute moduleKey="settings"><TaxMasterForm /></ProtectedRoute>} />
+                    <Route path="/attendance" element={<Attendance />} />
                     <Route path="/profile" element={<Profile />} />
                     <Route path="*" element={<NotFound />} />
                   </Routes>
@@ -296,6 +356,7 @@ const App = () => (
       </AuthProvider>
     </TooltipProvider>
   </QueryClientProvider>
+  </AppErrorBoundary>
 );
 
 export default App;

@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { numVal } from "@/lib/numberInput";
 import { useNavigate } from "react-router-dom";
 import { Plus, Search, Edit, Trash2, Loader2, Phone, Mail, Camera, UserCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -306,7 +307,7 @@ const StaffManagement = () => {
                   min={0}
                   className="mt-1"
                   placeholder="0"
-                  value={form.consultation_fee}
+                  value={numVal(form.consultation_fee)}
                   onChange={(e) => setForm({ ...form, consultation_fee: parseFloat(e.target.value) || 0 })}
                 />
                 <p className="text-[11px] text-muted-foreground mt-1">Auto-added as a line item when this doctor is selected on an invoice.</p>

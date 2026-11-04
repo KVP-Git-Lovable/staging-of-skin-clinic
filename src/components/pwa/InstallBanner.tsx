@@ -57,8 +57,11 @@ export function InstallBanner() {
 
   if (isStandalone || !showBanner) return null;
 
+  // safe-inset-bottom clears the iPhone home indicator; without it the banner
+  // sat inside the system swipe-up area, where a tap on "Install Now" is as
+  // likely to dismiss the app as press the button.
   return (
-    <div className="fixed bottom-0 inset-x-0 z-50 p-3 md:p-4 animate-in slide-in-from-bottom duration-300">
+    <div className="fixed bottom-0 inset-x-0 z-50 p-3 md:p-4 safe-inset-bottom animate-in slide-in-from-bottom duration-300">
       <div className="mx-auto max-w-lg bg-card border border-border rounded-2xl shadow-lg p-4 flex items-center gap-3">
         <img src={skinClinicLogo} alt="The Skin Clinic" className="h-12 w-12 rounded-xl shrink-0 object-contain" />
         <div className="flex-1 min-w-0">

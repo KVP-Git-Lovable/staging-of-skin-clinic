@@ -4,14 +4,33 @@
 // PATIENT_FIELDS/GENDER_OPTIONS/etc.) so any module can reuse the same
 // view-and-edit filter panel.
 import { useEffect, useState } from "react";
+import { DateInput } from "@/components/shared/DateInput";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Lock, Pencil, Plus, Trash2 } from "lucide-react";
 import { OPERATORS, fieldDefIn, type FieldDef, type FilterCondition, type ListView } from "@/lib/listViews/engine";
+import { REPORT_DATE_RANGE_OPTIONS } from "@/lib/reportDateRange";
 
 interface PickOption { value: string; label: string }
+
+/**
+ * A period to narrow the list to, held by the page rather than by the view.
+ *
+ * A saved view's filters belong to the view and are locked on the standard
+ * ones, so on "All Prescriptions" there was nothing at all to set. This is the
+ * other kind: what the person wants to look at right now. It is offered
+ * whether the view is locked or not, and is never saved into the view.
+ */
+export interface PanelDateFilter {
+  preset: string;
+  customStart: string;
+  customEnd: string;
+  onChange: (next: { preset: string; customStart: string; customEnd: string }) => void;
+  /** Field being narrowed, e.g. "Visit date". Defaults to "Date". */
+  label?: string;
+}
 
 interface Props {
   view: ListView | null;
@@ -22,11 +41,13 @@ interface Props {
   onClose: () => void;
   /** Plural, lowercase noun used in the owner/empty-state copy, e.g. "patients". Defaults to "records". */
   itemLabel?: string;
+  /** Offer a date range for this list. Omitted on modules that do not want one. */
+  dateFilter?: PanelDateFilter;
 }
 
 const blank = (): FilterCondition => ({ field: "status", operator: "equals", value: "", values: [] });
 
-export default function ViewFiltersPanel({ view, canManage, fields, optionsFor, onSave, onClose, itemLabel = "records" }: Props) {
+export default function ViewFiltersPanel({ view, canManage, fields, optionsFor, onSave, onClose, itemLabel = "records", dateFilter }: Props) {
   const locked = !!view?.is_standard || !canManage;
   const [editing, setEditing] = useState(false);
   const [match, setMatch] = useState<"all" | "any">(view?.filters?.match ?? "all");
@@ -72,6 +93,45 @@ export default function ViewFiltersPanel({ view, canManage, fields, optionsFor, 
       </div>
 
       <div className="flex-1 space-y-3 overflow-y-auto p-4">
+        {dateFilter && (
+          <div className="space-y-2 rounded-lg border border-border bg-background p-3">
+            <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              {dateFilter.label ?? "Date"}
+            </Label>
+            <Select
+              value={dateFilter.preset}
+              onValueChange={(preset) => dateFilter.onChange({ ...dateFilter, preset })}
+            >
+              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent className="z-50 max-h-72 bg-popover">
+                {REPORT_DATE_RANGE_OPTIONS.map((o) => (
+                  <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {dateFilter.preset === "custom" && (
+              <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">From</Label>
+                  <DateInput
+                    className="h-9 text-sm"
+                    value={dateFilter.customStart}
+                    onChange={(customStart) => dateFilter.onChange({ ...dateFilter, customStart })}
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">To</Label>
+                  <DateInput
+                    className="h-9 text-sm"
+                    value={dateFilter.customEnd}
+                    onChange={(customEnd) => dateFilter.onChange({ ...dateFilter, customEnd })}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="rounded-lg border border-border bg-muted/30 p-3">
           <p className="text-sm font-medium text-primary">Filter by Owner</p>
           <p className="text-sm text-muted-foreground">All {itemLabel}</p>
@@ -174,9 +234,9 @@ export default function ViewFiltersPanel({ view, canManage, fields, optionsFor, 
                         </Select>
                       ) : def?.type === "date" && !["last_n_days", "next_n_days"].includes(c.operator) ? (
                         <>
-                          <Input type="date" className="h-9 text-sm" value={c.value} onChange={(e) => updateCond(i, { value: e.target.value })} />
+                          <DateInput className="h-9 text-sm" value={c.value} onChange={(isoDate) => updateCond(i, { value: isoDate })} />
                           {c.operator === "between" && (
-                            <Input type="date" className="h-9 text-sm" value={c.value2 ?? ""} onChange={(e) => updateCond(i, { value2: e.target.value })} />
+                            <DateInput className="h-9 text-sm" value={c.value2 ?? ""} onChange={(isoDate) => updateCond(i, { value2: isoDate })} />
                           )}
                         </>
                       ) : (

@@ -1,0 +1,61 @@
+appointment_service;billed_on;consultation_fee;investigation_text;invoice_number;matches_fee;stored_line_name;tax_amount;tax_rate;total_amount
+Consultation;2026-09-16;850;Old consult (Dr. Dr PUNYA SUVARNA);B-48789;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-16;850;3rx Injection last session on 15/09/2026 (Dr. Dr PUNYA SUVARNA);B-48788;false;Service;47.619047619047706;5;1000.00
+Consultation;2026-09-15;850;New consult (Dr. Dr PUNYA SUVARNA);B-48786;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-15;850;Review + 2rx Upperlip + Chin HR + Mole removal touch up ? last session on 18/08/2026 + Electrolysis (Dr. Dr PUNYA SUVARNA);B-48780;false;Service;180.9523809523812;5;3800.00
+Consultation;2026-09-15;1250;New consult + Soaking + Pairing + Cryotherapy (Dr. Dr. Vindhya Pai  M.B.B.S. MD);B-48779;false;Service;71.42857142857156;5;1500.00
+Consultation;2026-09-15;1250;Old consult (Dr. Dr. Vindhya Pai  M.B.B.S. MD);B-48776;true;Service;59.52380952380963;5;1250.00
+Consultation;2026-09-15;1250;New consult (Dr. Dr. Vindhya Pai  M.B.B.S. MD);B-48763;true;Service;59.52380952380963;5;1250.00
+Consultation;2026-09-15;1250;New consult + Soaking + Pairing + Cryotherapy (Dr. Dr. Vindhya Pai  M.B.B.S. MD);B-48762;true;Service;59.52380952380963;5;1250.00
+Consultation;2026-09-15;850;Old Consult (Dr. Dr PUNYA SUVARNA);B-48755;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-15;800;Old Consult (Dr. Dr. P. Suraksha);B-48754;false;Service;23.809523809523853;5;500.00
+Consultation;2026-09-15;850;5rx Glow Treatment last session on 17/7/2026 (Dr. Dr PUNYA SUVARNA);B-48753;false;Service;281;5;5901.00
+Consultation;2026-09-15;800;New consult + RF + Excision (Dr. Dr. P. Suraksha);B-48752;false;Service;142.85714285714312;5;3000.00
+Consultation;2026-09-15;1250;1RxBikini +Brazilian Hair Reduction (Dr. Dr. Vindhya Pai  M.B.B.S. MD);B-48751;false;Service;247.6190476190477;5;5200.00
+Consultation;2026-09-15;850;Maintainence face HR last session oN 23/06/2026 (Dr. Dr PUNYA SUVARNA);B-48750;false;Service;140;5;2940.00
+Consultation;2026-09-15;850;Review (Dr. Dr PUNYA SUVARNA);B-48749;false;Service;23.809523809523853;5;500.00
+Consultation;2026-09-15;800;New Consult (Dr. Dr. P. Suraksha);B-48748;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-15;850;New Consult (Dr. Dr PUNYA SUVARNA);B-48747;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-15;800;New consult + RF + Excision (Dr. Dr. P. Suraksha);B-48746;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-15;800;New consult (Dr. Dr. P. Suraksha);B-48744;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-15;850;Review + 2rx Injection last session on 14/09/2026 (Dr. Dr PUNYA SUVARNA);B-48743;false;Service;47.619047619047706;5;1000.00
+Consultation;2026-09-15;850;3rx Laser toning C last session on 6/8/2026 (Dr. Dr PUNYA SUVARNA);B-48742;false;Service;369.04761904761926;5;7750.00
+Consultation;2026-09-15;1250;3rx upperlip+ chin HR last session on 6/8/2026 (Dr. Dr. Vindhya Pai  M.B.B.S. MD);B-48741;false;Service;142.85714285714312;5;3000.00
+Consultation;2026-09-15;800;New consult (Dr. Dr. P. Suraksha);B-48740;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-14;800;New consult+Injection (Dr. Dr Ashwini Ashokan);B-48739;false;Service;85.71428571428578;5;1800.00
+Consultation;2026-09-14;850;New consult+ILS Injection (Dr. Dr PUNYA SUVARNA);B-48738;false;Service;47.619047619047706;5;1000.00
+Consultation;2026-09-14;850;Review+5rx Chin HR last session on 16/7/2026 (Dr. Dr PUNYA SUVARNA);B-48737;false;Service;95.23809523809541;5;2000.00
+Consultation;2026-09-14;850;New consult+ILS Injection (Dr. Dr PUNYA SUVARNA);B-48736;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-14;1250;3Rx Laser Toning B Maintainence last session on 1/07/2026 (Dr. Dr. Vindhya Pai  M.B.B.S. MD);B-48735;false;Service;226.19047619047615;5;4750.00
+Consultation;2026-09-14;800;Old consult (Dr. Dr Ashwini Ashokan);B-48734;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-14;850;New consult (Dr. Dr PUNYA SUVARNA);B-48733;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-14;850;Old Consult (Dr. Dr PUNYA SUVARNA);B-48732;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-14;850;1rx Hydra Peel (Dr. Dr PUNYA SUVARNA);B-48731;false;Service;273.80952380952385;5;5750.00
+Consultation;2026-09-14;800;New consult + RF (Dr. Dr Ashwini Ashokan);B-48730;false;Service;180.9523809523812;5;3800.00
+Consultation;2026-09-14;850;Review (Dr. Dr PUNYA SUVARNA);B-48729;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-14;800;New Consult (Dr. Dr. P. Suraksha);B-48728;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-14;850;1Rx Underarms Hair Reduction Maintainance last session on 28/5/2026 (Dr. Dr PUNYA SUVARNA);B-48727;false;Service;103.33333333333348;5;2170.00
+Consultation;2026-09-14;850;New Consult (After a month Review  - Rs 850 charges - Abroad) (Dr. Dr PUNYA SUVARNA);B-48726;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-14;800;New Consult (Dr. Dr. P. Suraksha);B-48725;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-14;850;Review (Dr. Dr PUNYA SUVARNA);B-48724;false;Service;23.809523809523853;5;500.00
+Consultation;2026-09-14;850;5rx Bikini Hair reduction last session on 29/6/2026 (Dr. Dr PUNYA SUVARNA);B-48723;false;Service;209.5238095238101;5;4400.00
+Consultation;2026-09-14;850;Review (Dr. Dr PUNYA SUVARNA);B-48721;false;Service;23.809523809523853;5;500.00
+Consultation;2026-09-14;850;New Consult (Dr. Dr PUNYA SUVARNA);B-48720;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-14;800;New Consult (Dr. Dr. P. Suraksha);B-48719;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-14;800;New consult + RF (Dr. Dr. P. Suraksha);B-48718;false;Service;180.9523809523812;5;3800.00
+Consultation;2026-09-14;800;New consult (Dr. Dr. P. Suraksha);B-48717;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-14;800;New consult (Dr. Dr. P. Suraksha);B-48716;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-14;1250;6rx Upperlip HR Last Session on 25/4/2026 (Dr. Dr. Vindhya Pai  M.B.B.S. MD);B-48715;false;Service;47.619047619047706;5;1000.00
+Consultation;2026-09-14;800;New consult (Dr. Dr. P. Suraksha);B-48714;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-14;800;New Consult (Dr. Dr. P. Suraksha);B-48712;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-14;800;New Consult + 1rx Scalp Injection (Dr. Dr. P. Suraksha);B-48710;false;Service;85.71428571428578;5;1800.00
+Consultation;2026-09-14;800;New Consult + 1rx Laser toning A (Dr. Dr. P. Suraksha);B-48709;false;Service;180.9523809523812;5;3800.00
+Consultation;2026-09-14;850;2rx Underarms HR + Pigmentation last session on 7/8/2026 (Dr. Dr PUNYA SUVARNA);B-48708;false;Service;219.04761904761926;5;4600.00
+Consultation;2026-09-12;850;Old consult (Dr. Dr PUNYA SUVARNA);B-48706;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-12;850;Old Consult+6rx Upperlip + Chin HR last session on 15/10/2025 (Dr. Dr PUNYA SUVARNA);B-48705;false;Service;142.85714285714312;5;3000.00
+Consultation;2026-09-12;850;Old consult (Dr. Dr PUNYA SUVARNA);B-48704;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-12;800;New Consult (Dr. Dr Ashwini Ashokan);B-48703;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-12;1250;1Rx Excimer (Dr. Dr. Vindhya Pai  M.B.B.S. MD);B-48702;false;Service;47.619047619047706;5;1000.00
+Consultation;2026-09-12;850;New Consult (Dr. Dr PUNYA SUVARNA);B-48701;true;Service;40.47619047619048;5;850.00
+Consultation;2026-09-12;800;Old consult (Dr. Dr Ashwini Ashokan);B-48700;true;Service;38.095238095238074;5;800.00
+Consultation;2026-09-12;800;Review (Dr. Dr Ashwini Ashokan);B-48699;false;Service;23.809523809523853;5;500.00

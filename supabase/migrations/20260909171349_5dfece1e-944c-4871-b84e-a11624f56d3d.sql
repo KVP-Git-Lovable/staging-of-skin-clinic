@@ -1,0 +1,2 @@
+ALTER TABLE public.dashboard_components
+  ADD COLUMN IF NOT EXISTS config jsonb NOT NULL DEFAULT '{}'::jsonb;

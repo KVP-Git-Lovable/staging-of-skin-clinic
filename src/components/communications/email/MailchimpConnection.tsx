@@ -6,13 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/hooks/use-toast";
-import { ArrowLeft, CheckCircle2, ExternalLink, Link2, Loader2, LogOut, Plus, RefreshCw, ShieldAlert, Webhook, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Eye, EyeOff, ExternalLink, KeyRound, Link2, Loader2, LogOut, Plus, RefreshCw, ShieldAlert, Trash2, Webhook, XCircle } from "lucide-react";
 import { format } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -28,9 +29,12 @@ import {
 interface Props { onBack: () => void }
 
 /**
- * Connections view of the Email Marketing tab: health of the Mailchimp account behind
- * MAILCHIMP_API_KEY, its verified sending domains, audiences (one is the default the
- * campaigns use), consent confirmation and the unsubscribe webhook.
+ * Connections view of the Email Marketing tab.
+ *
+ * Configuration holds the clinic's own Mailchimp API key. The key is validated against
+ * Mailchimp before it is stored, kept encrypted in comms_mailchimp_connection, and never
+ * sent back here - once saved, all this screen ever sees is the last four characters and
+ * the data centre. Settings covers sending domains, audiences, consent and the webhook.
  */
 export function MailchimpConnection({ onBack }: Props) {
   const qc = useQueryClient();
@@ -38,6 +42,9 @@ export function MailchimpConnection({ onBack }: Props) {
   const [codes, setCodes] = useState<Record<string, string>>({});
   const [createOpen, setCreateOpen] = useState(false);
   const [newList, setNewList] = useState({ name: "", from_name: "", from_email: "" });
+  const [apiKey, setApiKey] = useState("");
+  const [revealKey, setRevealKey] = useState(false);
+  const [replacing, setReplacing] = useState(false);
 
   const status = useQuery({
     queryKey: ["mailchimp-status"],
@@ -53,6 +60,7 @@ export function MailchimpConnection({ onBack }: Props) {
   const healthy = status.data?.ok === true && connectionHealthy(conn);
   const revoked = conn?.status === "revoked";
   const apiKeyAvailable = !!status.data?.api_key_available;
+  const keySaved = apiKeyAvailable;
 
   const disconnect = useMutation({
     mutationFn: () => mailchimpApi("disconnect"),
@@ -77,6 +85,28 @@ export function MailchimpConnection({ onBack }: Props) {
     qc.invalidateQueries({ queryKey: ["mailchimp-lists"] });
   }
   const onErr = (title: string) => (e: Error) => toast({ title, description: e.message, variant: "destructive" });
+
+  const saveKey = useMutation({
+    mutationFn: () => mailchimpApi<{ switched?: boolean }>("save_api_key", { api_key: apiKey.trim() }),
+    onSuccess: (r) => {
+      // Drop the typed key as soon as it is stored, so it does not sit in component state.
+      setApiKey("");
+      setRevealKey(false);
+      setReplacing(false);
+      toast({
+        title: "Mailchimp connected",
+        description: r?.switched ? "A different Mailchimp account - audience, webhook and consent have been reset." : undefined,
+      });
+      refreshAll();
+    },
+    onError: onErr("Could not save the API key"),
+  });
+
+  const clearKey = useMutation({
+    mutationFn: () => mailchimpApi("clear_api_key"),
+    onSuccess: () => { setApiKey(""); setRevealKey(false); setReplacing(false); toast({ title: "API key removed" }); refreshAll(); },
+    onError: onErr("Could not remove the API key"),
+  });
 
   const addDomain = useMutation({
     mutationFn: () => mailchimpApi("domain_add", { verification_email: verifyEmail }),
@@ -118,13 +148,98 @@ export function MailchimpConnection({ onBack }: Props) {
         <div>
           <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft className="h-4 w-4 mr-1" />Back to campaigns</Button>
           <h2 className="text-xl font-semibold mt-2">Connections</h2>
-          <p className="text-sm text-muted-foreground">Mailchimp account used by Email Marketing. The API key is kept as a server secret and never shown here.</p>
+          <p className="text-sm text-muted-foreground">Mailchimp account used by Email Marketing. Your API key is stored encrypted and is never shown again once saved.</p>
         </div>
         <Button variant="outline" size="sm" onClick={refreshAll} disabled={status.isFetching}>
           {status.isFetching ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}Recheck
         </Button>
       </div>
 
+      <Tabs defaultValue={keySaved ? "settings" : "configuration"} className="space-y-6">
+        <TabsList>
+          <TabsTrigger value="configuration">Configuration</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="configuration" className="space-y-6 mt-0">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <KeyRound className="h-4 w-4" />Mailchimp API key
+              </CardTitle>
+              <CardDescription>
+                In Mailchimp: <span className="font-medium">Account &amp; billing &rarr; Extras &rarr; API keys</span>. A key looks
+                like <code className="text-xs">xxxxxxxxxxxxxxxx-us21</code>. It is checked against Mailchimp before it is saved,
+                then stored encrypted &mdash; we never show it again.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {keySaved && !replacing ? (
+                <div className="space-y-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Saved key</Label>
+                    <div className="font-mono text-sm mt-1">
+                      {"\u2022".repeat(16)}{conn?.api_key_last4 ?? ""}{conn?.dc ? `-${conn.dc}` : ""}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={() => { setReplacing(true); setApiKey(""); setRevealKey(false); }}>
+                      Replace key
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
+                      disabled={clearKey.isPending}
+                      onClick={() => { if (confirm("Remove the saved Mailchimp API key? Email Marketing will stop working until a new key is saved.")) clearKey.mutate(); }}
+                    >
+                      {clearKey.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />}
+                      Remove key
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <Label htmlFor="mc-api-key">Enter your Mailchimp API Key</Label>
+                    <div className="flex gap-2 mt-1.5">
+                      <div className="relative flex-1">
+                        <Input
+                          id="mc-api-key"
+                          type={revealKey ? "text" : "password"}
+                          value={apiKey}
+                          onChange={(e) => setApiKey(e.target.value)}
+                          placeholder={"\u2022".repeat(20)}
+                          autoComplete="off"
+                          spellCheck={false}
+                          className="pr-10 font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setRevealKey((v) => !v)}
+                          aria-label={revealKey ? "Hide API key" : "Show API key"}
+                          className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                        >
+                          {revealKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                      <Button onClick={() => saveKey.mutate()} disabled={!apiKey.trim() || saveKey.isPending}>
+                        {saveKey.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}Save
+                      </Button>
+                      {replacing && (
+                        <Button variant="ghost" onClick={() => { setReplacing(false); setApiKey(""); setRevealKey(false); }}>Cancel</Button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Only an admin or manager can save this. A key that Mailchimp rejects is not stored.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="settings" className="space-y-6 mt-0">
       {/* Account */}
       <Card>
         <CardHeader className="pb-3">
@@ -133,16 +248,16 @@ export function MailchimpConnection({ onBack }: Props) {
             {status.isLoading ? null : healthy
               ? <Badge className="bg-emerald-600 hover:bg-emerald-600"><CheckCircle2 className="h-3 w-3 mr-1" />Connected</Badge>
               : <Badge variant="destructive"><XCircle className="h-3 w-3 mr-1" />Not connected</Badge>}
-            {!status.isLoading && healthy && <Badge variant="outline">API key secret</Badge>}
+            {!status.isLoading && healthy && <Badge variant="outline">API key</Badge>}
           </CardTitle>
           <CardDescription>
-            The Mailchimp account is set by the MAILCHIMP_API_KEY server secret. Change the secret to switch accounts.
+            The account is whichever one your saved API key belongs to. Save a different key in Configuration to switch accounts.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {healthy && (
             <div className="flex flex-wrap gap-2">
-              <Button variant="ghost" onClick={() => { if (confirm("Forget the saved audience, webhook and consent confirmation? The API key secret stays in place.")) disconnect.mutate(); }} disabled={disconnect.isPending}>
+              <Button variant="ghost" onClick={() => { if (confirm("Forget the saved audience, webhook and consent confirmation? The API key stays in place.")) disconnect.mutate(); }} disabled={disconnect.isPending}>
                 <LogOut className="h-4 w-4 mr-2" />Reset saved settings
               </Button>
             </div>
@@ -157,8 +272,8 @@ export function MailchimpConnection({ onBack }: Props) {
                 <div className="text-muted-foreground">{status.data?.error || conn?.last_error || "Unknown error"}</div>
                 <div className="text-muted-foreground mt-1">
                   {apiKeyAvailable
-                    ? "The MAILCHIMP_API_KEY secret did not work. Check that it is a valid, active key (format xxxxxxxx-us5)."
-                    : "Ask an admin to add the MAILCHIMP_API_KEY secret to this project, then press Recheck."}
+                    ? "The saved API key stopped working - it may have been deleted or rotated in Mailchimp. Save a new one in Configuration."
+                    : "No API key saved yet. Open the Configuration tab and enter your Mailchimp API key."}
                 </div>
               </div>
             </div>
@@ -321,6 +436,8 @@ export function MailchimpConnection({ onBack }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

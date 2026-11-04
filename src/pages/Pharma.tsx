@@ -1,9 +1,12 @@
 import { useState, useEffect, useMemo } from "react";
+import { DateInput } from "@/components/shared/DateInput";
+import { displayDate } from "@/lib/dateInput";
+import { numVal } from "@/lib/numberInput";
 import { format } from "date-fns";
 import { VendorCombobox } from "@/components/shared/VendorCombobox";
 import SearchableSelect from "@/components/shared/SearchableSelect";
 import { PatientCombobox } from "@/components/patients/PatientCombobox";
-import { Plus, Search, Package, ShoppingCart, AlertTriangle, Settings, Trash2, Cloud } from "lucide-react";
+import { Plus, Search, Package, ShoppingCart, AlertTriangle, Settings, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +27,6 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
-import { FunctionsHttpError } from "@supabase/supabase-js";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ProductDetailSheet, InventoryDetailSheet, BillDetailSheet } from "@/components/pharma/PharmaDetailSheet";
@@ -36,23 +38,11 @@ import { getActiveBatchPrice } from "@/lib/productPricing";
 import { UnitConversionsEditor, syncProductUnits, type ConversionRow } from "@/components/pharma/UnitConversionsEditor";
 import { usePharmaProductUnits } from "@/hooks/usePharmaProductUnits";
 import { getUomOptions, getSaleUom, getPurchaseUom, findUom, toUomQty, toBaseQty, fmtQty, getBaseUnit } from "@/lib/uom";
+import { PHARMA_LOOKUP_KEY } from "@/lib/medicineDefaults";
 
 // ─── Form Defaults ────────────────────────────────
 const emptyProduct = { name: "", generic_name: "", category: "General", manufacturer: "", base_unit: "", purchase_unit: "", sale_unit: "", reorder_level: 10, vendor_ids: [] as string[], hsn_code: "", igst_percent: 0, cgst_percent: 0, gst_percent: 0, default_frequency: "", default_duration: "", default_instructions: "" };
 const emptyStock = { product_id: "", batch_number: "", expiry_date: "", quantity: 0, purchase_unit: "", purchase_price: 0, mrp: 0, selling_price: 0, supplier: "", invoice_number: "", hsn_code: "", igst_percent: 0, cgst_percent: 0, gst_percent: 0 };
-
-async function getFunctionErrorMessage(error: unknown) {
-  if (error instanceof FunctionsHttpError) {
-    const body = await error.context.text();
-    try {
-      const parsed = JSON.parse(body);
-      return parsed.error || parsed.details || body || error.message;
-    } catch {
-      return body || error.message;
-    }
-  }
-  return error instanceof Error ? error.message : "Salesforce product sync failed";
-}
 
 interface BillItemInput {
   product_id: string;
@@ -308,6 +298,11 @@ const Pharma = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["pharma-products"] });
       queryClient.invalidateQueries({ queryKey: ["pharma-product-units"] });
+      // The prescribing screens read the medicine list under their own key,
+      // and nothing used to refresh it - so a medicine added here did not
+      // appear in a procedure until the whole page was reloaded. That is why
+      // the clinic reported medicines "not coming" in a prescription.
+      queryClient.invalidateQueries({ queryKey: PHARMA_LOOKUP_KEY });
       toast.success("Product added");
       setProductForm({ ...emptyProduct });
       setProductUnitRows([]);
@@ -359,24 +354,6 @@ const Pharma = () => {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const syncSalesforceProducts = useMutation({
-    mutationFn: async () => {
-      const { data, error } = await supabase.functions.invoke("sync-salesforce-products");
-      if (error) throw new Error(await getFunctionErrorMessage(error));
-      return data;
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["pharma-products"] });
-      const stats = `${data.total ?? 0} checked, ${data.imported ?? 0} imported, ${data.updated ?? 0} updated`;
-      if (data.success === false) {
-        toast.warning(`Sync completed with issues: ${stats}. ${data.errors?.[0] || "Review function logs for details."}`);
-        return;
-      }
-      const removed = data.removedLegacy ? `, ${data.removedLegacy} old incorrect imports removed` : "";
-      toast.success(`Sync complete: ${stats}${removed}`);
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
 
   const deleteAllProducts = useMutation({
     mutationFn: async () => {
@@ -402,6 +379,7 @@ const Pharma = () => {
       queryClient.invalidateQueries({ queryKey: ["pharma-products"] });
       queryClient.invalidateQueries({ queryKey: ["pharma-inventory"] });
       queryClient.invalidateQueries({ queryKey: ["pharma-product-units"] });
+      queryClient.invalidateQueries({ queryKey: PHARMA_LOOKUP_KEY });
       toast.success("All products deleted");
     },
     onError: (e: Error) => toast.error(e.message),
@@ -636,15 +614,6 @@ const Pharma = () => {
           <p className="page-subtitle">Products, inventory & billing</p>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            className="gap-2"
-            onClick={() => syncSalesforceProducts.mutate()}
-            disabled={syncSalesforceProducts.isPending}
-          >
-            <Cloud className="h-4 w-4" />
-            {syncSalesforceProducts.isPending ? "Syncing..." : "Sync from Salesforce"}
-          </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="outline" className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive">
@@ -716,7 +685,7 @@ const Pharma = () => {
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-3">
-                  <div><Label>Reorder Level</Label><Input type="number" className="mt-1" value={productForm.reorder_level} onChange={(e) => setProductForm({ ...productForm, reorder_level: parseInt(e.target.value) || 10 })} /></div>
+                  <div><Label>Reorder Level</Label><Input type="number" className="mt-1" value={numVal(productForm.reorder_level)} onChange={(e) => setProductForm({ ...productForm, reorder_level: parseInt(e.target.value) || 10 })} /></div>
                 </div>
                 <UnitConversionsEditor
                   value={productUnitRows}
@@ -769,11 +738,11 @@ const Pharma = () => {
                       options={hsnOptionsFor(productForm.hsn_code)}
                     />
                   </div>
-                  <div><Label>GST % (total)</Label><Input type="number" readOnly className="mt-1 bg-muted/50" value={(Number(productForm.igst_percent) || 0) + (Number(productForm.cgst_percent) || 0)} /></div>
+                  <div><Label>GST % (total)</Label><Input type="number" readOnly className="mt-1 bg-muted/50" value={numVal((Number(productForm.igst_percent) || 0) + (Number(productForm.cgst_percent) || 0))} /></div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div><Label>IGST %</Label><Input type="number" className="mt-1" value={productForm.igst_percent} onChange={(e) => setProductForm({ ...productForm, igst_percent: parseFloat(e.target.value) || 0 })} /></div>
-                  <div><Label>CGST %</Label><Input type="number" className="mt-1" value={productForm.cgst_percent} onChange={(e) => setProductForm({ ...productForm, cgst_percent: parseFloat(e.target.value) || 0 })} /></div>
+                  <div><Label>IGST %</Label><Input type="number" className="mt-1" value={numVal(productForm.igst_percent)} onChange={(e) => setProductForm({ ...productForm, igst_percent: parseFloat(e.target.value) || 0 })} /></div>
+                  <div><Label>CGST %</Label><Input type="number" className="mt-1" value={numVal(productForm.cgst_percent)} onChange={(e) => setProductForm({ ...productForm, cgst_percent: parseFloat(e.target.value) || 0 })} /></div>
                 </div>
                 <p className="text-[11px] text-muted-foreground -mt-1">GST % is the total of IGST % + CGST %.</p>
                 <div className="rounded-md border bg-muted/30 p-3 space-y-3">
@@ -838,7 +807,7 @@ const Pharma = () => {
                 })()}
                 <div className="grid grid-cols-2 gap-3">
                   <div><Label>Batch No. *</Label><Input className="mt-1" value={stockForm.batch_number} onChange={(e) => setStockForm({ ...stockForm, batch_number: e.target.value })} /></div>
-                  <div><Label>Expiry Date *</Label><Input type="date" className="mt-1" value={stockForm.expiry_date} onChange={(e) => setStockForm({ ...stockForm, expiry_date: e.target.value })} /></div>
+                  <div><Label>Expiry Date *</Label><DateInput className="mt-1" value={stockForm.expiry_date} onChange={(isoDate) => setStockForm({ ...stockForm, expiry_date: isoDate })} /></div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -855,12 +824,12 @@ const Pharma = () => {
                   </div>
                   <div>
                     <Label>GST % (total)</Label>
-                    <Input type="number" readOnly className="mt-1 bg-muted/50" value={(Number(stockForm.igst_percent) || 0) + (Number(stockForm.cgst_percent) || 0)} />
+                    <Input type="number" readOnly className="mt-1 bg-muted/50" value={numVal((Number(stockForm.igst_percent) || 0) + (Number(stockForm.cgst_percent) || 0))} />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div><Label>IGST %</Label><Input type="number" className="mt-1" value={stockForm.igst_percent} onChange={(e) => setStockForm({ ...stockForm, igst_percent: parseFloat(e.target.value) || 0 })} /></div>
-                  <div><Label>CGST %</Label><Input type="number" className="mt-1" value={stockForm.cgst_percent} onChange={(e) => setStockForm({ ...stockForm, cgst_percent: parseFloat(e.target.value) || 0 })} /></div>
+                  <div><Label>IGST %</Label><Input type="number" className="mt-1" value={numVal(stockForm.igst_percent)} onChange={(e) => setStockForm({ ...stockForm, igst_percent: parseFloat(e.target.value) || 0 })} /></div>
+                  <div><Label>CGST %</Label><Input type="number" className="mt-1" value={numVal(stockForm.cgst_percent)} onChange={(e) => setStockForm({ ...stockForm, cgst_percent: parseFloat(e.target.value) || 0 })} /></div>
                 </div>
                 <p className="text-[11px] text-muted-foreground -mt-1">HSN, IGST & CGST default from the product master; edit here to apply batch-specific tax at billing. GST % = IGST + CGST.</p>
                 {(() => {
@@ -907,22 +876,22 @@ const Pharma = () => {
                         </div>
                       )}
                       <div className="grid grid-cols-3 gap-3">
-                        <div><Label>Quantity{buyName ? ` (${buyName})` : ""} *</Label><Input type="number" className="mt-1" value={stockForm.quantity} onChange={(e) => setStockForm({ ...stockForm, quantity: parseFloat(e.target.value) || 0 })} /></div>
+                        <div><Label>Quantity{buyName ? ` (${buyName})` : ""} *</Label><Input type="number" className="mt-1" value={numVal(stockForm.quantity)} onChange={(e) => setStockForm({ ...stockForm, quantity: parseFloat(e.target.value) || 0 })} /></div>
                         <div>
                           <Label>Purchase Price{perUom}</Label>
-                          <Input type="number" className="mt-1" value={stockForm.purchase_price} onChange={(e) => setStockForm({ ...stockForm, purchase_price: parseFloat(e.target.value) || 0 })} />
+                          <Input type="number" className="mt-1" value={numVal(stockForm.purchase_price)} onChange={(e) => setStockForm({ ...stockForm, purchase_price: parseFloat(e.target.value) || 0 })} />
                           {saleHint(stockForm.purchase_price) && <p className="text-[11px] text-muted-foreground mt-1">{saleHint(stockForm.purchase_price)}</p>}
                           {stockForm.mrp > 0 && stockForm.purchase_price > stockForm.mrp && <p className="text-[11px] text-destructive mt-1">Cannot exceed MRP</p>}
                         </div>
                         <div>
                           <Label>MRP{perUom} *</Label>
-                          <Input type="number" className="mt-1" value={stockForm.mrp} onChange={(e) => setStockForm({ ...stockForm, mrp: parseFloat(e.target.value) || 0 })} />
+                          <Input type="number" className="mt-1" value={numVal(stockForm.mrp)} onChange={(e) => setStockForm({ ...stockForm, mrp: parseFloat(e.target.value) || 0 })} />
                           {saleHint(stockForm.mrp) && <p className="text-[11px] text-muted-foreground mt-1">{saleHint(stockForm.mrp)}</p>}
                         </div>
                       </div>
                       <div>
                         <Label>Selling Price{perUom} <span className="text-muted-foreground text-xs">(optional, defaults to MRP)</span></Label>
-                        <Input type="number" className="mt-1" value={stockForm.selling_price} onChange={(e) => setStockForm({ ...stockForm, selling_price: parseFloat(e.target.value) || 0 })} placeholder={stockForm.mrp ? `${stockForm.mrp}` : ""} />
+                        <Input type="number" className="mt-1" value={numVal(stockForm.selling_price)} onChange={(e) => setStockForm({ ...stockForm, selling_price: parseFloat(e.target.value) || 0 })} placeholder={stockForm.mrp ? `${stockForm.mrp}` : ""} />
                         {saleHint(stockForm.selling_price || stockForm.mrp) && <p className="text-[11px] text-muted-foreground mt-1">{saleHint(stockForm.selling_price || stockForm.mrp)}</p>}
                         {stockForm.mrp > 0 && stockForm.selling_price > stockForm.mrp && <p className="text-[11px] text-destructive mt-1">Cannot exceed MRP</p>}
                       </div>
@@ -993,7 +962,7 @@ const Pharma = () => {
                                 const su = getSaleUom(prod, unitsByProduct[i.product_id]);
                                 return (
                                   <SelectItem key={i.id} value={i.id}>
-                                    {i.pharma_products?.name} — Batch: {i.batch_number} ({fmtQty(toUomQty(Number(i.quantity), su.factor))} {su.name}, exp {new Date(i.expiry_date).toLocaleDateString()})
+                                    {i.pharma_products?.name} — Batch: {i.batch_number} ({fmtQty(toUomQty(Number(i.quantity), su.factor))} {su.name}, exp {displayDate(i.expiry_date)})
                                   </SelectItem>
                                 );
                               })}
@@ -1014,8 +983,8 @@ const Pharma = () => {
                               );
                             })()}
                           </div>
-                          <div><Label className="text-xs">Qty</Label><Input type="number" className="mt-1" value={item.quantity} onChange={(e) => updateBillItem(idx, "quantity", parseFloat(e.target.value) || 0)} max={item.available} /></div>
-                          <div><Label className="text-xs">Price (₹)</Label><Input type="number" className="mt-1" value={item.unit_price} onChange={(e) => updateBillItem(idx, "unit_price", parseFloat(e.target.value) || 0)} /></div>
+                          <div><Label className="text-xs">Qty</Label><Input type="number" className="mt-1" value={numVal(item.quantity)} onChange={(e) => updateBillItem(idx, "quantity", parseFloat(e.target.value) || 0)} max={item.available} /></div>
+                          <div><Label className="text-xs">Price (₹)</Label><Input type="number" className="mt-1" value={numVal(item.unit_price)} onChange={(e) => updateBillItem(idx, "unit_price", parseFloat(e.target.value) || 0)} /></div>
                         </div>
                       </div>
                       <div className="flex justify-between text-xs">
@@ -1046,7 +1015,7 @@ const Pharma = () => {
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span>Discount (₹)</span>
-                    <Input type="number" className="w-24 h-8 text-right" value={billDiscount} onChange={(e) => setBillDiscount(parseFloat(e.target.value) || 0)} />
+                    <Input type="number" className="w-24 h-8 text-right" value={numVal(billDiscount)} onChange={(e) => setBillDiscount(parseFloat(e.target.value) || 0)} />
                   </div>
                   {(() => {
                     const subtotal = billItems.reduce((s, i) => s + i.quantity * i.unit_price, 0);
@@ -1251,7 +1220,7 @@ const Pharma = () => {
                       <TableCell>₹{priceIn(Number(i.purchase_price) || 0).toFixed(2)}<div className="text-[11px] text-muted-foreground">/{viewUom.name}</div></TableCell>
                       <TableCell>₹{priceIn(Number(i.mrp) || 0).toFixed(2)}</TableCell>
                       <TableCell>₹{priceIn(Number(i.selling_price || i.mrp) || 0).toFixed(2)}</TableCell>
-                      <TableCell>{exp.toLocaleDateString()}</TableCell>
+                      <TableCell>{displayDate(exp)}</TableCell>
                       <TableCell className="text-muted-foreground">{(() => {
                         if (!i.supplier) return "—";
                         const vendor = vendors.find((v: any) => v.id === i.supplier);
@@ -1291,7 +1260,7 @@ const Pharma = () => {
                 ) : bills.map((b: any) => (
                   <TableRow key={b.id} className="cursor-pointer hover:bg-muted/40 transition-colors" onClick={() => setSelectedBillId(b.id)}>
                     <TableCell className="font-medium">{b.bill_number}</TableCell>
-                    <TableCell>{new Date(b.created_at).toLocaleDateString()}</TableCell>
+                    <TableCell>{displayDate(b.created_at)}</TableCell>
                     <TableCell>{b.patient_name || "—"}</TableCell>
                     <TableCell>₹{Number(b.total_amount).toFixed(2)}</TableCell>
                     <TableCell>₹{Number(b.discount).toFixed(2)}</TableCell>
@@ -1423,7 +1392,7 @@ const Pharma = () => {
                   {settingsForm.hide_expiring_products && (
                     <div className="mt-3">
                       <Label className="text-xs">Expiry threshold (days)</Label>
-                      <Input type="number" className="mt-1 w-32" value={settingsForm.expiring_threshold_days} onChange={(e) => setSettingsForm({ ...settingsForm, expiring_threshold_days: parseInt(e.target.value) || 90 })} />
+                      <Input type="number" className="mt-1 w-32" value={numVal(settingsForm.expiring_threshold_days)} onChange={(e) => setSettingsForm({ ...settingsForm, expiring_threshold_days: parseInt(e.target.value) || 90 })} />
                     </div>
                   )}
                 </div>

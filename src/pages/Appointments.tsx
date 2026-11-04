@@ -1,8 +1,19 @@
+import { THERAPIST_ROLES, therapistDisplayName, isTherapistRole, type TherapistCandidate } from "@/lib/appointmentTherapist";
+import { StaffCombobox } from "@/components/shared/StaffCombobox";
 import { useStackedTable } from "@/hooks/useStackedTable";
+import { resizeColumn, mergeSavedWidths, type ColumnWidth } from "@/lib/columnWidths";
+import { isPageSortedColumn, sortAppointments } from "@/lib/appointmentSort";
+import { usualDoctorId, type PastVisit } from "@/lib/usualDoctor";
+import { appointmentDeleteNote } from "@/lib/appointmentDeleteNote";
+import { displayDate } from "@/lib/dateInput";
+import { ColumnResizeHandle } from "@/components/shared/ColumnResizeHandle";
+import { DateInput } from "@/components/shared/DateInput";
+import { CalendarPopover } from "@/components/shared/CalendarPopover";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import { useState, useCallback, useRef, useMemo, useEffect, lazy, Suspense } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useModal } from "@/hooks/useModal";
+import { useUrlPanel } from "@/hooks/useUrlPanel";
+import { shouldOpenNewAppointment } from "@/lib/openNewAppointment";
 import { useModuleListViews } from "@/hooks/useModuleListViews";
 import ViewBar from "@/components/listViews/ViewBar";
 import ViewEditorDialog, { type PickOption } from "@/components/listViews/ViewEditorDialog";
@@ -14,11 +25,37 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { applyFilters as applyListFilters, fieldDefIn, type ListDisplayMode, type ListView } from "@/lib/listViews/engine";
 import { ALL_VIEW_ID, getKanbanConfig, setKanbanConfig } from "@/lib/listViews/standardViews";
 import { APPOINTMENT_VIEW_FIELDS, DEFAULT_APPOINTMENT_VIEW_COLUMNS } from "@/lib/listViews/appointmentFields";
+import { sortForSearch } from "@/lib/appointmentSearchSort";
+import { resolveViewSort } from "@/lib/listViews/viewSort";
+import { viewDatePreset } from "@/lib/viewDatePreset";
+import { activeAppointmentFilters, emptyAppointmentsMessage } from "@/lib/activeAppointmentFilters";
+import { appointmentInvoiceMap } from "@/lib/appointmentInvoiceMap";
+import { billCellState } from "@/lib/billCellState";
+import { billedPatientDays, patientDayKey, type BilledDayRow } from "@/lib/billedPatientDays";
+import { withUnlinkedBills, type VisitRow } from "@/lib/unlinkedVisitBills";
+import { APPOINTMENT_CONFIRMATION_WHATSAPP_ENABLED } from "@/lib/whatsappNotifications";
+import { confirmationSendPlan } from "@/lib/confirmationSend";
+import { patientForBooking } from "@/lib/bookingPatient";
+import { useLiveAppointments } from "@/hooks/useLiveAppointments";
+import { edgeFunctionErrorMessage } from "@/lib/edgeFunctionError";
+import {
+  rescheduleVerdict,
+  rescheduleWarning,
+  type BookableAppointment,
+  type VisitEvidence,
+} from "@/lib/appointmentReschedule";
+import { formatMoneyExact } from "@/lib/currency";
+import {
+  fetchInvoicesByAppointmentIds,
+  invoiceMapByAppointment,
+  type VisitBill,
+  type VisitBilling,
+} from "@/lib/invoicesForAppointments";
+import { assertWrote } from "@/lib/rowAccess";
+import { joinDateTime, hasIncompleteDateTime } from "@/lib/inlineTimeEdit";
 import { ChevronLeft, ChevronRight, Plus, Clock, Repeat, CalendarIcon, List, Phone, Search, Filter, GripVertical, ChevronDown, ChevronUp, ArrowUpDown, ArrowUp, ArrowDown, Pencil, Check as CheckIcon, X, AlertCircle, ClipboardCheck, ClipboardList, Pin, Printer, Trash2 } from "lucide-react";
 import DeleteConfirmDialog from "@/components/shared/DeleteConfirmDialog";
 import { moveToTrash } from "@/lib/trash";
-import { AppointmentDetailSheet } from "@/components/appointments/AppointmentDetailSheet";
-import { SalesforceSyncButton } from "@/components/salesforce/SalesforceSyncButton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,9 +64,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
-import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
-import { format, addWeeks, addMonths, addDays, startOfDay, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, isWithinInterval } from "date-fns";
+import { format, addWeeks, addMonths, addDays, startOfDay, endOfDay, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, isWithinInterval } from "date-fns";
 import { motion } from "framer-motion";
 import {
   Dialog,
@@ -70,13 +106,23 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tansta
 import { toast } from "sonner";
 import { fetchAll } from "@/lib/supabasePaginate";
 import { fetchAppointmentsPage } from "@/lib/appointmentsPage";
+import { investigationText } from "@/lib/investigationText";
+import { PaymentModeCell } from "@/components/appointments/PaymentModeCell";
 import { printAppointments } from "@/lib/printAppointments";
 import { PatientCombobox } from "@/components/patients/PatientCombobox";
+import { VipBadge } from "@/components/shared/VipBadge";
 import { SurveyFill } from "@/components/surveys/SurveyFill";
 import { MicButton } from "@/components/shared/MicButton";
 import { TimePicker12h } from "@/components/shared/TimePicker12h";
-import { ConsultationReasonPicker, buildConsultationReasonsForSave, ConsultationType } from "@/components/appointments/ConsultationReasonPicker";
-import { MANUAL_APPOINTMENT_STATUSES } from "@/lib/appointmentStatus";
+import { MANUAL_APPOINTMENT_STATUSES, appointmentStatusLabel, showsAsBilled, BILLED_BADGE_CLASSES } from "@/lib/appointmentStatus";
+import { QueryTimeoutNotice } from "@/components/shared/QueryTimeoutNotice";
+import {
+  appointmentPatientName,
+  appointmentPatientIsVip,
+  appointmentPatientInitials,
+  appointmentPatientHaystack,
+} from "@/lib/appointmentPatientName";
+
 
 // Lazy: pulls in recharts, kept out of the main bundle until a user actually opens Charts.
 const ViewChartsPanel = lazy(() => import("@/components/listViews/ViewChartsPanel"));
@@ -86,7 +132,7 @@ const daysOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 /** Helpers for splitting/rejoining the "yyyy-MM-ddTHH:mm" values the inline editor keeps. */
 const datePart = (v: string) => (v || "").split("T")[0] || "";
 const timePart = (v: string) => ((v || "").split("T")[1] || "").slice(0, 5);
-const joinDateTime = (d: string, t: string) => (d && t ? `${d}T${t}` : "");
+
 // 15-min slots from 8:00 to 19:45
 const slots: { hour: number; minute: number }[] = [];
 for (let h = 8; h < 20; h++) {
@@ -109,6 +155,16 @@ const visitStatusOptions = ["Follow-up visit", "Recurring visit"];
 
 const PINNED_FILTERS_KEY = "appointments.pinnedFilters";
 
+/**
+ * Most rows the calendar / filtered-view path will pull into memory.
+ *
+ * 10 round trips at a page each. Generous enough that no realistic date range
+ * reaches it - the busiest full month is under 2,000 - and low enough that an
+ * accidental whole-table fetch cannot leave the page spinning through 57 of
+ * them.
+ */
+const APPT_MEMORY_CAP = 10000;
+
 const DATE_PRESETS = [
   { key: "today", label: "Today" },
   { key: "tomorrow", label: "Tomorrow" },
@@ -122,17 +178,54 @@ const DATE_PRESETS = [
   { key: "all", label: "All Dates" },
 ];
 
+/**
+ * Column widths for the list table, as shares of the table width.
+ *
+ * The table must be table-fixed and carry a <colgroup> built from this, because
+ * the rows are windowed by a virtualizer that measures their real heights. Under
+ * table-layout:auto the widths are derived from whichever rows happen to be
+ * rendered, so: window renders rows A -> columns resize -> text wraps onto more
+ * or fewer lines -> measured row heights change -> the virtualizer picks window
+ * B -> columns resize again. That has no fixed point and flickers forever, which
+ * is exactly what it did once a day had enough appointments to virtualize.
+ *
+ * ORDER MATTERS: a colgroup maps to columns positionally, so this list must stay
+ * in the same order as the <th> cells in the table below.
+ */
+const COLUMN_WIDTH_KEY = "appointments.columnWidths";
+
+const APPOINTMENT_COLUMN_WIDTHS: ColumnWidth[] = [
+  // The serial number. Narrow and first, the way a day sheet is read.
+  ["serial", 4],
+  ["patient", 15],
+  ["phone", 11],
+  ["doctor", 12],
+  ["payment_mode", 9],
+  ["bill", 8],
+  // Date and clock time in one cell: "24/09/2026" over "10:15 AM". The clinic
+  // reads them together, and one column leaves the width for Investigation.
+  ["start_time", 11],
+  ["service", 16],
+  ["status", 10],
+  // Who carried out the treatment. Off by default - the day sheet already
+  // runs to nine columns and the clinic has asked for its layout to stop
+  // moving - so it is opted into from "Select Fields to Display", and a
+  // saved view remembers the choice.
+  ["therapist", 12],
+];
+/** The Actions column is always rendered, after every optional one. */
+const ACTIONS_COLUMN_WEIGHT = 7;
+
 const DEFAULT_APPOINTMENT_FIELDS = [
+  "serial",
   "patient",
   "phone",
-  "service",
   "doctor",
-  "start_time",
-  "time",
-  "status",
-  "bill",
-  "visit_status",
   "payment_mode",
+  "bill",
+  "start_time",
+  "service",
+  "status",
 ];
 
 // Status → tailwind classes for calendar cards (background + border + text)
@@ -166,11 +259,21 @@ const Appointments = () => {
   const appointmentsTableRef = useStackedTable<HTMLTableElement>();
   const queryClient = useQueryClient();
   const routerNavigate = useNavigate();
-  const { setOpenModal, openModal } = useModal();
-  // Inside the full-screen overlay the page does not scroll with the window
-  // (the shell is clamped), so window-based virtualization would leave blank
-  // space. Render every row of the page directly in that case.
-  const inOverlay = !!openModal;
+  // The open appointment lives in the address, so Back returns to it.
+  //
+  // This page alone still held the panel in the in-memory useModal context, so
+  // opening one left nothing in history: going to Billing from an appointment
+  // and pressing Back landed on the bare list with the appointment gone. Every
+  // comparable screen - PatientDetail, Billing, Procedures - already uses this
+  // hook, under the same "appointment" parameter.
+  //
+  // "appointmentDetail", not "appointment": Patients and Billing use that one
+  // for their own side sheets, and sharing the name would pop this full-screen
+  // overlay open on top of them. AppointmentDetailModal renders it.
+  const { openId: selectedAppointmentId, open: openAppointment } = useUrlPanel("appointmentDetail");
+  // With a panel open the page does not scroll with the window, so window-based
+  // virtualization would leave blank space. Render every row directly instead.
+  const inOverlay = !!selectedAppointmentId;
   const [searchParams, setSearchParams] = useSearchParams();
   const [showBillingPrompt, setShowBillingPrompt] = useState(false);
   const [lastCreatedPatientId, setLastCreatedPatientId] = useState("");
@@ -188,8 +291,9 @@ const Appointments = () => {
     saveView,
     saveCharts,
     deleteView,
-    pinDefault,
+    pinDefault, unpinDefault,
     updateStandardColumns,
+    viewsReady,
   } = useModuleListViews("appointments", "Appointments", DEFAULT_APPOINTMENT_VIEW_COLUMNS);
   const [viewEditorOpen, setViewEditorOpen] = useState(false);
   const [editingView, setEditingView] = useState<ListView | null>(null);
@@ -204,7 +308,6 @@ const Appointments = () => {
   const [kanban, setKanban] = useState(() => getKanbanConfig("appointments", ALL_VIEW_ID));
   const [currentDate, setCurrentDate] = useState(new Date());
   const [open, setOpen] = useState(false);
-  const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
   const today = new Date();
 
   // Filter state — pinned filters are restored from localStorage
@@ -219,9 +322,20 @@ const Appointments = () => {
   const [filterStatus, setFilterStatus] = useState<string>(pinnedInit.status || "all");
   const [filterVisitStatus, setFilterVisitStatus] = useState<string>(pinnedInit.visit || "all");
   // Date filter: preset key + optional specific date / range
-  const [datePreset, setDatePreset] = useState<string>(pinnedInit.date || "this_week");
-  const [rangePopoverOpen, setRangePopoverOpen] = useState(false);
-  const [rangeCalendarMode, setRangeCalendarMode] = useState<"from" | "to">("from");
+  // Defaults to every date, not this week.
+  //
+  // The quick date chips that used to sit above the list were removed, and
+  // this default outlived them: the list still opened filtered to the current
+  // week, with nothing on screen saying so now the chips were gone. "All
+  // Appointments" then read 221 of 56,438 on a fresh browser and something
+  // else on a browser where someone had changed the preset, for the same user
+  // with the same permissions - which looked like a data or permissions fault
+  // and was neither.
+  //
+  // A named view is free to set its own preset (see fromView.preset below),
+  // and the date filter is still there in the filter panel. What is gone is
+  // the invisible one.
+  const [datePreset, setDatePreset] = useState<string>(pinnedInit.date || "all");
   const [specificDate, setSpecificDate] = useState<Date | undefined>(
     pinnedInit.specificDate ? new Date(pinnedInit.specificDate) : undefined
   );
@@ -246,9 +360,37 @@ const Appointments = () => {
 
   const persistPinned = (next: Record<string, any>) => {
     setPinnedFilters(next);
-    if (Object.keys(next).length) localStorage.setItem(PINNED_FILTERS_KEY, JSON.stringify(next));
-    else localStorage.removeItem(PINNED_FILTERS_KEY);
+    // Stamped with whose they are. The key has no user in it and the front
+    // desk machine is shared, so one person's pinned doctor was restored for
+    // the next - and under a doctor's own-records scope a pin naming somebody
+    // else intersects with what they may see and comes back empty.
+    if (Object.keys(next).length) {
+      localStorage.setItem(PINNED_FILTERS_KEY, JSON.stringify({ ...next, owner: viewsUserId ?? next.owner }));
+    } else {
+      localStorage.removeItem(PINNED_FILTERS_KEY);
+    }
   };
+
+  // Pinned filters left by somebody else are dropped once we know who is
+  // signed in. Done here rather than in the state initialisers above, which
+  // run before the session is known and must stay synchronous - a view that
+  // waits for auth to decide its filters is the race 355ba59 fixed.
+  const pinnedOwnerChecked = useRef(false);
+  useEffect(() => {
+    if (!viewsUserId || pinnedOwnerChecked.current) return;
+    pinnedOwnerChecked.current = true;
+    const owner = pinnedFilters.owner;
+    if (!owner || owner === viewsUserId) return;
+    persistPinned({});
+    setFilterDoctors(new Set());
+    setFilterStatus("all");
+    setFilterVisitStatus("all");
+    setDatePreset("all");
+    setSpecificDate(undefined);
+    setRangeFrom(undefined);
+    setRangeTo(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewsUserId]);
 
   const togglePin = (key: string, value: any) => {
     const next = { ...pinnedFilters };
@@ -283,25 +425,137 @@ const Appointments = () => {
     );
   };
 
-  // Sort state for table view
-  const [sortColumn, setSortColumn] = useState<string>("start_time");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  // Sort state for table view. The day reads morning to evening.
+  const DEFAULT_SORT = { column: "start_time", direction: "asc" } as const;
+  const [sortColumn, setSortColumn] = useState<string>(DEFAULT_SORT.column);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">(DEFAULT_SORT.direction);
+  /**
+   * Whether the order on screen is one somebody asked for.
+   *
+   * A header click says yes; a view carrying a real sort says yes; everything
+   * else is just the default nobody chose. sortForSearch needs to know,
+   * because while a search is running it replaces the default - and must not
+   * replace a doctor's own choice (see appointmentSearchSort.ts).
+   */
+  const [sortChosen, setSortChosen] = useState(false);
 
-  // Apply a custom saved view's sorting when one is selected. The standard
-  // "All"/"Recently Viewed" views default sort_field to "created_at" -
-  // ignored here so the table's default order (start_time/asc) is unchanged
-  // when no custom view is active.
+  // Apply a saved view's sorting when one is selected - but only when it names
+  // a column this list actually sorts on.
+  //
+  // list_views.sort_by defaults to 'created_at' and sort_direction to 'desc',
+  // and the View editor opens pre-set to the same, so every appointment view
+  // was stored that way without anyone choosing it. No list offers created_at
+  // as a column, yet it was still applied: it fell through to start_time and
+  // dragged the stored "desc" along, putting the last patient of the day on
+  // top. And because the active view id is remembered across navigation while
+  // the sort is not, leaving the module and coming back re-imposed it every
+  // time - which is what staff saw when a manual sort would not stick.
+  //
+  // resolveViewSort keeps a sort someone really did pick and drops one they
+  // did not, falling back to the default above.
   useEffect(() => {
     if (activeView && !activeView.is_standard) {
-      setSortColumn(activeView.sort_field || "start_time");
-      setSortDirection(activeView.sort_dir || "asc");
+      const resolved = resolveViewSort(
+        activeView.sort_field,
+        activeView.sort_dir,
+        APPOINTMENT_VIEW_FIELDS,
+        DEFAULT_SORT,
+      );
+      setSortColumn(resolved.column);
+      setSortDirection(resolved.direction);
+      // resolveViewSort hands back DEFAULT_SORT when the view named nothing
+      // anyone picked - which is exactly "not chosen".
+      setSortChosen(
+        resolved.column !== DEFAULT_SORT.column || resolved.direction !== DEFAULT_SORT.direction,
+      );
+    } else {
+      // A standard view (All Appointments, Recently Viewed) carries no sort of
+      // its own, so switching to one is back to the default.
+      setSortChosen(false);
     }
   }, [activeView?.id]);
 
+  /**
+   * The order to actually use, read by every consumer below.
+   *
+   * Computed once rather than applied at the query on purpose: if the header
+   * arrow kept showing the raw state while the rows came back newest-first,
+   * the first click on Date & Time would set the state to what was already on
+   * screen and appear to do nothing. One value keeps the arrow, the rows and
+   * the next click agreeing.
+   *
+   * debouncedSearchQuery, not searchQuery, so the order turns over with the
+   * rows rather than a third of a second ahead of them.
+   */
+  const effectiveSort = useMemo(
+    () => sortForSearch({ column: sortColumn, direction: sortDirection }, debouncedSearchQuery, sortChosen),
+    [sortColumn, sortDirection, debouncedSearchQuery, sortChosen],
+  );
+
+  // Picking a view also moves the quick-date chips to whatever date that view
+  // filters on, so the two date filters stop disagreeing. The chips decide what
+  // is FETCHED; a view's conditions only narrow what came back, so a view with a
+  // wider date than the chip was quietly losing rows the server never asked for.
+  //
+  // Done on the selection itself rather than in an effect on activeView.id: the
+  // active view arrives asynchronously on page load, which an effect cannot tell
+  // apart from the user switching views - and the date filter can be pinned (see
+  // PinButton below), so a false positive there would overwrite a preference set
+  // on purpose. viewDatePreset() returns null for a view with no date condition,
+  // leaving the chips untouched.
+  const selectViewAndDate = useCallback(
+    (id: string | null) => {
+      selectView(id);
+      const fromView = viewDatePreset(allViews.find((v) => v.id === id)?.filters);
+      if (!fromView) return;
+      setDatePreset(fromView.preset);
+      if (fromView.preset === "specific") setSpecificDate(fromView.specificDate);
+      if (fromView.preset === "range") {
+        setRangeFrom(fromView.rangeFrom);
+        setRangeTo(fromView.rangeTo);
+      }
+    },
+    [selectView, allViews],
+  );
+
+  // Remembering a view has to mean the same as picking one.
+  //
+  // selectViewAndDate above copies a view's own date onto the chips, but only
+  // when somebody clicks. The active view is restored from the browser on every
+  // load, and so are the chips - independently - so the two could disagree from
+  // the first render and nothing ever reconciled them. A date pinned weeks ago
+  // then bounded the fetch while the view still filtered client-side to today:
+  // "Todays Appointments" read 0 items over a day with 43 appointments in it,
+  // every single visit, and the filter panel it came from is closed by default.
+  //
+  // Once, on the restore. A chip the user picks afterwards still wins.
+  const dateRestoredRef = useRef(false);
+  useEffect(() => {
+    if (!viewsReady || dateRestoredRef.current) return;
+    dateRestoredRef.current = true;
+    const fromView = viewDatePreset(activeView?.filters);
+    if (!fromView) return;
+    setDatePreset(fromView.preset);
+    if (fromView.preset === "specific") setSpecificDate(fromView.specificDate);
+    if (fromView.preset === "range") {
+      setRangeFrom(fromView.rangeFrom);
+      setRangeTo(fromView.rangeTo);
+    }
+    // Deliberately once, on the restore: activeView?.filters is read inside but
+    // must not re-trigger this, or a later edit to the view would yank the
+    // chips out from under whatever the user had since chosen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewsReady, activeView?.id]);
+
   // Inline edit state
   const [editingRow, setEditingRow] = useState<string | null>(null);
+
+  // The front desk's changes arrive here rather than waiting for a refresh.
+  // Held while a row is being edited inline or the booking dialog is open, so
+  // nothing is redrawn under somebody who is typing - see useLiveAppointments.
+  useLiveAppointments({ paused: editingRow !== null || open });
   const [editValues, setEditValues] = useState<any>({});
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string; fromSalesforce: boolean } | null>(null);
 
   // Drag-reschedule state
   const dragRef = useRef<{ aptId: string; originalStart: string; originalEnd: string } | null>(null);
@@ -314,13 +568,13 @@ const Appointments = () => {
   // Form state
   const [patientId, setPatientId] = useState("");
   const [staffId, setStaffId] = useState("");
+  const [therapistId, setTherapistId] = useState("");
   const [serviceId, setServiceId] = useState("");
   const [appointmentStatus, setAppointmentStatus] = useState("Reserved");
   const [visitStatus, setVisitStatus] = useState("");
-  const [consultationType, setConsultationType] = useState<ConsultationType | "">("");
-  const [consultationReasons, setConsultationReasons] = useState<string[]>([]);
-  const [othersAestheticText, setOthersAestheticText] = useState("");
-  const [othersClinicalText, setOthersClinicalText] = useState("");
+  // Free text for this visit. Stored in reason_for_consultation, the column the
+  // Salesforce import already fills from Investigation__c.
+  const [investigation, setInvestigation] = useState("");
   const [additionalInfoOpen, setAdditionalInfoOpen] = useState(false);
   const [appointmentType, setAppointmentType] = useState<"Walk-in" | "Online">("Walk-in");
   const [startDate, setStartDate] = useState<Date>();
@@ -386,14 +640,56 @@ const Appointments = () => {
   // Other active staff (nurse, therapist, etc.) can also be assigned to an appointment
   const otherStaffList = useMemo(() => (staffList as any[]).filter((s: any) => (s.role || "").toLowerCase() !== "doctor"), [staffList]);
 
+  // Booking from a patient's record (Patients > Appts > Book Appointment lands
+  // here with the patient already chosen) left the doctor blank, so front desk
+  // picked from memory the one that patient always sees. Their last visit
+  // already says who that is. Only fetched once the dialog is open with a
+  // patient set, so it costs nothing until somebody books.
+  const { data: recentVisits = [] } = useQuery({
+    queryKey: ["new-appt-recent-visits", patientId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("appointments")
+        .select("start_time, staff_id")
+        .eq("patient_id", patientId)
+        .order("start_time", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: open && !!patientId,
+  });
+
+  // Fills a blank only: a doctor chosen by hand is never overridden, resetForm
+  // still clears it, and the single-doctor filter prefill is not fought over -
+  // both are filling the same empty field.
+  useEffect(() => {
+    if (!open || staffId) return;
+    const usual = usualDoctorId(
+      recentVisits as PastVisit[],
+      (staffList as { id: string }[]).map((s) => s.id),
+    );
+    if (usual) setStaffId(usual);
+  }, [open, staffId, recentVisits, staffList]);
+
   // Saved-view filter builder options for the picklist fields
+  const therapistsList = useMemo(
+    () => (staffList as TherapistCandidate[]).filter((st) => isTherapistRole(st.role)),
+    [staffList]
+  );
+
   const viewDoctorOptions: PickOption[] = useMemo(
     () => doctorsList.map((d: any) => ({ value: d.id, label: `${d.first_name || ""} ${d.last_name || ""}`.trim() })),
     [doctorsList]
   );
+  const viewTherapistOptions: PickOption[] = useMemo(
+    () => therapistsList.map((d) => ({ value: d.id, label: `${d.first_name || ""} ${d.last_name || ""}`.trim() })),
+    [therapistsList]
+  );
   const viewOptionsFor = (source?: string): PickOption[] => {
     switch (source) {
       case "doctor": return viewDoctorOptions;
+      case "therapist": return viewTherapistOptions;
       case "status": return statusOptions.map((s) => ({ value: s, label: s }));
       case "visit_status": return visitStatusOptions.map((s) => ({ value: s, label: s }));
       default: return [];
@@ -407,18 +703,18 @@ const Appointments = () => {
   // still triggers the same WhatsApp-notify status-change path the inline
   // table Select uses) - this resolves the denormalized field keys
   // (doctor/bill/payment_mode/etc.) from them without remapping the rows.
-  const kanbanRawValue = (row: any, key: string) => (toViewRow(row, pageInvoiceByAppointmentId) as any)[key];
+  const kanbanRawValue = (row: any, key: string) => (toViewRow(row, billInvoiceByAppointmentId) as any)[key];
 
   const moveKanbanCard = (apt: any, field: string, value: string) => {
     const updates: any = { id: apt.id, [field]: value || null };
     if (field === "status") {
       updates.__notify = {
         phone: apt.patients?.phone || "",
-        patientName: apt.patient_name || (apt.patients ? `${apt.patients.first_name} ${apt.patients.last_name}` : ""),
+        patientName: appointmentPatientName(apt, ""),
         prevStatus: apt.status,
         newStatus: value,
         startTime: apt.start_time,
-        doctorName: apt.staff_id ? (staffMap.get(apt.staff_id) || "") : "",
+        doctorName: getDoctorName(apt),
         serviceName: apt.service || "",
         patientGender: apt.patients?.gender || null,
       };
@@ -497,7 +793,15 @@ const Appointments = () => {
   // every appointment ever (now tens of thousands, with Salesforce history
   // synced in) on every page load is too slow. "All Dates" intentionally
   // stays unbounded - that's an explicit choice to pull full history.
-  const getDateFilterRange = (preset: string): { start: Date; end: Date } | null => {
+  const getDateFilterRange = (
+    preset: string,
+    // A saved view's own dates, when resolving the view's window rather than
+    // the one the user picked.
+    opts?: { specificDate?: Date; rangeFrom?: Date; rangeTo?: Date },
+  ): { start: Date; end: Date } | null => {
+    const theDate = opts?.specificDate ?? specificDate;
+    const fromDate = opts?.rangeFrom ?? rangeFrom;
+    const toDate = opts?.rangeTo ?? rangeTo;
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const todayEnd = new Date(todayStart);
@@ -512,12 +816,12 @@ const Appointments = () => {
       case "last_week": return { start: startOfWeek(addDays(todayStart, -7)), end: endOfWeek(addDays(todayStart, -7)) };
       case "next_week": return { start: startOfWeek(addDays(todayStart, 7)), end: endOfWeek(addDays(todayStart, 7)) };
       case "this_month": return { start: startOfMonth(todayStart), end: endOfDay(endOfMonth(todayStart)) };
-      case "specific": return specificDate ? { start: startOfDay(specificDate), end: endOfDay(specificDate) } : null;
+      case "specific": return theDate ? { start: startOfDay(theDate), end: endOfDay(theDate) } : null;
       case "range":
-        if (!rangeFrom && !rangeTo) return null;
+        if (!fromDate && !toDate) return null;
         return {
-          start: rangeFrom ? startOfDay(rangeFrom) : new Date(1970, 0, 1),
-          end: rangeTo ? endOfDay(rangeTo) : new Date(2999, 0, 1),
+          start: fromDate ? startOfDay(fromDate) : new Date(1970, 0, 1),
+          end: toDate ? endOfDay(toDate) : new Date(2999, 0, 1),
         };
       default: return null;
     }
@@ -536,7 +840,38 @@ const Appointments = () => {
     return null;
   }, [view, currentDate]);
 
-  const appointmentsDateRange = view === "table" ? getDateFilterRange(datePreset) : calendarDateRange;
+  // The window the list actually fetches.
+  //
+  // `datePreset` is state the user sets, and a saved view's own date condition
+  // only ever reached it through selectViewAndDate - i.e. when someone clicked
+  // the view. On a page load the active view is restored from localStorage
+  // asynchronously and that click never happens, so the fetch ran with no date
+  // bound at all while the view's conditions still filtered client-side to,
+  // say, today. Ordered by start_time ascending and capped, that fetched the
+  // OLDEST rows in the table, none of which are today's: "Todays Appointments"
+  // opened on "0 items" and only came right when the user picked it by hand.
+  // It was also the slow one - up to the cap in rows, every load.
+  //
+  // Derived here rather than pushed into state, so there is no load-order race
+  // to lose: an explicit preset still wins, and when there is none the view's
+  // own window bounds the fetch. Narrowing to that window can never drop a row
+  // the user would have seen, because the view's own conditions would have
+  // filtered anything outside it away anyway.
+  const viewOwnRange = (() => {
+    const fromView = viewDatePreset(activeView?.filters);
+    // null: the view says nothing about dates. "all": it does, but not as a
+    // window we can express exactly - fetch everything and let it filter.
+    if (!fromView || fromView.preset === "all") return null;
+    return getDateFilterRange(fromView.preset, {
+      specificDate: fromView.specificDate,
+      rangeFrom: fromView.rangeFrom,
+      rangeTo: fromView.rangeTo,
+    });
+  })();
+
+  const appointmentsDateRange = view === "table"
+    ? (getDateFilterRange(datePreset) ?? viewOwnRange)
+    : calendarDateRange;
 
   // A saved view's filter conditions run client-side (some fields, like bill
   // amount / payment mode, only exist after joining invoices). Server-side
@@ -545,14 +880,26 @@ const Appointments = () => {
   // back to the full date-bounded fetch and paginate in memory.
   const viewHasFilters = Boolean(activeView?.filters?.conditions?.length);
 
-  const { data: appointments = [] } = useQuery({
+  const { data: appointments = [], isLoading: apptBulkFetching } = useQuery({
     queryKey: ["appointments", datePreset, appointmentsDateRange?.start?.toISOString(), appointmentsDateRange?.end?.toISOString()],
     queryFn: async () => {
+      // Capped, because this path pulls rows into memory a page at a time.
+      // With no date filter that is 56,438 rows over 57 sequential requests,
+      // which is how the Photos page came to hang. It only runs for a saved
+      // view whose filters are client-side and whose conditions name no date
+      // (one filtering on doctor, say) - a view that does filter on a date
+      // narrows this fetch through selectViewAndDate below.
       return await fetchAll<any>((from, to) => {
         let q = supabase
           .from("appointments")
-          .select("*, patients(first_name, last_name, phone, gender)")
-          .order("start_time")
+          .select("*, patients(first_name, last_name, phone, gender, is_vip)")
+          // Newest first. Where a view's date operator has no chip equivalent
+          // (last_n_days, before, after, two date conditions, match "any"),
+          // appointmentsDateRange is null and this walks the whole table to
+          // the memory cap - ascending, that was the OLDEST ten thousand of
+          // fifty-six thousand, which the view's own conditions then filtered
+          // to nothing. A second route to the same empty list.
+          .order("start_time", { ascending: false })
           .range(from, to);
         if (appointmentsDateRange) {
           q = q
@@ -560,15 +907,64 @@ const Appointments = () => {
             .lte("start_time", appointmentsDateRange.end.toISOString());
         }
         return q;
-      });
+      }, 1000, APPT_MEMORY_CAP);
     },
     // Day/Week/Month views only - the List view uses the server-paginated
     // query below instead of pulling the full date range into memory
     // (unless a saved view's client-side filters are active).
-    enabled: view !== "table" || viewHasFilters,
+    //
+    // And never before the remembered view has been restored. Until then
+    // activeView is "All Appointments", which bounds nothing, so this fetched
+    // the oldest rows in the table and the view's own conditions filtered them
+    // to nothing - "Todays Appointments" read "0 items" every time the clinic
+    // left the page and came back, and the wrong answer sat in the query cache
+    // ready to be served instantly the next time.
+    enabled: viewsReady && (view !== "table" || viewHasFilters),
   });
 
   const sortedFilterDoctors = useMemo(() => Array.from(filterDoctors).sort(), [filterDoctors]);
+
+  const doctorNameById = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const doctor of doctorsList as { id?: string; first_name?: string; last_name?: string }[]) {
+      if (doctor?.id) names.set(doctor.id, `${doctor.first_name ?? ""} ${doctor.last_name ?? ""}`.trim());
+    }
+    return names;
+  }, [doctorsList]);
+
+  // What the empty row has to own up to. Named filters only - a list showing
+  // everything has nothing to explain.
+  const narrowedBy = useMemo(
+    () =>
+      activeAppointmentFilters({
+        // The saved view narrows the list too, and its conditions appear on no
+        // chip. Without this an empty list read "No appointments found" while
+        // a view was filtering it - which is this fault one level up.
+        viewName: viewHasFilters ? activeView?.name : undefined,
+        datePreset,
+        datePresetLabel: (key) => DATE_PRESETS.find((p) => p.key === key)?.label,
+        doctorNames: Array.from(filterDoctors).map((id) => doctorNameById.get(id) || "Doctor"),
+        status: filterStatus,
+        visitStatus: filterVisitStatus,
+        search: debouncedSearchQuery,
+      }),
+    [viewHasFilters, activeView?.name, datePreset, filterDoctors, doctorNameById, filterStatus, filterVisitStatus, debouncedSearchQuery],
+  );
+
+  const clearListFilters = useCallback(() => {
+    setSearchQuery("");
+    setFilterDoctors(new Set());
+    setFilterStatus("all");
+    setFilterVisitStatus("all");
+    setDatePreset("all");
+    setSpecificDate(undefined);
+    setRangeFrom(undefined);
+    setRangeTo(undefined);
+    // And the saved view, which narrows the list as much as any chip. Clearing
+    // only the chips left the list just as empty with nothing left to explain
+    // it - an explained empty list became an unexplained one.
+    selectView(null);
+  }, [selectView]);
 
   const apptPageQueryKey = [
     "appointments",
@@ -582,11 +978,11 @@ const Appointments = () => {
     filterStatus,
     filterVisitStatus,
     debouncedSearchQuery.trim(),
-    sortColumn,
-    sortDirection,
+    effectiveSort.column,
+    effectiveSort.direction,
   ];
 
-  const { data: apptPageData, isFetching: isApptPageFetching } = useQuery({
+  const { data: apptPageData, error: apptPageError, refetch: refetchApptPage, isLoading: apptPageFetching } = useQuery({
     queryKey: apptPageQueryKey,
     queryFn: () =>
       fetchAppointmentsPage({
@@ -597,17 +993,17 @@ const Appointments = () => {
         status: filterStatus,
         visitStatus: filterVisitStatus,
         search: debouncedSearchQuery,
-        sortColumn,
-        sortDirection,
+        sortColumn: effectiveSort.column,
+        sortDirection: effectiveSort.direction,
       }),
     placeholderData: keepPreviousData,
-    enabled: view === "table" && !viewHasFilters,
+    enabled: viewsReady && view === "table" && !viewHasFilters,
   });
 
   // Reset to page 1 whenever any input that reshapes the result set changes
   useEffect(() => {
     setApptPage(1);
-  }, [datePreset, appointmentsDateRange?.start?.toISOString(), appointmentsDateRange?.end?.toISOString(), sortedFilterDoctors.join(","), filterStatus, filterVisitStatus, debouncedSearchQuery, sortColumn, sortDirection, activeView?.id]);
+  }, [datePreset, appointmentsDateRange?.start?.toISOString(), appointmentsDateRange?.end?.toISOString(), sortedFilterDoctors.join(","), filterStatus, filterVisitStatus, debouncedSearchQuery, effectiveSort.column, effectiveSort.direction, activeView?.id]);
 
   // NOTE: Past Confirmed appointments are intentionally NOT auto-flipped to
   // "No Show" on page load. Doing so silently rewrote real attended visits
@@ -630,8 +1026,8 @@ const Appointments = () => {
           status: filterStatus,
           visitStatus: filterVisitStatus,
           search: debouncedSearchQuery,
-          sortColumn,
-          sortDirection,
+          // No sort passed: the printout is always in clock order, whatever the
+          // list is sorted by on screen. printAppointments owns that.
         },
         { rangeLabel, staffName: (id) => (id ? staffMap.get(id) || "" : ""), clinicName: "Appointments" },
       );
@@ -649,67 +1045,195 @@ const Appointments = () => {
     return map;
   }, [staffList]);
 
-  // Fetch invoices for bill amount - used by the Day/Week/Month calendar
-  // views (via filteredAppointments/applyViewFilters/toViewRow), which still
-  // work off the full date-bounded appointments set, so this stays a full
-  // fetch too, just skipped while on the List/table view (see
-  // pageInvoiceByAppointmentId).
-  const { data: invoices = [] } = useQuery({
-    queryKey: ["invoices-for-appointments"],
-    queryFn: async () => {
-      return await fetchAll<any>((from, to) =>
-        supabase
-          .from("invoices")
-          .select("id, appointment_id, total_amount, paid_amount, payment_mode, status")
-          .range(from, to)
-      );
-    },
-    enabled: view !== "table" || viewHasFilters,
+  // Invoices for the Bill Amount / Payment Mode columns.
+  //
+  // Both fetches below look invoices up BY APPOINTMENT ID. The calendar/
+  // filtered-view one used to pull the entire invoices table instead, which
+  // grew with the clinic's whole billing history rather than with the rows on
+  // screen; a later page could time out, and a throwing query leaves data at
+  // [], so every bill cell silently rendered as a dash. See
+  // fetchInvoicesByAppointmentIds for the rest of the reasoning.
+  const INVOICE_COLUMNS =
+    "id, appointment_id, patient_id, created_at, total_amount, paid_amount, payment_mode, payment_splits, status";
+  const fetchInvoiceChunk = async (ids: string[]) => {
+    const { data, error } = await supabase
+      .from("invoices")
+      .select(INVOICE_COLUMNS)
+      .in("appointment_id", ids);
+    if (error) throw error;
+    return data || [];
+  };
+
+  // The full date-bounded set: the Day/Week/Month calendars and any filtered
+  // saved view read from it (via filteredAppointments/applyViewFilters/
+  // toViewRow), so it is keyed on the same date range the appointments query
+  // uses rather than on the id list itself.
+  const fullApptIds = useMemo(() => appointments.map((a: any) => a.id), [appointments]);
+  const { data: invoices = [], isError: fullInvoicesFailed, isLoading: fullInvoicesLoading } = useQuery({
+    queryKey: [
+      "invoices-for-appointments",
+      "full",
+      datePreset,
+      appointmentsDateRange?.start?.toISOString(),
+      appointmentsDateRange?.end?.toISOString(),
+      fullApptIds.length,
+    ],
+    queryFn: () => fetchInvoicesByAppointmentIds(fetchInvoiceChunk, fullApptIds),
+    enabled: (view !== "table" || viewHasFilters) && fullApptIds.length > 0,
   });
 
-  const invoiceByAppointmentId = useMemo(() => {
-    const map = new Map<string, any>();
-    invoices.forEach((inv: any) => {
-      if (inv.appointment_id) map.set(inv.appointment_id, inv);
-    });
-    return map;
-  }, [invoices]);
+  const invoiceByAppointmentId = useMemo(() => invoiceMapByAppointment(invoices as any[]), [invoices]);
 
-  // Invoices for the List/table view - scoped to just the current page's
-  // appointment ids instead of the whole invoices table.
+  // The List/table view's current server page.
   const pageApptIds = useMemo(
     () => (apptPageData?.rows ?? []).map((a: any) => a.id),
     [apptPageData]
   );
-  const { data: pageInvoices = [] } = useQuery({
+  const { data: pageInvoices = [], isError: pageInvoicesFailed, isLoading: pageInvoicesLoading } = useQuery({
     queryKey: ["invoices-for-appointments", "page", pageApptIds],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("invoices")
-        .select("id, appointment_id, total_amount, paid_amount, payment_mode, status")
-        .in("appointment_id", pageApptIds);
-      if (error) throw error;
-      return data || [];
-    },
+    queryFn: () => fetchInvoicesByAppointmentIds(fetchInvoiceChunk, pageApptIds),
     enabled: view === "table" && !viewHasFilters && pageApptIds.length > 0,
   });
 
-  const pageInvoiceByAppointmentId = useMemo(() => {
-    const map = new Map<string, any>();
-    pageInvoices.forEach((inv: any) => {
-      if (inv.appointment_id) map.set(inv.appointment_id, inv);
-    });
-    return map;
-  }, [pageInvoices]);
+  const pageInvoiceByAppointmentId = useMemo(
+    () => invoiceMapByAppointment(pageInvoices as any[]),
+    [pageInvoices]
+  );
 
-  const dateFilterLabel = (() => {
-    if (datePreset === "specific") return specificDate ? format(specificDate, "MMM d, yyyy") : "Specific Date";
-    if (datePreset === "range")
-      return rangeFrom || rangeTo
-        ? `${rangeFrom ? format(rangeFrom, "MMM d") : "…"} – ${rangeTo ? format(rangeTo, "MMM d") : "…"}`
-        : "Date Range";
-    return DATE_PRESETS.find((p) => p.key === datePreset)?.label || "All Dates";
-  })();
+  // Whichever of the two is actually populated for this mode. Only one of the
+  // fetches above ever runs: a filtered saved view works off the in-memory
+  // appointment set (there is no server page to scope to), and otherwise only
+  // the current page's ids are fetched. Reading the page map unconditionally
+  // left every Bill Amount and Payment Mode blank under any custom view.
+  const linkedInvoiceByAppointmentId = useMemo(
+    () => appointmentInvoiceMap(viewHasFilters, invoiceByAppointmentId, pageInvoiceByAppointmentId),
+    [viewHasFilters, invoiceByAppointmentId, pageInvoiceByAppointmentId],
+  );
+
+  /** Every visit on screen, each counted once. */
+  const visitsOnScreen = useMemo(
+    () => [...appointments, ...(apptPageData?.rows ?? [])] as VisitRow[],
+    [appointments, apptPageData],
+  );
+
+  // Bills that never got attached to a visit. invoices.appointment_id is
+  // ON DELETE SET NULL, so deleting a duplicate appointment silently detaches
+  // its bill, and bills raised before the link was settled at save are already
+  // unattached. Without this the visit reads "No bill" though it was paid for.
+  const unlinkedBillPatientIds = useMemo(
+    () => Array.from(new Set(visitsOnScreen.map((v) => v.patient_id).filter(Boolean) as string[])),
+    [visitsOnScreen],
+  );
+  const unlinkedBillWindow = useMemo(() => {
+    const times = visitsOnScreen
+      .map((v) => (v.start_time ? new Date(v.start_time).getTime() : NaN))
+      .filter((t) => !Number.isNaN(t));
+    if (times.length === 0) return null;
+    return {
+      from: startOfDay(new Date(Math.min(...times))).toISOString(),
+      to: endOfDay(new Date(Math.max(...times))).toISOString(),
+    };
+  }, [visitsOnScreen]);
+
+  const { data: unlinkedBills = [] } = useQuery({
+    queryKey: ["invoices-for-appointments", "unlinked", unlinkedBillWindow, unlinkedBillPatientIds],
+    queryFn: () =>
+      fetchInvoicesByAppointmentIds(async (patientIds: string[]) => {
+        const { data, error } = await supabase
+          .from("invoices")
+          .select(INVOICE_COLUMNS)
+          .in("patient_id", patientIds)
+          .is("appointment_id", null)
+          .gte("created_at", unlinkedBillWindow!.from)
+          .lte("created_at", unlinkedBillWindow!.to);
+        if (error) throw error;
+        return data || [];
+      }, unlinkedBillPatientIds),
+    // A failure here costs nothing: the linked lookup still answers, and the
+    // cell falls back to what it said before.
+    enabled: !!unlinkedBillWindow && unlinkedBillPatientIds.length > 0,
+  });
+
+  const billInvoiceByAppointmentId = useMemo(
+    () =>
+      withUnlinkedBills(
+        linkedInvoiceByAppointmentId,
+        // In the same shape the linked map holds, so a cell cannot tell where
+        // the bill was found: one bill, and it is its own list.
+        (unlinkedBills as VisitBill[]).map((bill) => ({ ...bill, bills: [bill] })),
+        visitsOnScreen,
+      ),
+    [linkedInvoiceByAppointmentId, unlinkedBills, visitsOnScreen],
+  );
+
+  // Patient-days that already have a bill on one of their appointments. A
+  // patient can hold two records for the same slot - Kiran Shetty had two at
+  // 4:00 PM on 21 September against a single Rs 6,300 bill - and the row
+  // without it read "No bill" while he had in fact paid. Built from rows
+  // already fetched, so it costs no query.
+  const billedOnAnotherVisit = useMemo(() => {
+    const rows: BilledDayRow[] = [...appointments, ...(apptPageData?.rows ?? [])];
+    return billedPatientDays(rows, (id) => billInvoiceByAppointmentId.has(id));
+  }, [appointments, apptPageData, billInvoiceByAppointmentId]);
+
+  // Say so instead of showing a column of dashes that looks like "no bills".
+  const billLookupFailed = fullInvoicesFailed || pageInvoicesFailed;
+  // Only one of the two queries ever runs; a disabled one reports isLoading
+  // false, so OR-ing them is safe and mirrors billLookupFailed above.
+  const billLookupLoading = fullInvoicesLoading || pageInvoicesLoading;
+
+  // One dash used to stand for "no bill", "lookup failed", "still loading" and
+  // "nothing to show" alike, and the clinic read it as money going missing on a
+  // day whose takings actually reconciled with Salesforce to the paise. Say
+  // which it is - and never claim "No bill" when the figure is simply unknown.
+  const renderBillCell = (
+    invoice: VisitBilling | undefined,
+    apt?: { patient_id?: string | null; start_time?: string | null },
+    emphasise = false,
+  ) => {
+    const key = apt ? patientDayKey(apt.patient_id, apt.start_time) : null;
+    switch (billCellState({
+      hasInvoice: !!invoice,
+      loading: billLookupLoading,
+      failed: billLookupFailed,
+      billedElsewhere: !!key && billedOnAnotherVisit.has(key),
+    })) {
+      case "amount": {
+        // A visit can carry more than one bill - the consultation charged apart
+        // from the treatment, on 883 of them - and the clinic asked to see each.
+        // One bill, which is almost every visit, renders exactly as before.
+        const bills = invoice.bills ?? [];
+        if (bills.length > 1) {
+          return (
+            <span className={cn("flex flex-col leading-tight", emphasise && "font-medium")}>
+              {bills.map((bill, i) => (
+                <span key={bill.id ?? i}>{formatMoneyExact(bill.total_amount)}</span>
+              ))}
+            </span>
+          );
+        }
+        return <span className={emphasise ? "font-medium" : undefined}>{formatMoneyExact(invoice.total_amount)}</span>;
+      }
+      case "failed":
+        return <span className="text-destructive" title="The bill could not be loaded - this is not the same as there being none">Unavailable</span>;
+      case "loading":
+        return <span className="text-muted-foreground">…</span>;
+      case "elsewhere":
+        return (
+          <span
+            className="text-muted-foreground italic"
+            title="This patient has another appointment on the same day, and the bill is on that one"
+          >
+            On another visit
+          </span>
+        );
+      default:
+        return <span className="text-muted-foreground">No bill</span>;
+    }
+  };
+  useEffect(() => {
+    if (billLookupFailed) toast.error("Could not load bill amounts - the Bill and Payment Mode columns may be blank.");
+  }, [billLookupFailed]);
 
   // Denormalize an appointment (+ its invoice) into the flat shape
   // APPOINTMENT_VIEW_FIELDS' filter/sort engine reads. `invMap` lets callers
@@ -721,10 +1245,11 @@ const Appointments = () => {
       id: apt.id,
       start_time: apt.start_time,
       time: format(new Date(apt.start_time), "h:mm a"),
-      patient: apt.patient_name || (apt.patients ? `${apt.patients.first_name} ${apt.patients.last_name}` : ""),
+      patient: appointmentPatientName(apt, ""),
       phone: apt.patients?.phone || "",
       service: apt.service || "",
       doctor: apt.staff_id || "",
+      therapist: apt.therapist_id || "",
       status: apt.status || "",
       visit_status: apt.visit_status || "",
       bill: inv?.total_amount || 0,
@@ -750,7 +1275,7 @@ const Appointments = () => {
     if (filterVisitStatus !== "all" && (apt.visit_status || "") !== filterVisitStatus) return false;
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      const name = apt.patient_name || (apt.patients ? `${apt.patients.first_name} ${apt.patients.last_name}` : "");
+      const name = appointmentPatientHaystack(apt);
       const d = new Date(apt.start_time);
       const dateTokens = [
         format(d, "MMM d, yyyy"),
@@ -782,6 +1307,16 @@ const Appointments = () => {
   // With saved-view filters active the full filtered set is already in memory,
   // so slice it locally and report its true size.
   const apptTotal = viewHasFilters ? filteredAppointments.length : (apptPageData?.total ?? 0);
+  // Which fetch backs that count depends on the view, same as the rows.
+  // Waiting for the remembered view counts as loading. A disabled query reports
+  // isLoading false, so without this the table said "No appointments found"
+  // while it was still working out which appointments to ask for.
+  const apptPageLoading = !viewsReady || (viewHasFilters ? apptBulkFetching : apptPageFetching);
+  // "Is there a next page" comes from the probe row the fetcher reports, which
+  // arrived in the same snapshot as the rows, never from apptTotal.
+  const apptHasMore = viewHasFilters
+    ? apptPage * APPT_PAGE_SIZE < filteredAppointments.length
+    : (apptPageData?.hasMore ?? false);
   const visibleTableRows = viewHasFilters
     ? filteredAppointments.slice((apptPage - 1) * APPT_PAGE_SIZE, apptPage * APPT_PAGE_SIZE)
     : serverPageRows;
@@ -831,14 +1366,63 @@ const Appointments = () => {
   });
 
   // Get columns to display based on active saved view or default
-  const displayColumns = activeView?.columns?.length ? activeView.columns : DEFAULT_APPOINTMENT_FIELDS;
+  // A saved view stores its own column list in the database, and one saved
+  // before "Next Visit" was removed still names visit_status. Left in, it
+  // would render a header with no matching <col> and slide every column out
+  // of true, so it is filtered on the way in rather than migrated in place.
+  const displayColumns = (activeView?.columns?.length ? activeView.columns : DEFAULT_APPOINTMENT_FIELDS)
+    .filter((c) => APPOINTMENT_COLUMN_WIDTHS.some(([key]) => key === c));
+
+  // Widths the user dragged, kept per browser. They are a display preference
+  // rather than part of the shared view, so they are not written to the
+  // database - which does mean another machine starts from the defaults.
+  const [columnWidths, setColumnWidths] = useState<ColumnWidth[]>(() => {
+    try {
+      return mergeSavedWidths(APPOINTMENT_COLUMN_WIDTHS, JSON.parse(localStorage.getItem(COLUMN_WIDTH_KEY) || "null"));
+    } catch {
+      return APPOINTMENT_COLUMN_WIDTHS;
+    }
+  });
+
+  const applyColumnResize = (key: string, deltaShares: number) => {
+    setColumnWidths((prev) => {
+      const next = resizeColumn(prev, key, deltaShares);
+      try {
+        localStorage.setItem(COLUMN_WIDTH_KEY, JSON.stringify(Object.fromEntries(next)));
+      } catch {
+        // A browser with storage blocked still resizes for this session.
+      }
+      return next;
+    });
+  };
 
   // Check if a column should be displayed
-  const shouldShowColumn = (column: string) => displayColumns.includes(column);
+  /**
+   * The serial number is furniture, like Actions: it numbers whatever rows are
+   * on screen rather than showing a field, so it is not in anyone's saved
+   * column list and must not depend on being there. Without this, every user
+   * who has ever opened "Select Fields to Display" would lose it, and the
+   * colgroup would run one <col> short of the headers.
+   */
+  const ALWAYS_SHOWN_COLUMNS = ["serial"];
+  const shouldShowColumn = (column: string) =>
+    ALWAYS_SHOWN_COLUMNS.includes(column) || displayColumns.includes(column);
+
+  // Width shares for the columns actually on screen, renormalised so they fill
+  // the table whichever subset is shown.
+  const visibleColumnWidths = columnWidths.filter(([key]) => shouldShowColumn(key));
+  const totalColumnWeight =
+    visibleColumnWidths.reduce((sum, [, w]) => sum + w, 0) + ACTIONS_COLUMN_WEIGHT;
+  const colWidth = (weight: number) => `${((weight / totalColumnWeight) * 100).toFixed(4)}%`;
 
   const toggleSort = (column: string) => {
-    if (sortColumn === column) {
-      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
+    // Read off effectiveSort, not the raw state: while a search is running the
+    // rows are newest-first whatever sortDirection happens to hold, and a
+    // click has to flip what the doctor can actually see.
+    setSortChosen(true);
+    if (effectiveSort.column === column) {
+      setSortColumn(column);
+      setSortDirection(effectiveSort.direction === "asc" ? "desc" : "asc");
     } else {
       setSortColumn(column);
       setSortDirection("asc");
@@ -846,15 +1430,19 @@ const Appointments = () => {
   };
 
   const SortIcon = ({ column }: { column: string }) => {
-    if (sortColumn !== column) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />;
-    return sortDirection === "asc" ? <ArrowUp className="h-3 w-3 ml-1 text-primary" /> : <ArrowDown className="h-3 w-3 ml-1 text-primary" />;
+    if (effectiveSort.column !== column) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />;
+    return effectiveSort.direction === "asc" ? <ArrowUp className="h-3 w-3 ml-1 text-primary" /> : <ArrowDown className="h-3 w-3 ml-1 text-primary" />;
   };
 
   const startInlineEdit = (apt: any) => {
     setEditingRow(apt.id);
     setEditValues({
+      // The column is Investigation, so that is what the row edits. `service`
+      // is still carried so saving a row cannot blank it - it drives billing.
+      reason_for_consultation: apt.reason_for_consultation || "",
       service: apt.service || "",
       staff_id: apt.staff_id || "",
+      therapist_id: apt.therapist_id || "",
       status: apt.status,
       start_time: format(new Date(apt.start_time), "yyyy-MM-dd'T'HH:mm"),
       end_time: format(new Date(apt.end_time), "yyyy-MM-dd'T'HH:mm"),
@@ -863,13 +1451,28 @@ const Appointments = () => {
 
   const saveInlineEdit = async () => {
     if (!editingRow) return;
+    // joinDateTime returns "" when either half is blank, and the guards below
+    // skip a falsy value - so clearing the time and changing only the date used
+    // to write nothing at all and still report "Updated". Say so instead.
+    if (hasIncompleteDateTime(editValues)) {
+      toast.error("Set both a date and a time before saving");
+      return;
+    }
     const updates: any = {};
+    if (editValues.reason_for_consultation !== undefined)
+      updates.reason_for_consultation = editValues.reason_for_consultation.trim() || null;
     if (editValues.service) updates.service = editValues.service;
     if (editValues.staff_id) updates.staff_id = editValues.staff_id;
+    // Not a truthy guard, unlike the doctor above: clearing the therapist has
+    // to be possible, so an empty choice must reach the database as null.
+    if (editValues.therapist_id !== undefined) updates.therapist_id = editValues.therapist_id || null;
     if (editValues.status) updates.status = editValues.status;
     if (editValues.start_time) updates.start_time = new Date(editValues.start_time).toISOString();
     if (editValues.end_time) updates.end_time = new Date(editValues.end_time).toISOString();
-    inlineUpdateMutation.mutate({ id: editingRow, ...updates });
+    const row = editingRow;
+    const apply = () => inlineUpdateMutation.mutate({ id: row, ...updates });
+    if (updates.start_time) void guardVisitMove(row, updates.start_time, apply);
+    else apply();
     setEditingRow(null);
     setEditValues({});
   };
@@ -899,6 +1502,12 @@ const Appointments = () => {
       if (!startDate) throw new Error("Please select a date");
       const buildDateTime = (date: Date, time: string) => {
         const [h, m] = time.split(":").map(Number);
+        // A time left half typed gives NaN here, and setHours(NaN) makes a
+        // date that only fails later - inside toISOString(), as "Invalid time
+        // value". Say what is actually wrong instead.
+        if (Number.isNaN(h) || Number.isNaN(m)) {
+          throw new Error("Enter a start and end time before saving.");
+        }
         const dt = new Date(date);
         dt.setHours(h, m, 0, 0);
         return dt;
@@ -923,8 +1532,13 @@ const Appointments = () => {
         }
       }
 
-      const patient = patients.find((p) => p.id === patientId);
-      const patientName = patient ? `${patient.first_name} ${patient.last_name}` : null;
+      // Read by id, not looked up in the page's cached list. The front desk
+      // creates a patient and books them within the minute, so that list
+      // almost never has them yet - and a miss there meant the confirmation
+      // silently did not go out, under "No phone number on this patient's
+      // record" on a screen showing the number. See bookingPatient.ts.
+      const patient = await patientForBooking(patientId, patients.find((p) => p.id === patientId));
+      const patientName = patient?.name ?? null;
       // Appointments created from the clinic app are always tagged "Walk-in".
       // Portal-originated bookings tag themselves as "portal" at creation time.
       const patientSource = "Walk-in";
@@ -933,53 +1547,13 @@ const Appointments = () => {
       const wasRecurring = isRecurring && !!recurrenceEndDate;
       let newAppointmentId: string | null = null;
 
-      // Build the list of (start, end) windows we need to validate
-      const windows: { start: Date; end: Date }[] = wasRecurring
-        ? generateRecurringDates(startDate, recurrencePattern, recurrenceEndDate!).map((d) => ({
-            start: buildDateTime(d, startTime),
-            end: buildDateTime(d, endTime),
-          }))
-        : [{ start: startDT, end: buildDateTime(startDate, endTime) }];
-
-      // Client-side overlap pre-check (the DB trigger is the authoritative guard)
-      if (staffId) {
-        const minStart = new Date(Math.min(...windows.map((w) => w.start.getTime())));
-        const maxEnd = new Date(Math.max(...windows.map((w) => w.end.getTime())));
-        const { data: existing, error: existingErr } = await supabase
-          .from("appointments")
-          .select("start_time, end_time, patient_name, status")
-          .eq("staff_id", staffId)
-          .lt("start_time", maxEnd.toISOString())
-          .gt("end_time", minStart.toISOString());
-        if (existingErr) throw existingErr;
-        const blockers = (existing || []).filter(
-          (a: any) => !["Cancelled"].includes(a.status),
-        );
-        const conflicts = windows
-          .map((w) => {
-            const hit = blockers.find(
-              (a: any) => new Date(a.start_time) < w.end && new Date(a.end_time) > w.start,
-            );
-            return hit ? { w, hit } : null;
-          })
-          .filter(Boolean) as { w: { start: Date; end: Date }; hit: any }[];
-        if (conflicts.length > 0) {
-          const first = conflicts[0];
-          const when = format(new Date(first.hit.start_time), "dd MMM yyyy hh:mm a");
-          const extra = conflicts.length > 1 ? ` (+${conflicts.length - 1} more conflict${conflicts.length - 1 === 1 ? "" : "s"})` : "";
-          throw new Error(
-            `This doctor already has an appointment on ${when}${first.hit.patient_name ? ` with ${first.hit.patient_name}` : ""}. Please pick a different slot.${extra}`,
-          );
-        }
-      }
-
       if (wasRecurring) {
         const dates = generateRecurringDates(startDate, recurrencePattern, recurrenceEndDate!);
-        const savedReasons = buildConsultationReasonsForSave(consultationReasons, othersAestheticText, othersClinicalText);
         const rows = dates.map((d) => ({
           patient_id: patientId || null,
           patient_name: patientName,
           staff_id: staffId || null,
+          therapist_id: therapistId || null,
           service: serviceName,
           status: appointmentStatus,
           visit_status: visitStatus || null,
@@ -991,17 +1565,16 @@ const Appointments = () => {
           source: patientSource,
           problem_area_ids: selectedProblemAreas,
           appointment_type: appointmentType,
-          consultation_type: consultationType || null,
-          consultation_reasons: savedReasons,
+          reason_for_consultation: investigation.trim() || null,
         }));
         const { error } = await supabase.from("appointments").insert(rows as any);
         if (error) throw error;
       } else {
-        const savedReasons = buildConsultationReasonsForSave(consultationReasons, othersAestheticText, othersClinicalText);
         const { data: inserted, error } = await supabase.from("appointments").insert({
           patient_id: patientId || null,
           patient_name: patientName,
           staff_id: staffId || null,
+          therapist_id: therapistId || null,
           service: serviceName,
           status: appointmentStatus,
           visit_status: visitStatus || null,
@@ -1011,8 +1584,7 @@ const Appointments = () => {
           source: patientSource,
           problem_area_ids: selectedProblemAreas,
           appointment_type: appointmentType,
-          consultation_type: consultationType || null,
-          consultation_reasons: savedReasons,
+          reason_for_consultation: investigation.trim() || null,
         } as any).select("id").single();
         if (error) throw error;
         newAppointmentId = (inserted as any)?.id || null;
@@ -1023,7 +1595,8 @@ const Appointments = () => {
         capturedServiceName: serviceName,
         phone: patient?.phone,
         patientName,
-        patientGender: (patient as any)?.gender || null,
+        // Now actually populated: the cached list never selected gender.
+        patientGender: patient?.gender || null,
         firstStartDT: startDT,
         recurrencePattern,
         recurrenceEndDate: wasRecurring ? recurrenceEndDate : null,
@@ -1043,7 +1616,17 @@ const Appointments = () => {
       // Only a Confirmed appointment is worth messaging a patient about. Bookings
       // default to Reserved, which is a provisional hold - confirming it later goes
       // through the status-change path below, which sends the same template.
-      if (data.phone && data.patientName && data.firstStartDT && data.capturedStatus === "Confirmed") {
+      //
+      // A skipped send now says why. It used to say nothing at all, which is how
+      // the clinic came to report "confirmations do not reach patients" with
+      // nothing on screen to show which bookings had been missed.
+      const sendPlan = confirmationSendPlan({
+        status: data.capturedStatus,
+        phone: data.phone,
+        patientName: data.patientName,
+      });
+      if (sendPlan.skippedBecause) toast.warning(sendPlan.skippedBecause);
+      if (sendPlan.send && data.firstStartDT) {
         if (data.wasRecurring && data.recurrenceEndDate) {
           supabase.functions
             .invoke("send-recurring-appointment-whatsapp", {
@@ -1057,9 +1640,10 @@ const Appointments = () => {
                 endDate: format(data.recurrenceEndDate, "dd MMM yyyy"),
               },
             })
-            .then(({ error }) => {
+            .then(async ({ error }) => {
               if (error) {
                 console.error("Recurring WhatsApp send failed:", error);
+                toast.error(await edgeFunctionErrorMessage(error, "The WhatsApp confirmation could not be sent."));
               } else {
                 toast.success("WhatsApp confirmation sent");
               }
@@ -1076,9 +1660,13 @@ const Appointments = () => {
                 patientGender: data.patientGender,
               },
             })
-            .then(({ error }) => {
+            .then(async ({ error }) => {
               if (error) {
+                // Said out loud, not only to the console. A confirmation that
+                // silently fails is one the patient never hears about and the
+                // front desk never knows to re-send.
                 console.error("WhatsApp send failed:", error);
+                toast.error(await edgeFunctionErrorMessage(error, "The WhatsApp confirmation could not be sent."));
               } else {
                 toast.success("WhatsApp confirmation sent");
               }
@@ -1118,12 +1706,13 @@ const Appointments = () => {
           });
       }
       // Survey: fill now (only for non-recurring single appointment)
-      if (
+      const surveyToFillNow = Boolean(
         data.fillNowSurveyTemplateId &&
         data.capturedPatientId &&
         data.newAppointmentId &&
         !data.wasRecurring
-      ) {
+      );
+      if (surveyToFillNow) {
         setPendingFillNow({
           templateId: data.fillNowSurveyTemplateId,
           appointmentId: data.newAppointmentId,
@@ -1132,6 +1721,16 @@ const Appointments = () => {
       }
       resetForm();
       setOpen(false);
+      // Show front desk what they just booked, so the time, the doctor and the
+      // service can be checked without hunting for the row. Not when something
+      // else is already opening over the page - see openNewAppointment.ts.
+      if (shouldOpenNewAppointment({
+        appointmentId: data.newAppointmentId,
+        wasRecurring: data.wasRecurring,
+        surveyToFillNow,
+      })) {
+        openAppointment(data.newAppointmentId as string);
+      }
       if (data.wasRecurring) {
         setLastCreatedPatientId(data.capturedPatientId);
         setLastCreatedService(data.capturedServiceName);
@@ -1144,8 +1743,14 @@ const Appointments = () => {
   const inlineUpdateMutation = useMutation({
     mutationFn: async (data: Record<string, any>) => {
       const { id, __notify, ...updates } = data;
-      const { error } = await supabase.from("appointments").update(updates as any).eq("id", id);
+      // Ask for the row back. An UPDATE that RLS filters out is not an error -
+      // it reports zero rows and no error - so without this the toast said
+      // "Updated" and the WhatsApp below went to the patient for a change that
+      // never saved.
+      const { data: written, error } = await supabase
+        .from("appointments").update(updates as any).eq("id", id).select("id");
       if (error) throw error;
+      assertWrote(written);
       // WhatsApp notification on inline status change
       try {
         if (__notify) {
@@ -1162,7 +1767,7 @@ const Appointments = () => {
                 body: { kind: "cancelled", phone, patientName, appointmentDate: apptDate, appointmentTime: apptTime },
               });
               toast.success("WhatsApp cancellation sent");
-            } else if (newStatus === "Confirmed") {
+            } else if (newStatus === "Confirmed" && APPOINTMENT_CONFIRMATION_WHATSAPP_ENABLED) {
               // Confirming sends the booking-confirmation template, not the update one.
               // The update template renders only the time (its {{2}} is the time alone)
               // and carries no quick-reply buttons, so a confirmation sent through it
@@ -1199,10 +1804,83 @@ const Appointments = () => {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  /**
+   * Moving a visit that already happened is not a reschedule.
+   *
+   * Tahniya's 25 September visit was overwritten by her next booking and her
+   * ₹3,000 bill went with it. Every path that changes an appointment's date
+   * goes through this first; it only interrupts when the appointment is in the
+   * past and something happened at it. See appointmentReschedule.ts.
+   */
+  const [visitMovePrompt, setVisitMovePrompt] = useState<{
+    apt: BookableAppointment;
+    newStart: string;
+    evidence: VisitEvidence;
+    proceed: () => void;
+  } | null>(null);
+
+  const appointmentById = (id: string): BookableAppointment | undefined =>
+    (visitsOnScreen as BookableAppointment[]).find((a) => a.id === id);
+
+  const guardVisitMove = async (id: string, newStart: string, proceed: () => void) => {
+    const apt = appointmentById(id);
+    if (!apt?.start_time) {
+      proceed();
+      return;
+    }
+    // Asked for every move, not only for one already in the past. The clinic
+    // sees people early: Alister Moras was prescribed for at 11:07 and his
+    // appointment moved to November at 11:09, an hour before the 12:15 it was
+    // booked for - "still in the future" was exactly why nothing asked.
+    const hasInvoice = billInvoiceByAppointmentId.has(id);
+    let hasProcedure = false;
+    if (!hasInvoice) {
+      // One row, and only when a bill has not already settled the question.
+      const { data } = await supabase.from("procedures").select("id").eq("appointment_id", id).limit(1);
+      hasProcedure = (data?.length ?? 0) > 0;
+    }
+    const evidence = { hasInvoice, hasProcedure };
+    if (rescheduleVerdict(apt, newStart, evidence) !== "confirm") {
+      proceed();
+      return;
+    }
+    setVisitMovePrompt({ apt, newStart, evidence, proceed });
+  };
+
+  /** Keep the visit, put the new date on a new appointment. */
+  const bookInsteadMutation = useMutation({
+    mutationFn: async () => {
+      const prompt = visitMovePrompt;
+      if (!prompt) return;
+      const start = new Date(prompt.newStart);
+      const original = new Date(prompt.apt.start_time);
+      const originalEnd = prompt.apt.end_time ? new Date(prompt.apt.end_time) : null;
+      const durationMs = originalEnd ? originalEnd.getTime() - original.getTime() : 15 * 60 * 1000;
+      const { error } = await supabase.from("appointments").insert({
+        patient_id: prompt.apt.patient_id,
+        patient_name: prompt.apt.patient_name ?? null,
+        staff_id: prompt.apt.staff_id ?? null,
+        service: prompt.apt.service ?? null,
+        start_time: start.toISOString(),
+        end_time: new Date(start.getTime() + durationMs).toISOString(),
+        status: "Reserved",
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["appointments"] });
+      setVisitMovePrompt(null);
+      toast.success("New appointment booked - the earlier visit is unchanged");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const rescheduleAppointment = useMutation({
     mutationFn: async ({ id, newStart, newEnd }: { id: string; newStart: string; newEnd: string }) => {
-      const { error } = await supabase.from("appointments").update({ start_time: newStart, end_time: newEnd }).eq("id", id);
+      const { data: written, error } = await supabase
+        .from("appointments").update({ start_time: newStart, end_time: newEnd }).eq("id", id).select("id");
       if (error) throw error;
+      assertWrote(written);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["appointments"] });
@@ -1214,13 +1892,11 @@ const Appointments = () => {
   const resetForm = () => {
     setPatientId("");
     setStaffId("");
+    setTherapistId("");
     setServiceId("");
     setAppointmentStatus("Reserved");
     setVisitStatus("");
-    setConsultationType("");
-    setConsultationReasons([]);
-    setOthersAestheticText("");
-    setOthersClinicalText("");
+    setInvestigation("");
     setAdditionalInfoOpen(false);
     setAppointmentType("Walk-in");
     setStartDate(undefined);
@@ -1277,7 +1953,16 @@ const Appointments = () => {
   };
 
   const getApptsForDate = (date: Date) => {
-    return filteredAppointments.filter((a: any) => isSameDay(new Date(a.start_time), date));
+    // Oldest first. The rows arrive newest-first - that order is deliberate in
+    // the bulk query above, where ascending filled the memory cap with the
+    // oldest ten thousand appointments and the view's own conditions then
+    // filtered them to nothing. But a Month cell renders only its first three
+    // and buries the rest under "+N more", so newest-first there put the
+    // evening bookings in sight and the morning ones out of it. Sort here,
+    // where the day is read, and leave the fetch alone.
+    return filteredAppointments
+      .filter((a: any) => isSameDay(new Date(a.start_time), date))
+      .sort((a: any, b: any) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
   };
 
   const getApptsForSlot = (date: Date, hour: number, minute: number) => {
@@ -1301,9 +1986,50 @@ const Appointments = () => {
     return STATUS_CARD_CLASSES[apt.status] || STATUS_CARD_CLASSES.Proposed;
   };
 
+  // Who saw the patient. Falls back to the recorded name because nine doctors
+  // who worked here between 2020 and 2026 were never staff members and are not
+  // going to be - without the fallback their 3,640 appointments show no doctor
+  // at all.
   const getDoctorName = (apt: any) => {
-    return apt.staff_id ? (staffMap.get(apt.staff_id) || "") : "";
+    const fromStaff = apt.staff_id ? staffMap.get(apt.staff_id) : "";
+    return fromStaff || apt.doctor_name || "";
   };
+
+  /**
+   * The rows in the order the headers ask for.
+   *
+   * Most columns are ordered by Postgres before the page is cut, so this
+   * usually hands `visibleTableRows` straight back. Two cases need doing here:
+   * Bill Amount and Payment Mode, whose values are looked up per page and so
+   * have nothing on `appointments` to order by; and a saved view carrying
+   * filter conditions, which abandons server paging for a bulk query with a
+   * fixed order - every header on such a view was inert until now.
+   */
+  const sortedTableRows = useMemo(() => {
+    const needsClientSort = viewHasFilters || isPageSortedColumn(effectiveSort.column);
+    if (!needsClientSort) return visibleTableRows;
+    type SortRow = {
+      id: string;
+      start_time?: string | null;
+      status?: string | null;
+      patient_name?: string | null;
+      patients?: { first_name?: string | null; last_name?: string | null; phone?: string | null } | null;
+      reason_for_consultation?: string | null;
+      service?: string | null;
+      staff_id?: string | null;
+      doctor_name?: string | null;
+    };
+    return sortAppointments(visibleTableRows as SortRow[], effectiveSort.column, effectiveSort.direction, {
+      invoiceFor: (id: string) => billInvoiceByAppointmentId.get(id),
+      patientName: (apt: SortRow) =>
+        appointmentPatientName(apt, ""),
+      phone: (apt: SortRow) => apt.patients?.phone || "",
+      doctorName: (apt: SortRow) => getDoctorName(apt),
+      investigation: (apt: SortRow) => investigationText(apt, ""),
+    });
+    // getDoctorName reads staffMap, which is the dependency that matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleTableRows, viewHasFilters, effectiveSort.column, effectiveSort.direction, billInvoiceByAppointmentId, staffMap]);
 
   const statusColor = (status: string) => {
     return STATUS_BADGE_CLASSES[status] || STATUS_BADGE_CLASSES.Proposed;
@@ -1343,7 +2069,9 @@ const Appointments = () => {
       dragRef.current = null;
       return;
     }
-    rescheduleAppointment.mutate({ id: aptId, newStart: newStart.toISOString(), newEnd: newEnd.toISOString() });
+    void guardVisitMove(aptId, newStart.toISOString(), () =>
+      rescheduleAppointment.mutate({ id: aptId, newStart: newStart.toISOString(), newEnd: newEnd.toISOString() }),
+    );
     dragRef.current = null;
   };
 
@@ -1362,7 +2090,9 @@ const Appointments = () => {
       dragRef.current = null;
       return;
     }
-    rescheduleAppointment.mutate({ id: aptId, newStart: newStart.toISOString(), newEnd: newEnd.toISOString() });
+    void guardVisitMove(aptId, newStart.toISOString(), () =>
+      rescheduleAppointment.mutate({ id: aptId, newStart: newStart.toISOString(), newEnd: newEnd.toISOString() }),
+    );
     dragRef.current = null;
   };
 
@@ -1450,9 +2180,12 @@ const Appointments = () => {
         compact ? "px-1.5 py-0.5 text-[10px]" : "p-2 text-xs mb-1"
       )}
       onMouseDown={(e) => { e.stopPropagation(); }}
-      onClick={(e) => { e.stopPropagation(); setOpenModal("appointmentDetail", apt.id); }}
+      onClick={(e) => { e.stopPropagation(); openAppointment(apt.id); }}
     >
-      <p className="font-medium truncate">{apt.patient_name || apt.patients?.first_name || "—"}</p>
+      <p className="font-medium truncate flex items-center gap-1">
+        {appointmentPatientIsVip(apt) && <VipBadge size="icon" />}
+        <span className="truncate">{appointmentPatientName(apt)}</span>
+      </p>
       {!compact && <p className="opacity-70 truncate">{apt.service}</p>}
       {getDoctorName(apt) && (
         <p className={cn("truncate", compact ? "opacity-70" : "opacity-70 mt-0.5")}>
@@ -1500,7 +2233,7 @@ const Appointments = () => {
             onClick={() => setShowFilters(!showFilters)}
           >
             <Filter className="h-4 w-4" />
-            {(searchQuery || filterDoctors.size > 0 || datePreset !== "this_week" || filterStatus !== "all" || filterVisitStatus !== "all") && (
+            {narrowedBy.length > 0 && (
               <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-primary" />
             )}
           </Button>
@@ -1514,7 +2247,6 @@ const Appointments = () => {
           >
             <Printer className="h-4 w-4" />
           </Button>
-          <SalesforceSyncButton />
           <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setLockPatient(false); }}>
             <DialogTrigger asChild>
               <Button className="gap-2 h-8 md:h-9 text-xs md:text-sm"><Plus className="h-4 w-4" /> <span className="hidden sm:inline">New</span> Appt</Button>
@@ -1635,6 +2367,23 @@ const Appointments = () => {
                     </Select>
                   </div>
 
+                  {/* Who will carry out the treatment, as opposed to who sees
+                      the patient. Optional at booking - the front desk often
+                      does not know yet, and it is set or swapped later from
+                      the appointment itself. */}
+                  <div>
+                    <Label>Therapist</Label>
+                    <StaffCombobox
+                      className="mt-1.5"
+                      value={therapistId}
+                      onValueChange={setTherapistId}
+                      roleFilter={[...THERAPIST_ROLES]}
+                      allowNone
+                      noneLabel="No therapist assigned"
+                      placeholder="Select therapist"
+                    />
+                  </div>
+
                   <div>
                     <Label>Status</Label>
                     <Select value={appointmentStatus} onValueChange={setAppointmentStatus}>
@@ -1708,34 +2457,32 @@ const Appointments = () => {
                     </div>
                 </div>
 
-                {/* Consultation Type & Reasons */}
+                {/* Investigation. Reason for Consultation now lives on the patient. */}
                 <div>
-                  <ConsultationReasonPicker
-                    consultationType={consultationType}
-                    onConsultationTypeChange={setConsultationType}
-                    consultationReasons={consultationReasons}
-                    onConsultationReasonsChange={setConsultationReasons}
-                    othersAestheticText={othersAestheticText}
-                    setOthersAestheticText={setOthersAestheticText}
-                    othersClinicalText={othersClinicalText}
-                    setOthersClinicalText={setOthersClinicalText}
+                  <Label>Investigation</Label>
+                  <Textarea
+                    value={investigation}
+                    onChange={(e) => setInvestigation(e.target.value)}
+                    placeholder="What was investigated at this visit"
+                    rows={2}
+                    className="mt-1.5"
                   />
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <Label>Date *</Label>
-                    <Popover>
-                      <PopoverTrigger asChild>
+                    <CalendarPopover
+                      selected={startDate}
+                      onSelect={setStartDate}
+                      disabled={disablePastDates}
+                      trigger={
                         <Button variant="outline" className={cn("w-full mt-1.5 justify-start text-left font-normal", !startDate && "text-muted-foreground")}>
                           <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                           <span className="truncate">{startDate ? format(startDate, "PP") : "Pick a date"}</span>
                         </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar mode="single" selected={startDate} onSelect={setStartDate} disabled={disablePastDates} initialFocus className={cn("p-3 pointer-events-auto")} />
-                      </PopoverContent>
-                    </Popover>
+                      }
+                    />
                   </div>
                   <div>
                     <Label>Start Time *</Label>
@@ -1781,17 +2528,17 @@ const Appointments = () => {
                       </div>
                       <div>
                         <Label>Repeat Until *</Label>
-                        <Popover>
-                          <PopoverTrigger asChild>
+                        <CalendarPopover
+                          selected={recurrenceEndDate}
+                          onSelect={setRecurrenceEndDate}
+                          disabled={(date) => date < (startDate || new Date())}
+                          trigger={
                             <Button variant="outline" className={cn("w-full mt-1.5 justify-start text-left font-normal", !recurrenceEndDate && "text-muted-foreground")}>
                               <CalendarIcon className="mr-2 h-4 w-4" />
                               {recurrenceEndDate ? format(recurrenceEndDate, "PPP") : "Select end date"}
                             </Button>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-auto p-0" align="start">
-                            <Calendar mode="single" selected={recurrenceEndDate} onSelect={setRecurrenceEndDate} disabled={(date) => date < (startDate || new Date())} initialFocus className={cn("p-3 pointer-events-auto")} />
-                          </PopoverContent>
-                        </Popover>
+                          }
+                        />
                       </div>
                       {startDate && recurrenceEndDate && (
                         <div className="bg-muted/50 rounded-lg p-3">
@@ -1946,17 +2693,23 @@ const Appointments = () => {
         </div>
       </div>
 
+      {view === "table" && apptPageError && (
+        <QueryTimeoutNotice error={apptPageError} onRetry={() => refetchApptPage()} className="mb-4" />
+      )}
+
       {view === "table" && (
+
         <div className="mb-4">
           <ViewBar
             views={allViews}
             activeView={activeView}
             currentUserId={viewsUserId}
-            onSelect={selectView}
+            onSelect={selectViewAndDate}
             onNew={() => { setEditingView(null); setViewEditorOpen(true); }}
             onEdit={(v) => { setEditingView(v); setViewEditorOpen(true); }}
             onDelete={(v) => setDeleteViewTarget(v)}
             onPin={pinDefault}
+            onUnpin={unpinDefault}
             onClone={(v) => { setEditingView({ ...v, id: undefined as any, name: `${v.name} (Copy)`, is_default: false }); setViewEditorOpen(true); }}
             onFields={() => setViewFieldsOpen(true)}
             onRefresh={() => queryClient.invalidateQueries({ queryKey: ["appointments"] })}
@@ -1965,6 +2718,7 @@ const Appointments = () => {
             displayModes={["table", "kanban"]}
             onKanbanSettings={() => setKanbanOpen(true)}
             count={apptTotal}
+            countLoading={apptPageLoading}
             search={searchQuery}
             onSearchChange={setSearchQuery}
             itemLabel="Appointments"
@@ -1993,11 +2747,14 @@ const Appointments = () => {
               <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading charts…</div>}>
                 <ViewChartsPanel
                   charts={activeView.charts ?? []}
-                  rows={visibleTableRows.map((apt) => toViewRow(apt, pageInvoiceByAppointmentId))}
+                  rows={visibleTableRows.map((apt) => toViewRow(apt, billInvoiceByAppointmentId))}
                   canManage={activeView.owner_id === viewsUserId}
                   onChange={(charts) => saveCharts(activeView.id, charts)}
                   onClose={() => setViewChartsOpen(false)}
                   fields={APPOINTMENT_VIEW_FIELDS}
+                  // A chart grouped by a picklist shows the names behind the
+                  // ids the column stores - the doctor field holds a staff id.
+                  optionsFor={viewOptionsFor}
                   itemLabel="Appointments"
                   defaultGroupField="status"
                 />
@@ -2066,48 +2823,45 @@ const Appointments = () => {
             </div>
 
             {datePreset === "specific" && (
-              <Popover>
-                <PopoverTrigger asChild>
+              <CalendarPopover
+                selected={specificDate}
+                onSelect={setSpecificDate}
+                trigger={
                   <Button variant="outline" size="sm" className={cn("h-9 text-sm gap-2", specificDate && "border-primary text-primary")}>
                     <CalendarIcon className="h-4 w-4" />
                     {specificDate ? format(specificDate, "MMM d, yyyy") : "Pick a date"}
                   </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar mode="single" selected={specificDate} onSelect={setSpecificDate} initialFocus className={cn("p-3 pointer-events-auto")} />
-                </PopoverContent>
-              </Popover>
+                }
+              />
             )}
 
             {datePreset === "range" && (
               <>
-                <Popover>
-                  <PopoverTrigger asChild>
+                <CalendarPopover
+                  selected={rangeFrom}
+                  onSelect={setRangeFrom}
+                  trigger={
                     <Button variant="outline" size="sm" className={cn("h-9 text-sm gap-2", rangeFrom && "border-primary text-primary")}>
                       <CalendarIcon className="h-4 w-4" />
                       {rangeFrom ? format(rangeFrom, "MMM d, yyyy") : "From"}
                     </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar mode="single" selected={rangeFrom} onSelect={setRangeFrom} initialFocus className={cn("p-3 pointer-events-auto")} />
-                  </PopoverContent>
-                </Popover>
-                <Popover>
-                  <PopoverTrigger asChild>
+                  }
+                />
+                <CalendarPopover
+                  selected={rangeTo}
+                  onSelect={setRangeTo}
+                  trigger={
                     <Button variant="outline" size="sm" className={cn("h-9 text-sm gap-2", rangeTo && "border-primary text-primary")}>
                       <CalendarIcon className="h-4 w-4" />
                       {rangeTo ? format(rangeTo, "MMM d, yyyy") : "To"}
                     </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar mode="single" selected={rangeTo} onSelect={setRangeTo} initialFocus className={cn("p-3 pointer-events-auto")} />
-                  </PopoverContent>
-                </Popover>
+                  }
+                />
               </>
             )}
 
-            {(searchQuery || filterDoctors.size > 0 || datePreset !== "this_week" || filterStatus !== "all" || filterVisitStatus !== "all") && (
-              <Button variant="ghost" size="sm" className="h-9 text-xs text-muted-foreground" onClick={() => { setSearchQuery(""); setFilterDoctors(new Set()); setFilterStatus("all"); setFilterVisitStatus("all"); setDatePreset("this_week"); setSpecificDate(undefined); setRangeFrom(undefined); setRangeTo(undefined); }}>Clear filters</Button>
+            {narrowedBy.length > 0 && (
+              <Button variant="ghost" size="sm" className="h-9 text-xs text-muted-foreground" onClick={() => { setSearchQuery(""); setFilterDoctors(new Set()); setFilterStatus("all"); setFilterVisitStatus("all"); setDatePreset("all"); setSpecificDate(undefined); setRangeFrom(undefined); setRangeTo(undefined); }}>Clear filters</Button>
             )}
             <span className="text-xs text-muted-foreground ml-auto">{(view === "table" ? apptTotal : filteredAppointments.length).toLocaleString()} appointment{(view === "table" ? apptTotal : filteredAppointments.length) !== 1 ? "s" : ""}</span>
           </motion.div>
@@ -2155,26 +2909,20 @@ const Appointments = () => {
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate(-1)}>
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
-                <Popover>
-                  <PopoverTrigger asChild>
+                <CalendarPopover
+                   selected={currentDate}
+                  onSelect={(date) => { if (date) setCurrentDate(date); }}
+                  modifiers={{ hasAppointment: appointmentDates }}
+                  modifiersClassNames={{ hasAppointment: "bg-primary/20 font-bold" }}
+                  trigger={
                     <Button variant="ghost" className="font-display font-semibold text-base hover:bg-muted/50 gap-1.5 px-2">
                       {view === "month"
                         ? format(currentDate, "MMMM yyyy")
                         : currentDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
                       <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                     </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={currentDate}
-                      onSelect={(date) => { if (date) setCurrentDate(date); }}
-                      modifiers={{ hasAppointment: appointmentDates }}
-                      modifiersClassNames={{ hasAppointment: "bg-primary/20 font-bold" }}
-                      className={cn("p-3 pointer-events-auto")}
-                    />
-                  </PopoverContent>
-                </Popover>
+                  }
+                />
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate(1)}>
                   <ChevronRight className="h-4 w-4" />
                 </Button>
@@ -2189,75 +2937,6 @@ const Appointments = () => {
             {view === "table" ? (
               /* TABLE VIEW */
               <div>
-                {/* Quick date filters */}
-                <div className="p-3 border-b flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-muted-foreground font-medium mr-1">Quick:</span>
-                  {DATE_PRESETS.filter((p) => p.key !== "specific").map((f) => (
-                    f.key === "range" ? (
-                      <Popover key={f.key} open={rangePopoverOpen} onOpenChange={setRangePopoverOpen}>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant={datePreset === f.key ? "default" : "outline"}
-                            size="sm"
-                            className="h-7 text-xs px-3"
-                            onClick={() => {
-                              setDatePreset(f.key);
-                              setRangePopoverOpen(true);
-                            }}
-                          >
-                            {f.label}
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-4" align="start">
-                          <div className="space-y-3">
-                            <div>
-                              <Label className="text-xs font-medium mb-2 block">
-                                {rangeCalendarMode === "from" ? "From Date" : "To Date"}
-                              </Label>
-                              <Calendar
-                                mode="single"
-                                selected={rangeCalendarMode === "from" ? rangeFrom : rangeTo}
-                                onSelect={(date) => {
-                                  if (rangeCalendarMode === "from") {
-                                    setRangeFrom(date);
-                                    setRangeCalendarMode("to");
-                                  } else {
-                                    setRangeTo(date);
-                                    setRangePopoverOpen(false);
-                                    setRangeCalendarMode("from");
-                                  }
-                                }}
-                                className="rounded-md border"
-                              />
-                            </div>
-                            {rangeCalendarMode === "to" && (
-                              <div className="text-xs text-muted-foreground text-center pt-2 border-t">
-                                <p>From: {rangeFrom ? format(rangeFrom, "MMM d, yyyy") : "Not set"}</p>
-                              </div>
-                            )}
-                          </div>
-                        </PopoverContent>
-                      </Popover>
-                    ) : (
-                      <Button
-                        key={f.key}
-                        variant={datePreset === f.key ? "default" : "outline"}
-                        size="sm"
-                        className="h-7 text-xs px-3"
-                        onClick={() => setDatePreset(f.key)}
-                      >
-                        {f.label}
-                      </Button>
-                    )
-                  ))}
-                  {datePreset === "range" && (rangeFrom || rangeTo) && (
-                    <span className="text-xs text-muted-foreground">· {dateFilterLabel}</span>
-                  )}
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    {apptTotal.toLocaleString()} result{apptTotal !== 1 ? "s" : ""}
-                    {isApptPageFetching ? " · loading…" : ""}
-                  </span>
-                </div>
                 {tableDisplay === "kanban" ? (
                   <ListKanban
                     rows={visibleTableRows}
@@ -2266,56 +2945,113 @@ const Appointments = () => {
                     columns={displayColumns}
                     fields={APPOINTMENT_VIEW_FIELDS}
                     rawValue={kanbanRawValue}
-                    onOpen={(row) => setOpenModal("appointmentDetail", row.id)}
+                    onOpen={(row) => openAppointment(row.id)}
                     onMove={moveKanbanCard}
                     titleField="patient"
                   />
                 ) : (
                 <>
-                <table ref={appointmentsTableRef} className="w-full text-sm responsive-table">
+                <table ref={appointmentsTableRef} className="w-full text-sm responsive-table table-fixed">
+                  <colgroup>
+                    {visibleColumnWidths.map(([key, weight]) => (
+                      <col key={key} style={{ width: colWidth(weight) }} />
+                    ))}
+                    <col style={{ width: colWidth(ACTIONS_COLUMN_WEIGHT) }} />
+                  </colgroup>
                   <thead>
                     <tr className="border-b bg-muted/30">
+                      {/* The serial number is the row's position in the list, so
+                          it is the one header that cannot be sorted by. */}
+                      {shouldShowColumn("serial") && (
+                        <th className="relative text-right p-3 font-medium text-muted-foreground">#
+                          <ColumnResizeHandle
+                            onResize={(delta) => applyColumnResize("serial", delta)}
+                            tableWidth={() => appointmentsTableRef.current?.clientWidth ?? 0}
+                          />
+                        </th>
+                      )}
                       {shouldShowColumn("patient") && (
-                        <th className="text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("patient")}>
+                        <th className="relative text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("patient")}>
                           <span className="flex items-center">Patient<SortIcon column="patient" /></span>
+                          <ColumnResizeHandle
+                            onResize={(delta) => applyColumnResize("patient", delta)}
+                            tableWidth={() => appointmentsTableRef.current?.clientWidth ?? 0}
+                          />
                         </th>
                       )}
                       {shouldShowColumn("phone") && (
-                        <th className="text-left p-3 font-medium text-muted-foreground">Phone</th>
-                      )}
-                      {shouldShowColumn("service") && (
-                        <th className="text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("service")}>
-                          <span className="flex items-center">Service<SortIcon column="service" /></span>
+                        <th className="relative text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("phone")}>
+                          <span className="flex items-center">Phone<SortIcon column="phone" /></span>
+                          <ColumnResizeHandle
+                            onResize={(delta) => applyColumnResize("phone", delta)}
+                            tableWidth={() => appointmentsTableRef.current?.clientWidth ?? 0}
+                          />
                         </th>
                       )}
                       {shouldShowColumn("doctor") && (
-                        <th className="text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("doctor")}>
+                        <th className="relative text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("doctor")}>
                           <span className="flex items-center">Doctor<SortIcon column="doctor" /></span>
+                          <ColumnResizeHandle
+                            onResize={(delta) => applyColumnResize("doctor", delta)}
+                            tableWidth={() => appointmentsTableRef.current?.clientWidth ?? 0}
+                          />
                         </th>
                       )}
-                      {shouldShowColumn("start_time") && (
-                        <th className="text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("start_time")}>
-                          <span className="flex items-center">Date<SortIcon column="start_time" /></span>
+                      {shouldShowColumn("therapist") && (
+                        <th className="relative text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("therapist")}>
+                          <span className="flex items-center">Therapist<SortIcon column="therapist" /></span>
+                          <ColumnResizeHandle
+                            onResize={(delta) => applyColumnResize("therapist", delta)}
+                            tableWidth={() => appointmentsTableRef.current?.clientWidth ?? 0}
+                          />
                         </th>
                       )}
-                      {shouldShowColumn("time") && (
-                        <th className="text-left p-3 font-medium text-muted-foreground">Time</th>
-                      )}
-                      {shouldShowColumn("status") && (
-                        <th className="text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("status")}>
-                          <span className="flex items-center">Status<SortIcon column="status" /></span>
+                      {shouldShowColumn("payment_mode") && (
+                        <th className="relative text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" title="Sorts the appointments on this page - the bill is looked up per page, so it cannot be ordered across them" onClick={() => toggleSort("payment_mode")}>
+                          <span className="flex items-center">Payment Mode<SortIcon column="payment_mode" /></span>
+                          <ColumnResizeHandle
+                            onResize={(delta) => applyColumnResize("payment_mode", delta)}
+                            tableWidth={() => appointmentsTableRef.current?.clientWidth ?? 0}
+                          />
                         </th>
                       )}
                       {shouldShowColumn("bill") && (
-                        <th className="text-left p-3 font-medium text-muted-foreground" title="Not sortable across pages">
-                          Bill Amount
+                        <th className="relative text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" title="Sorts the appointments on this page - the bill is looked up per page, so it cannot be ordered across them" onClick={() => toggleSort("bill")}>
+                          <span className="flex items-center">Bill Amount<SortIcon column="bill" /></span>
+                          <ColumnResizeHandle
+                            onResize={(delta) => applyColumnResize("bill", delta)}
+                            tableWidth={() => appointmentsTableRef.current?.clientWidth ?? 0}
+                          />
                         </th>
                       )}
-                      {shouldShowColumn("visit_status") && (
-                        <th className="text-left p-3 font-medium text-muted-foreground">Next Visit</th>
+                      {shouldShowColumn("start_time") && (
+                        <th className="relative text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("start_time")}>
+                          <span className="flex items-center">Date &amp; Time<SortIcon column="start_time" /></span>
+                          <ColumnResizeHandle
+                            onResize={(delta) => applyColumnResize("start_time", delta)}
+                            tableWidth={() => appointmentsTableRef.current?.clientWidth ?? 0}
+                          />
+                        </th>
                       )}
-                      {shouldShowColumn("payment_mode") && (
-                        <th className="text-left p-3 font-medium text-muted-foreground">Payment Mode</th>
+                      {/* Column key stays "service" so saved views keep working; what it
+                          shows and sorts on is the Investigation text. */}
+                      {shouldShowColumn("service") && (
+                        <th className="relative text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("reason_for_consultation")}>
+                          <span className="flex items-center">Investigation<SortIcon column="reason_for_consultation" /></span>
+                          <ColumnResizeHandle
+                            onResize={(delta) => applyColumnResize("service", delta)}
+                            tableWidth={() => appointmentsTableRef.current?.clientWidth ?? 0}
+                          />
+                        </th>
+                      )}
+                      {shouldShowColumn("status") && (
+                        <th className="relative text-left p-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("status")}>
+                          <span className="flex items-center">Status<SortIcon column="status" /></span>
+                          <ColumnResizeHandle
+                            onResize={(delta) => applyColumnResize("status", delta)}
+                            tableWidth={() => appointmentsTableRef.current?.clientWidth ?? 0}
+                          />
+                        </th>
                       )}
                       <th className="text-left p-3 font-medium text-muted-foreground w-20">Actions</th>
                     </tr>
@@ -2332,7 +3068,9 @@ const Appointments = () => {
                       const paddingBottom = inOverlay || virtualRows.length === 0
                         ? 0
                         : totalSize - ((virtualRows[virtualRows.length - 1] as any).end - tableScrollMargin);
-                      const colSpan = displayColumns.length + 1;
+                      // The columns actually rendered: the saved ones that survive
+                      // the width filter, plus the always-shown ones, plus Actions.
+                      const colSpan = visibleColumnWidths.length + 1;
 
                       return (
                         <>
@@ -2340,10 +3078,10 @@ const Appointments = () => {
                             <tr><td colSpan={colSpan} style={{ height: paddingTop, padding: 0, border: 0 }} /></tr>
                           )}
                           {virtualRows.map((virtualRow) => {
-                            const apt = visibleTableRows[virtualRow.index];
+                            const apt = sortedTableRows[virtualRow.index];
                             if (!apt) return null;
                             const patientPhone = apt.patients?.phone || "";
-                            const invoice = pageInvoiceByAppointmentId.get(apt.id);
+                            const invoice = billInvoiceByAppointmentId.get(apt.id);
                             const isEditing = editingRow === apt.id;
 
                             if (isEditing) {
@@ -2354,94 +3092,133 @@ const Appointments = () => {
                                   data-index={virtualRow.index}
                                   className="border-b bg-primary/5"
                                 >
-                                  {shouldShowColumn("patient") && (
-                                    <td className="p-2 font-medium">{apt.patient_name || (apt.patients ? `${apt.patients.first_name} ${apt.patients.last_name}` : "—")}</td>
-                                  )}
-                                  {shouldShowColumn("phone") && (
-                                    <td className="p-2 text-muted-foreground text-xs">{patientPhone || "—"}</td>
-                                  )}
-                                  {shouldShowColumn("service") && (
-                                    <td className="p-2">
-                                      <Select value={editValues.service} onValueChange={(val) => setEditValues({ ...editValues, service: val })}>
-                                        <SelectTrigger className="h-8 text-xs w-36"><SelectValue /></SelectTrigger>
-                                        <SelectContent>
-                                          {services.map((s) => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
-                                        </SelectContent>
-                                      </Select>
-                                    </td>
-                                  )}
-                                  {shouldShowColumn("doctor") && (
-                                    <td className="p-2">
-                                      <Select value={editValues.staff_id} onValueChange={(val) => setEditValues({ ...editValues, staff_id: val })}>
-                                        <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="Select" /></SelectTrigger>
-                                        <SelectContent>
-                                          {doctorsList.map((d: any) => <SelectItem key={d.id} value={d.id}>{d.first_name} {d.last_name}</SelectItem>)}
-                                        </SelectContent>
-                                      </Select>
-                                    </td>
-                                  )}
-                                  {shouldShowColumn("start_time") && (
-                                    <td className="p-2">
-                                      <Input
-                                        type="date"
-                                        className="h-8 text-xs w-36"
-                                        value={datePart(editValues.start_time)}
-                                        onChange={(e) =>
-                                          setEditValues((v: any) => ({
-                                            ...v,
-                                            start_time: joinDateTime(e.target.value, timePart(v.start_time)),
-                                            end_time: joinDateTime(e.target.value, timePart(v.end_time)),
-                                          }))
-                                        }
-                                      />
-                                    </td>
-                                  )}
-                                  {shouldShowColumn("time") && (
-                                    <td className="p-2">
-                                      <div className="flex items-center gap-1.5">
-                                        <TimePicker12h
-                                          compact
-                                          className="w-32"
-                                          value={timePart(editValues.start_time)}
-                                          onChange={(t) =>
-                                            setEditValues((v: any) => ({ ...v, start_time: joinDateTime(datePart(v.start_time), t) }))
-                                          }
-                                        />
-                                        <span className="text-xs text-muted-foreground">–</span>
-                                        <TimePicker12h
-                                          compact
-                                          className="w-32"
-                                          value={timePart(editValues.end_time)}
-                                          onChange={(t) =>
-                                            setEditValues((v: any) => ({ ...v, end_time: joinDateTime(datePart(v.end_time) || datePart(editValues.start_time), t) }))
-                                          }
-                                        />
+                                  {/* The editor gets a row of its own, spanning the table.
+                                      Laid out cell-by-cell it had to live inside columns sized
+                                      for reading - Date is 7% of the width, enough for "Sep 24",
+                                      and Time 12%, enough for "10:15 AM - 10:30 AM" - so a date
+                                      box and two time pickers were crushed into them and came
+                                      out as "24/09/20:" and ": AM PM". Those shares cannot
+                                      simply be widened: the colgroup is table-wide and the
+                                      virtualizer measures against it (see
+                                      APPOINTMENT_COLUMN_WIDTHS). A colSpan cell sidesteps the
+                                      colgroup entirely, so the editor gets the full width and
+                                      the reading columns are left alone. */}
+                                  <td className="p-3" colSpan={visibleColumnWidths.length + 1}>
+                                    <div className="flex flex-wrap items-end gap-3">
+                                      {/* Always shown, whatever columns are on: without it the
+                                          strip does not say whose appointment is being changed. */}
+                                      <div className="min-w-[9rem]">
+                                        <span className="text-[11px] text-muted-foreground">Patient</span>
+                                        <p className="text-sm font-medium leading-tight flex items-center gap-1.5">
+                                          <span>{appointmentPatientName(apt)}</span>
+                                          {appointmentPatientIsVip(apt) && <VipBadge />}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground leading-tight">{patientPhone || "—"}</p>
                                       </div>
-                                    </td>
-                                  )}
-                                  {shouldShowColumn("status") && (
-                                    <td className="p-2">
-                                      <Select value={editValues.status} onValueChange={(val) => setEditValues({ ...editValues, status: val })}>
-                                        <SelectTrigger className="h-8 text-xs w-28"><SelectValue /></SelectTrigger>
-                                        <SelectContent>
-                                          {statusOptions.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                                        </SelectContent>
-                                      </Select>
-                                    </td>
-                                  )}
-                                  {shouldShowColumn("bill") && (
-                                    <td className="p-2 text-muted-foreground text-xs">{invoice ? `₹${invoice.total_amount?.toLocaleString()}` : "—"}</td>
-                                  )}
-                                  {shouldShowColumn("visit_status") && (
-                                    <td className="p-2 text-muted-foreground text-xs">{apt.visit_status || "—"}</td>
-                                  )}
-                                  {shouldShowColumn("payment_mode") && (
-                                    <td className="p-2 text-muted-foreground text-xs">{invoice?.payment_mode || "—"}</td>
-                                  )}
-                                  <td className="p-2">
-                                    <div className="flex items-center gap-1">
-                                      <Button variant="ghost" size="icon" className="h-7 w-7 text-success" onClick={saveInlineEdit}><CheckIcon className="h-3.5 w-3.5" /></Button>
-                                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={cancelInlineEdit}><X className="h-3.5 w-3.5" /></Button>
+
+                                      {shouldShowColumn("service") && (
+                                        <div className="min-w-[13rem] flex-1">
+                                          <span className="text-[11px] text-muted-foreground">Investigation</span>
+                                          <Input
+                                            className="mt-1 h-8 text-xs"
+                                            placeholder="Investigation"
+                                            value={editValues.reason_for_consultation ?? ""}
+                                            onChange={(e) => setEditValues({ ...editValues, reason_for_consultation: e.target.value })}
+                                          />
+                                        </div>
+                                      )}
+
+                                      {shouldShowColumn("doctor") && (
+                                        <div className="w-44">
+                                          <span className="text-[11px] text-muted-foreground">Doctor</span>
+                                          <Select value={editValues.staff_id} onValueChange={(val) => setEditValues({ ...editValues, staff_id: val })}>
+                                            <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger>
+                                            <SelectContent>
+                                              {doctorsList.map((d: any) => <SelectItem key={d.id} value={d.id}>{d.first_name} {d.last_name}</SelectItem>)}
+                                            </SelectContent>
+                                          </Select>
+                                        </div>
+                                      )}
+
+                                      {shouldShowColumn("therapist") && (
+                                        <div className="w-44">
+                                          <span className="text-[11px] text-muted-foreground">Therapist</span>
+                                          <StaffCombobox
+                                            className="mt-1 h-8 text-xs"
+                                            value={editValues.therapist_id || ""}
+                                            onValueChange={(val) => setEditValues({ ...editValues, therapist_id: val })}
+                                            roleFilter={[...THERAPIST_ROLES]}
+                                            allowNone
+                                            noneLabel="No therapist"
+                                            placeholder="Select"
+                                          />
+                                        </div>
+                                      )}
+
+                                      {shouldShowColumn("start_time") && (
+                                        <div className="w-36">
+                                          <span className="text-[11px] text-muted-foreground">Date</span>
+                                          <DateInput
+                                            className="mt-1 h-8 text-xs"
+                                            value={datePart(editValues.start_time)}
+                                            onChange={(isoDate) =>
+                                              setEditValues((v: any) => ({
+                                                ...v,
+                                                start_time: joinDateTime(isoDate, timePart(v.start_time)),
+                                                end_time: joinDateTime(isoDate, timePart(v.end_time)),
+                                              }))
+                                            }
+                                          />
+                                        </div>
+                                      )}
+
+                                      {/* Gated on start_time, not on a "time" column: date
+                                          and clock time are one column now, and the editor
+                                          still has to offer both ends of the slot even
+                                          though only the start is displayed. */}
+                                      {shouldShowColumn("start_time") && (
+                                        <>
+                                          <div className="w-36">
+                                            <span className="text-[11px] text-muted-foreground">Start</span>
+                                            <TimePicker12h
+                                              compact
+                                              className="mt-1"
+                                              value={timePart(editValues.start_time)}
+                                              onChange={(t) =>
+                                                setEditValues((v: any) => ({ ...v, start_time: joinDateTime(datePart(v.start_time), t) }))
+                                              }
+                                            />
+                                          </div>
+                                          <div className="w-36">
+                                            <span className="text-[11px] text-muted-foreground">End</span>
+                                            <TimePicker12h
+                                              compact
+                                              className="mt-1"
+                                              value={timePart(editValues.end_time)}
+                                              onChange={(t) =>
+                                                setEditValues((v: any) => ({ ...v, end_time: joinDateTime(datePart(v.end_time) || datePart(editValues.start_time), t) }))
+                                              }
+                                            />
+                                          </div>
+                                        </>
+                                      )}
+
+                                      {shouldShowColumn("status") && (
+                                        <div className="w-36">
+                                          <span className="text-[11px] text-muted-foreground">Status</span>
+                                          <Select value={editValues.status} onValueChange={(val) => setEditValues({ ...editValues, status: val })}>
+                                            <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
+                                            <SelectContent>
+                                              {statusOptions.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                                            </SelectContent>
+                                          </Select>
+                                        </div>
+                                      )}
+
+                                      <div className="ml-auto flex items-center gap-1 pb-0.5">
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-success" onClick={saveInlineEdit}><CheckIcon className="h-4 w-4" /></Button>
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={cancelInlineEdit}><X className="h-4 w-4" /></Button>
+                                      </div>
                                     </div>
                                   </td>
                                 </tr>
@@ -2454,18 +3231,28 @@ const Appointments = () => {
                                 ref={rowVirtualizer.measureElement}
                                 data-index={virtualRow.index}
                                 className="border-b hover:bg-muted/20 cursor-pointer transition-colors"
-                                onClick={() => setOpenModal("appointmentDetail", apt.id)}
+                                onClick={() => openAppointment(apt.id)}
                               >
+                                {shouldShowColumn("serial") && (
+                                  <td className="p-3 text-right text-xs text-muted-foreground tabular-nums">
+                                    {/* The row's place in the whole list, not in the
+                                        window the virtualizer happens to be drawing, and
+                                        offset by the pages before this one - so it reads
+                                        1..n down the list and 201 at the top of page 2. */}
+                                    {(apptPage - 1) * APPT_PAGE_SIZE + virtualRow.index + 1}
+                                  </td>
+                                )}
                                 {shouldShowColumn("patient") && (
                                   <td className="p-3 font-medium">
                                     <div className="flex items-center gap-2.5 min-w-0">
                                       <PatientAvatar
-                                        firstName={apt.patients?.first_name || (apt.patient_name || "").split(" ")[0]}
-                                        lastName={apt.patients?.last_name || (apt.patient_name || "").split(" ").slice(1).join(" ")}
+                                        firstName={appointmentPatientInitials(apt).firstName}
+                                        lastName={appointmentPatientInitials(apt).lastName}
                                         photoUrl={apt.patient_id ? appointmentAvatars[apt.patient_id] : undefined}
                                         className="h-8 w-8"
                                       />
-                                      <span className="truncate">{apt.patient_name || (apt.patients ? `${apt.patients.first_name} ${apt.patients.last_name}` : "—")}</span>
+                                      <span className="truncate">{appointmentPatientName(apt)}</span>
+                                      {appointmentPatientIsVip(apt) && <VipBadge />}
                                     </div>
                                   </td>
                                 )}
@@ -2474,28 +3261,74 @@ const Appointments = () => {
                                     {patientPhone ? <span className="flex items-center gap-1 text-xs"><Phone className="h-3 w-3" />{patientPhone}</span> : "—"}
                                   </td>
                                 )}
-                                {shouldShowColumn("service") && (
-                                  <td className="p-3">
-                                    {/* Clamped so one long value can't set the height of the whole
-                                        row - imported data has put paragraphs in here. truncate
-                                        needs a bounded width, and max-w on the td itself is
-                                        unreliable under table layout, hence the inner block span. */}
-                                    <span className="block max-w-[240px] truncate" title={apt.service || ""}>
-                                      {apt.service || "—"}
-                                    </span>
+                                {/* Doctor is bold, and out of the muted grey the other
+                                    secondary columns use: bold grey barely reads as bold,
+                                    and this is one of the two names a clinician scans the
+                                    list for. The em dash stays muted - an absence, not a
+                                    name. */}
+                                {shouldShowColumn("doctor") && (
+                                  <td className="p-3 font-semibold">
+                                    {getDoctorName(apt) || <span className="font-normal text-muted-foreground">—</span>}
                                   </td>
                                 )}
-                                {shouldShowColumn("doctor") && (
-                                  <td className="p-3 text-muted-foreground">{apt.staff_id ? (staffMap.get(apt.staff_id) || "—") : "—"}</td>
+                                {shouldShowColumn("therapist") && (
+                                  <td className="p-3">
+                                    {therapistDisplayName(apt) || <span className="text-muted-foreground">—</span>}
+                                  </td>
+                                )}
+                                {shouldShowColumn("payment_mode") && (
+                                  <td className="p-3 text-xs">
+                                    {/* A bill paid two ways names each mode AND what went on
+                                        it - "Card ₹26,939", "UPI ₹2,420". This column used to
+                                        say only "Split", then only "Card + UPI", and the
+                                        clinic's next question both times was how much on
+                                        each. The amounts were in payment_splits all along.
+                                        Exact, never abbreviated: these get reconciled against
+                                        the drawer. See paymentSplits.ts. */}
+                                    {(invoice?.bills ?? []).length > 1 ? (
+                                      <span className="flex flex-col items-start gap-0.5">
+                                        {invoice!.bills.map((bill, i) => (
+                                          <PaymentModeCell
+                                            key={bill.id ?? i}
+                                            mode={bill.payment_mode}
+                                            splits={bill.payment_splits}
+                                          />
+                                        ))}
+                                      </span>
+                                    ) : invoice?.payment_mode ? (
+                                      <PaymentModeCell mode={invoice.payment_mode} splits={invoice.payment_splits} />
+                                    ) : (
+                                      <span className="text-muted-foreground">—</span>
+                                    )}
+                                  </td>
+                                )}
+                                {shouldShowColumn("bill") && (
+                                  <td className="p-3 text-xs">{renderBillCell(invoice, apt, true)}</td>
                                 )}
                                 {shouldShowColumn("start_time") && (
-                                  <td className="p-3">
-                                    <p className="font-medium whitespace-nowrap">{format(new Date(apt.start_time), "MMM d")}</p>
+                                  <td className="p-3 whitespace-nowrap">
+                                    {/* Date and start time in one cell. dd/MM/yyyy via the
+                                        app's own displayDate, because a browser left to
+                                        format dates itself shows 09/24 on one clinic PC and
+                                        24/09 on the next. The end time is still recorded and
+                                        still edited in the row editor and the appointment
+                                        sheet - it just does not earn width here. */}
+                                    <p className="font-medium">{displayDate(apt.start_time)}</p>
+                                    <p className="text-xs text-muted-foreground">{format(new Date(apt.start_time), "h:mm a")}</p>
                                   </td>
                                 )}
-                                {shouldShowColumn("time") && (
-                                  <td className="p-3 text-xs text-muted-foreground whitespace-nowrap">
-                                    {format(new Date(apt.start_time), "h:mm a")} – {format(new Date(apt.end_time), "h:mm a")}
+                                {shouldShowColumn("service") && (
+                                  <td className="p-3">
+                                    {/* The Investigation text as Salesforce recorded it, which is
+                                        what staff need to read - the resolved service name often
+                                        collapses to "Consultation" and hides what was done. Falls
+                                        back to the resolved name when there is no text.
+
+                                        Clamped because imported data has put paragraphs in here;
+                                        the column is table-fixed so truncate has a bounded width. */}
+                                    <span className="block truncate" title={investigationText(apt)}>
+                                      {investigationText(apt, "—")}
+                                    </span>
                                   </td>
                                 )}
                                 {shouldShowColumn("status") && (
@@ -2509,28 +3342,23 @@ const Appointments = () => {
                                         prevStatus: apt.status,
                                         newStatus: val,
                                         startTime: apt.start_time,
-                                        doctorName: apt.staff_id ? (staffMap.get(apt.staff_id) || "") : "",
+                                        doctorName: getDoctorName(apt),
                                         serviceName: apt.service || "",
                                         patientGender: apt.patients?.gender || null,
                                       },
                                     })}>
-                                      <SelectTrigger className="h-7 w-28 text-xs border-0 bg-transparent p-0">
-                                        <Badge className={cn("text-xs", statusColor(apt.status))}>{apt.status}</Badge>
+                                      {/* Shrink-to-fit. It was a fixed w-28, which
+                                          "Completed" very nearly filled - the shorter
+                                          "Billed" left the remainder as a gap before the
+                                          chevron, the trigger being justify-between. */}
+                                      <SelectTrigger className="h-7 w-auto gap-1 text-xs border-0 bg-transparent p-0">
+                                        <Badge className={cn("text-xs", showsAsBilled(apt.status, billInvoiceByAppointmentId.has(apt.id)) ? BILLED_BADGE_CLASSES : statusColor(apt.status))}>{appointmentStatusLabel(apt.status, billInvoiceByAppointmentId.has(apt.id))}</Badge>
                                       </SelectTrigger>
                                       <SelectContent>
                                         {statusOptions.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                                       </SelectContent>
                                     </Select>
                                   </td>
-                                )}
-                                {shouldShowColumn("bill") && (
-                                  <td className="p-3 text-xs">{invoice ? <span className="font-medium">₹{invoice.total_amount?.toLocaleString()}</span> : <span className="text-muted-foreground">—</span>}</td>
-                                )}
-                                {shouldShowColumn("visit_status") && (
-                                  <td className="p-3 text-xs">{apt.visit_status ? <Badge variant="outline" className="text-xs">{apt.visit_status}</Badge> : <span className="text-muted-foreground">—</span>}</td>
-                                )}
-                                {shouldShowColumn("payment_mode") && (
-                                  <td className="p-3 text-xs">{invoice?.payment_mode ? <Badge variant="outline" className="text-xs">{invoice.payment_mode}</Badge> : <span className="text-muted-foreground">—</span>}</td>
                                 )}
                                 <td className="p-3" onClick={(e) => e.stopPropagation()}>
                                   <div className="flex items-center gap-0.5">
@@ -2547,7 +3375,8 @@ const Appointments = () => {
                                         params.set("appointment_id", apt.id);
                                         if (apt.patient_id) params.set("patient_id", apt.patient_id);
                                         if (apt.staff_id) params.set("staff_id", apt.staff_id);
-                                        if (apt.service) params.set("service", apt.service);
+                                        // No service in the URL: the form takes none from anybody
+                                        // and opens with an empty line. See procedureFormSeed.ts.
                                         routerNavigate(`/procedures/new?${params.toString()}`);
                                       }}
                                     >
@@ -2560,7 +3389,8 @@ const Appointments = () => {
                                       title="Delete appointment"
                                       onClick={() => setDeleteTarget({
                                         id: apt.id,
-                                        label: `${apt.patient_name || (apt.patients ? `${apt.patients.first_name} ${apt.patients.last_name}` : "Appointment")} — ${format(new Date(apt.start_time), "MMM d, h:mm a")}`,
+                                        label: `${appointmentPatientName(apt, "Appointment")} — ${format(new Date(apt.start_time), "MMM d, h:mm a")}`,
+                                        fromSalesforce: !!apt.sf_id,
                                       })}
                                     >
                                       <Trash2 className="h-3.5 w-3.5" />
@@ -2577,13 +3407,33 @@ const Appointments = () => {
                       );
                     })()}
                     {visibleTableRows.length === 0 && (
-                      <tr><td colSpan={displayColumns.length + 1} className="p-8 text-center text-muted-foreground">No appointments found</td></tr>
+                      <tr>
+                        <td colSpan={visibleColumnWidths.length + 1} className="p-8 text-center text-muted-foreground">
+                          {apptPageLoading ? "Loading…" : (
+                            <>
+                              {emptyAppointmentsMessage(narrowedBy)}
+                              {narrowedBy.length > 0 && (
+                                <Button
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto p-0 ml-2 text-xs"
+                                  onClick={clearListFilters}
+                                >
+                                  Clear filters
+                                </Button>
+                              )}
+                            </>
+                          )}
+                        </td>
+                      </tr>
                     )}
                   </tbody>
                 </table>
                 <div className="p-3 border-t flex items-center justify-between gap-3 text-xs text-muted-foreground">
                   <span>
-                    Page {apptPage} of {Math.max(1, Math.ceil(apptTotal / APPT_PAGE_SIZE))}
+                    {viewHasFilters
+                      ? `Page ${apptPage} of ${Math.max(1, Math.ceil(apptTotal / APPT_PAGE_SIZE))}`
+                      : `Page ${apptPage}`}
                   </span>
                   <div className="flex items-center gap-2">
                     <Button
@@ -2599,7 +3449,7 @@ const Appointments = () => {
                       variant="outline"
                       size="sm"
                       className="h-7 text-xs px-3"
-                      disabled={apptPage >= Math.ceil(apptTotal / APPT_PAGE_SIZE)}
+                      disabled={!apptHasMore}
                       onClick={() => setApptPage((p) => p + 1)}
                     >
                       Next
@@ -2780,11 +3630,6 @@ const Appointments = () => {
         </motion.div>
       </div>
 
-      <AppointmentDetailSheet
-        appointmentId={selectedAppointmentId}
-        onClose={() => setSelectedAppointmentId(null)}
-      />
-
       <Dialog open={showBillingPrompt} onOpenChange={setShowBillingPrompt}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -2854,6 +3699,47 @@ const Appointments = () => {
         defaultColumns={DEFAULT_APPOINTMENT_VIEW_COLUMNS}
       />
 
+      {/* Changing the date of a visit that already happened overwrites it, and
+          the bill raised that day goes with it. Booking is offered first. */}
+      <AlertDialog open={!!visitMovePrompt} onOpenChange={(o) => { if (!o) setVisitMovePrompt(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Book a new appointment instead?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {appointmentPatientName(visitMovePrompt?.apt, "This patient")} was seen on{" "}
+              {visitMovePrompt?.apt?.start_time
+                ? format(new Date(visitMovePrompt.apt.start_time), "dd MMM yyyy")
+                : "that day"}
+              . {visitMovePrompt ? rescheduleWarning(visitMovePrompt.evidence) : ""} Changing the date to{" "}
+              {visitMovePrompt?.newStart ? format(new Date(visitMovePrompt.newStart), "dd MMM yyyy") : "the new date"}{" "}
+              removes that visit from the patient's history and takes the bill with it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bookInsteadMutation.isPending}>Cancel</AlertDialogCancel>
+            <Button
+              variant="outline"
+              disabled={bookInsteadMutation.isPending}
+              onClick={() => {
+                visitMovePrompt?.proceed();
+                setVisitMovePrompt(null);
+              }}
+            >
+              Move it anyway
+            </Button>
+            <AlertDialogAction
+              disabled={bookInsteadMutation.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                bookInsteadMutation.mutate();
+              }}
+            >
+              {bookInsteadMutation.isPending ? "Booking..." : "Book a new appointment"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={!!deleteViewTarget} onOpenChange={(o) => { if (!o) setDeleteViewTarget(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -2881,9 +3767,16 @@ const Appointments = () => {
         onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}
         entity={deleteTarget ? `the appointment for ${deleteTarget.label}` : "this appointment"}
         // Billing and procedures are ON DELETE SET NULL, so they survive but come back
-        // unlinked; therapy notes and feedback are ON DELETE CASCADE and do not come
-        // back at all. Worth saying plainly on a clinical record.
-        note="Its bills and procedures are kept but will no longer be linked to it, and any therapy notes or feedback on it are removed for good."
+        // unlinked; notes and feedback are ON DELETE CASCADE and do not come back at
+        // all. Worth saying plainly on a clinical record.
+        //
+        // "Notes" here means appointment_sticky_notes, what the Notes tab writes.
+        // This used to say "therapy notes", naming a table no screen could write to.
+        //
+        // A Salesforce-sourced appointment gets an extra line: that delete used to
+        // be undone by the next sync, and now that it holds, staff should know it
+        // holds only here and not in Salesforce.
+        note={appointmentDeleteNote(!!deleteTarget?.fromSalesforce)}
         onConfirm={async () => {
           if (!deleteTarget) return;
           // The mutation's onError already reports the failure.

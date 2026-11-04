@@ -56,6 +56,14 @@
 
     --gold: 42 65% 55%;
     --gold-foreground: 210 40% 10%;
+
+    /* VIP: a patient the front desk must recognise on arrival. Built from the
+       gold above so it is one colour story, and kept well away from the
+       engagement tiers (violet/amber/slate), which mean something else. */
+    --vip-surface: 42 90% 95%;
+    --vip-border: 42 70% 72%;
+    --vip-ink: 35 75% 32%;
+    --vip-sheen: 42 95% 99%;
     --emerald: 158 64% 42%;
 
     --font-display: 'Plus Jakarta Sans', sans-serif;
@@ -63,12 +71,25 @@
 
     --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.04);
     --shadow-elevated: 0 4px 6px -1px rgb(0 0 0 / 0.06), 0 2px 4px -2px rgb(0 0 0 / 0.06);
+    --shadow-control: 0 1px 2px hsl(210 40% 10% / 0.04), 0 4px 12px -8px hsl(174 62% 28% / 0.2);
     --shadow-luxe: 0 30px 60px -20px hsl(174 62% 20% / 0.25), 0 18px 36px -18px hsl(174 62% 20% / 0.15);
+    --glass-surface: 0 0% 100% / 0.66;
+    --glass-surface-strong: 0 0% 100% / 0.86;
+    --glass-border: 0 0% 100% / 0.82;
+    --glass-shadow: 0 10px 30px -22px hsl(210 40% 10% / 0.28), 0 1px 2px hsl(210 40% 10% / 0.04);
+    --glass-shadow-hover: 0 16px 36px -24px hsl(174 62% 28% / 0.32), 0 2px 6px hsl(210 40% 10% / 0.05);
     --gradient-hero: linear-gradient(135deg, hsl(174 62% 38% / 0.85) 0%, hsl(158 64% 42% / 0.7) 50%, hsl(210 40% 10% / 0.6) 100%);
     --gradient-luxe: linear-gradient(135deg, hsl(174 62% 38%) 0%, hsl(158 64% 42%) 100%);
   }
 
   .dark {
+    /* Gold on a dark row has to be lit from the ink, not the surface, or the
+       badge glows brighter than the text it sits beside. */
+    --vip-surface: 40 55% 16%;
+    --vip-border: 42 45% 38%;
+    --vip-ink: 42 85% 72%;
+    --vip-sheen: 42 90% 85%;
+
     --background: 210 30% 8%;
     --foreground: 210 15% 90%;
     --card: 210 30% 12%;
@@ -96,6 +117,11 @@
     --sidebar-accent-foreground: 210 15% 90%;
     --sidebar-border: 210 25% 15%;
     --sidebar-ring: 174 62% 50%;
+    --glass-surface: 210 30% 14% / 0.72;
+    --glass-surface-strong: 210 30% 14% / 0.9;
+    --glass-border: 210 15% 100% / 0.1;
+    --glass-shadow: 0 12px 32px -22px hsl(210 80% 2% / 0.7), 0 1px 2px hsl(210 80% 2% / 0.4);
+    --glass-shadow-hover: 0 18px 40px -24px hsl(174 62% 30% / 0.35), 0 2px 8px hsl(210 80% 2% / 0.45);
   }
 }
 
@@ -106,6 +132,10 @@
 
   body {
     @apply bg-background text-foreground font-body antialiased;
+    background-image:
+      linear-gradient(135deg, hsl(var(--primary) / 0.045), transparent 42%),
+      linear-gradient(315deg, hsl(var(--info) / 0.035), transparent 40%);
+    background-attachment: fixed;
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -114,6 +144,96 @@
 }
 
 @layer components {
+  @keyframes page-reveal {
+    from { opacity: 0; transform: translateY(7px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes content-reveal {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .animate-page-reveal {
+    animation: page-reveal 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .animate-content-reveal {
+    animation: content-reveal 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  /* The VIP mark.
+
+     Transform and opacity only, as everything that moves in this app is: the
+     sheen is a pseudo-element sliding across a clipped pill, so it never
+     reflows the row it sits in, and the arrival is a scale. Both are off under
+     prefers-reduced-motion, where the badge is simply there - gold, crowned
+     and perfectly legible, which is the part that actually does the work. */
+  @keyframes vip-sheen {
+    /* Most of the cycle is the badge sitting still. The sweep is the last
+       fifth of it, so it reads as an occasional glint and not a loop. */
+    0%, 78% { transform: translateX(-120%); }
+    100% { transform: translateX(220%); }
+  }
+
+  @keyframes vip-arrive {
+    0% { opacity: 0; transform: scale(0.7); }
+    60% { opacity: 1; transform: scale(1.12); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+
+  /* A bill has just been taken.
+
+     The same shape as the VIP arrival above, and finite for the same reason:
+     this one lands on a list of up to fifty rows, where anything that loops
+     would be fifty compositor layers for no new information. Because the list
+     updates live, this plays at the moment the bill is settled. */
+  @keyframes billed-arrive {
+    0% { opacity: 0; transform: scale(0.82); }
+    55% { opacity: 1; transform: scale(1.08); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+
+  .billed-badge {
+    animation: billed-arrive 420ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+
+  .vip-badge {
+    position: relative;
+    overflow: hidden;
+    /* Kept off the row's own rhythm: the badge never changes size, so nothing
+       beside it moves when it appears. */
+    animation: vip-arrive 420ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+
+  .vip-badge-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 45%;
+    background: linear-gradient(
+      100deg,
+      transparent,
+      hsl(var(--vip-sheen) / 0.85),
+      transparent
+    );
+    animation: vip-sheen 4.5s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+    pointer-events: none;
+  }
+
+  /* Legacy native controls receive the same restrained polish as shared controls. */
+  main button:not([data-sidebar="trigger"]),
+  main a[role="button"] {
+    transition-property: color, background-color, border-color, box-shadow, transform, opacity;
+    transition-duration: 180ms;
+    transition-timing-function: ease-out;
+  }
+
+  main button:not(:disabled):active,
+  main a[role="button"]:active {
+    transform: scale(0.98);
+  }
+
   /* Horizontal scrollers should feel native on touch devices */
   .tabs-scroll,
   .table-scroll {
@@ -138,13 +258,18 @@
   }
 
   .stat-card {
-    @apply bg-card rounded-xl p-4 sm:p-6 border border-border;
-    box-shadow: var(--shadow-card);
+    @apply rounded-xl p-4 sm:p-6 border;
+    background: hsl(var(--glass-surface));
+    border-color: hsl(var(--glass-border));
+    box-shadow: var(--glass-shadow);
+    backdrop-filter: blur(12px) saturate(1.08);
+    transition: border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out;
   }
 
   .stat-card:hover {
-    box-shadow: var(--shadow-elevated);
-    @apply transition-shadow duration-200;
+    border-color: hsl(var(--primary) / 0.18);
+    box-shadow: var(--glass-shadow-hover);
+    transform: translateY(-1px);
   }
 
   .page-header {
@@ -161,8 +286,11 @@
   }
 
   .data-table {
-    @apply bg-card rounded-xl border border-border overflow-hidden;
-    box-shadow: var(--shadow-card);
+    @apply rounded-xl border overflow-hidden;
+    background: hsl(var(--glass-surface));
+    border-color: hsl(var(--glass-border));
+    box-shadow: var(--glass-shadow);
+    backdrop-filter: blur(12px) saturate(1.08);
   }
 
   .theme-header {
@@ -177,6 +305,57 @@
 
   [data-sidebar="sidebar"] {
     border-right: 1px solid hsl(var(--sidebar-border));
+    background: hsl(var(--sidebar-background) / 0.78);
+    backdrop-filter: blur(18px) saturate(1.08);
+    box-shadow: 8px 0 28px -24px hsl(var(--foreground) / 0.26);
+  }
+
+  .app-glass-header {
+    background: hsl(var(--glass-surface));
+    border-color: hsl(var(--glass-border));
+    box-shadow: 0 1px 0 hsl(var(--border) / 0.45), 0 8px 24px -24px hsl(var(--foreground) / 0.25);
+    backdrop-filter: blur(16px) saturate(1.1);
+  }
+
+  .glass-surface {
+    background: hsl(var(--glass-surface));
+    border-color: hsl(var(--glass-border));
+    box-shadow: var(--glass-shadow);
+    backdrop-filter: blur(14px) saturate(1.08);
+  }
+
+  /* Floating choices and blocking panels stay opaque so underlying records
+     can never compete visually with menu or dialog text. */
+  .overlay-surface {
+    background: hsl(var(--popover));
+    border-color: hsl(var(--border));
+    box-shadow: var(--glass-shadow-hover);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-page-reveal,
+  .animate-content-reveal,
+  .vip-badge,
+  .vip-badge-shimmer::after,
+  .billed-badge {
+    animation: none;
+  }
+
+  /* The sweep is the whole point of the pseudo-element; with it stopped it
+     would sit frozen across the badge as a pale stripe. */
+  .vip-badge-shimmer::after {
+    display: none;
+  }
+
+  main button,
+  main a[role="button"],
+  .stat-card {
+    transition: none;
+  }
+
+  .stat-card:hover {
+    transform: none;
   }
 }
 
@@ -185,6 +364,52 @@
   html,
   body {
     overflow-x: hidden;
+    /* Stop iOS enlarging text in landscape, which silently breaks the
+       carefully-sized dense tables. */
+    -webkit-text-size-adjust: 100%;
+    /* The grey flash on every tap. The app has its own press affordance
+       (main button:active scale below), so this is pure noise on a phone. */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* The unclamped app scrolls the root document, not body: body grows with
+     the page and has no scroll range of its own. Containment on body traps
+     wheel/touchpad events before they reach the root. Keep pull-to-refresh
+     containment on the actual document scroller; dialogs lock separately. */
+  html {
+    overscroll-behavior-y: contain;
+  }
+
+  /* ---------------------------------------------------------------------
+     Safe areas
+     ---------------------------------------------------------------------
+     index.html sets apple-mobile-web-app-status-bar-style: black-translucent,
+     which draws the page UNDER the status bar and home indicator. That needs
+     real padding or the header sits under the clock and the notch.
+
+     These two class names were already in use - Portal.tsx has used
+     `safe-area-top` and `safe-area-bottom` since before this change - but
+     they were never defined anywhere, so they silently did nothing and the
+     patient portal's bottom nav sat under the home indicator.
+
+     max() rather than the raw inset: on a device with no notch the inset is
+     0px, and these still need their ordinary padding. */
+  .safe-area-top {
+    padding-top: max(1rem, env(safe-area-inset-top));
+  }
+
+  .safe-area-bottom {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+
+  /* For elements that already carry their own padding and only need to clear
+     the inset - a sticky header, the camera's control bar. */
+  .safe-inset-top {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .safe-inset-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
   }
 
   /* Radix's Dialog/Sheet scroll-lock only touches document.body

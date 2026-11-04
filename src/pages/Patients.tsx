@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useStackedTable } from "@/hooks/useStackedTable";
 import { useNavigate } from "react-router-dom";
-import { Search, Plus, MoreHorizontal, Phone, Mail, Filter, Loader2, Camera, Trash2, Upload } from "lucide-react";
+import { Search, Plus, MoreHorizontal, Phone, Mail, Filter, Loader2, Camera, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -20,7 +20,6 @@ import { ALL_VIEW_ID, RECENT_VIEW_ID, getKanbanConfig, setKanbanConfig } from "@
 import { getRecentlyViewed, markRecentlyViewed } from "@/lib/recentlyViewed";
 import DeleteConfirmDialog from "@/components/shared/DeleteConfirmDialog";
 import { moveToTrash } from "@/lib/trash";
-import { SalesforceSyncButton } from "@/components/salesforce/SalesforceSyncButton";
 
 
 import {
@@ -45,17 +44,20 @@ import { supabase } from "@/integrations/supabase/client";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { PatientFormSheet } from "@/components/patients/PatientFormSheet";
 import { CameraCapture } from "@/components/shared/CameraCapture";
-import { ImportPatientsDialog } from "@/components/patients/ImportPatientsDialog";
 import { EngagementBadge } from "@/components/patients/EngagementBadge";
 import { PatientAvatar } from "@/components/patients/PatientAvatar";
+import { VipBadge } from "@/components/shared/VipBadge";
+import { isVipPatient } from "@/lib/vipPatient";
+import { patientAgeValue } from "@/lib/patientIdentity";
 import { usePatientAvatars } from "@/hooks/usePatientAvatars";
 import { useEngagementScores } from "@/hooks/useEngagementScores";
-import { buildOrFilter, buildFuzzyOrFilter, fuzzyRank } from "@/lib/fuzzySearch";
-import type { Tables } from "@/integrations/supabase/types";
-
-type Patient = Tables<"patients">;
-
-const PAGE_SIZE = 50;
+import { QueryTimeoutNotice } from "@/components/shared/QueryTimeoutNotice";
+import {
+  fetchPatientsPage,
+  fetchAllPatients,
+  PATIENTS_PAGE_SIZE as PAGE_SIZE,
+  type Patient,
+} from "@/lib/patientsPage";
 
 const PATIENT_FIELDS = [
   { value: "name", label: "Patient Name" },
@@ -68,7 +70,9 @@ const PATIENT_FIELDS = [
   { value: "date_of_birth", label: "Date of Birth" },
 ];
 
-const DEFAULT_PATIENT_FIELDS = ["name", "contact", "skin_type", "engagement", "status"];
+// No Skin Type: nothing populates it, so it only ever rendered dashes. Nothing
+// replaces it either - the Contact column here already carries phone and email.
+const DEFAULT_PATIENT_FIELDS = ["name", "contact", "engagement", "status"];
 
 const PICKLIST_OPTIONS: Record<string, { value: string; label: string }[]> = {
   gender: GENDER_OPTIONS,
@@ -77,126 +81,6 @@ const PICKLIST_OPTIONS: Record<string, { value: string; label: string }[]> = {
   blood_group: BLOOD_GROUP_OPTIONS,
   source: SOURCE_OPTIONS,
   engagement_tier: ENGAGEMENT_TIER_OPTIONS,
-};
-
-const fetchPatientsPage = async (
-  page: number,
-  search: string
-): Promise<{ rows: Patient[]; total: number }> => {
-  const fromIdx = (page - 1) * PAGE_SIZE;
-  const toIdx = fromIdx + PAGE_SIZE - 1;
-  const term = search.trim();
-  const cols = ["first_name", "last_name", "email", "phone"];
-
-  let q = supabase
-    .from("patients")
-    .select("*", { count: "exact" })
-    .order("created_at", { ascending: false })
-    .range(fromIdx, toIdx);
-
-  if (term) {
-    const tokens = term.split(/\s+/).filter(Boolean);
-
-    // For 2+ token searches, try exact match first (first_name + last_name)
-    if (tokens.length >= 2) {
-      const [firstName, ...rest] = tokens;
-      const lastName = rest.join(" ");
-
-      // Step 1: Exact match (case-insensitive but whole word)
-      const { data: exactMatch } = await supabase
-        .from("patients")
-        .select("*", { count: "exact" })
-        .ilike("first_name", firstName)
-        .ilike("last_name", lastName)
-        .order("created_at", { ascending: false });
-
-      if (exactMatch && exactMatch.length > 0) {
-        return { rows: (exactMatch as Patient[]), total: exactMatch.length };
-      }
-
-      // Step 2: Prefix match (first_name starts with token AND last_name starts with lastName)
-      const { data: prefixMatch } = await supabase
-        .from("patients")
-        .select("*", { count: "exact" })
-        .ilike("first_name", `${firstName}%`)
-        .ilike("last_name", `${lastName}%`)
-        .order("created_at", { ascending: false });
-
-      if (prefixMatch && prefixMatch.length > 0) {
-        return { rows: (prefixMatch as Patient[]), total: prefixMatch.length };
-      }
-    } else if (tokens.length === 1) {
-      // Single word: try exact match first
-      const token = tokens[0];
-
-      // Step 1: Exact match
-      const { data: exactMatch } = await supabase
-        .from("patients")
-        .select("*", { count: "exact" })
-        .or(`first_name.ilike.${token},last_name.ilike.${token}`)
-        .order("created_at", { ascending: false });
-
-      if (exactMatch && exactMatch.length > 0) {
-        return { rows: (exactMatch as Patient[]), total: exactMatch.length };
-      }
-
-      // Step 2: Prefix match (starts with the term)
-      const { data: prefixMatch } = await supabase
-        .from("patients")
-        .select("*")
-        .or(`first_name.ilike.${token}%,last_name.ilike.${token}%`)
-        .order("created_at", { ascending: false })
-        .limit(PAGE_SIZE);
-
-      if (prefixMatch && prefixMatch.length > 0) {
-        return { rows: (prefixMatch as Patient[]), total: prefixMatch.length };
-      }
-    }
-
-    // Final fallback: standard OR search (substring matching)
-    const or = buildOrFilter(term, cols);
-    if (or) q = q.or(or);
-  }
-
-  const { data, error, count } = await q;
-  if (error) throw error;
-
-  // Typo-tolerant fallback: nothing matched literally, so pull a loose candidate
-  // set (matching the first few letters) and rank it by fuzzy similarity.
-  if (term && (count ?? 0) === 0) {
-    const looseOr = buildFuzzyOrFilter(term, ["first_name", "last_name"]);
-    if (looseOr) {
-      const { data: loose } = await supabase
-        .from("patients")
-        .select("*")
-        .or(looseOr)
-        .limit(300);
-      const ranked = fuzzyRank(
-        (loose as Patient[]) || [],
-        term,
-        (p) => `${p.first_name || ""} ${p.last_name || ""} ${p.phone || ""} ${p.email || ""}`,
-        0.55
-      );
-      return { rows: ranked.slice(0, PAGE_SIZE), total: ranked.length };
-    }
-  }
-  return { rows: (data as Patient[]) || [], total: count ?? 0 };
-};
-
-const fetchAllPatients = async (search: string): Promise<Patient[]> => {
-  const term = search.trim();
-  let q = supabase
-    .from("patients")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(2000);
-  if (term) {
-    const or = buildOrFilter(term, ["first_name", "last_name", "email", "phone"]);
-    if (or) q = q.or(or);
-  }
-  const { data, error } = await q;
-  if (error) throw error;
-  return (data as Patient[]) || [];
 };
 
 const Patients = () => {
@@ -212,9 +96,13 @@ const Patients = () => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deletePatient, setDeletePatient] = useState<Patient | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
   const [page, setPage] = useState(1);
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  // Seeded from ?q= as well: otherwise arriving from global search fires an
+  // unfiltered query first, and its count flashes in the header before the
+  // search's own count replaces it 300ms later.
+  const [debouncedSearch, setDebouncedSearch] = useState(
+    () => new URLSearchParams(window.location.search).get("q") || ""
+  );
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingView, setEditingView] = useState<ListView | null>(null);
   const [display, setDisplay] = useState<ListDisplayMode>("table");
@@ -234,6 +122,7 @@ const Patients = () => {
     saveCharts,
     deleteView,
     pinDefault,
+    unpinDefault,
     updateStandardColumns,
   } = usePatientListViews("patients", "Patients");
 
@@ -251,7 +140,7 @@ const Patients = () => {
   const isRecentView = activeView?.id === RECENT_VIEW_ID;
   const needsClientRows = !isAllView || display === "kanban" || display === "split";
 
-  const { data, isLoading, isFetching, refetch } = useQuery({
+  const { data, isLoading, isFetching, isPlaceholderData, refetch, error: pageError } = useQuery({
     queryKey: ["patients", page, debouncedSearch],
     queryFn: () => fetchPatientsPage(page, debouncedSearch),
     placeholderData: keepPreviousData,
@@ -262,13 +151,16 @@ const Patients = () => {
     data: allPatients = [],
     isLoading: viewLoading,
     isFetching: viewFetching,
+    isPlaceholderData: viewIsPlaceholder,
     refetch: refetchAll,
+    error: allError,
   } = useQuery({
     queryKey: ["patients-all", debouncedSearch],
     queryFn: () => fetchAllPatients(debouncedSearch),
     placeholderData: keepPreviousData,
     enabled: needsClientRows,
   });
+
 
   const { data: staffList = [] } = useQuery({
     queryKey: ["staff-active-list"],
@@ -297,10 +189,26 @@ const Patients = () => {
     : data?.rows ?? [];
   const total = needsClientRows ? viewRows.length : data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // Both totals are real counts now, so the page number can be clamped against
+  // them on either path. "Next" still follows the probe row, which came back in
+  // the same snapshot as the rows - deriving it from the count instead would
+  // offer a next page that a concurrent delete had already emptied.
   const currentPage = Math.min(page, totalPages);
+  const hasMore = needsClientRows
+    ? currentPage * PAGE_SIZE < total
+    : data?.hasMore ?? false;
   const loading = needsClientRows ? viewLoading : isLoading;
   const fetching = needsClientRows ? viewFetching : isFetching;
+  // keepPreviousData keeps the last search's payload on screen while the next
+  // one loads. Showing its count as though it answered what was just typed is
+  // how a stale number gets believed, so say nothing until the payload is for
+  // the search in the box. Turning a page within one search keeps its count.
+  const countLoading = needsClientRows
+    ? viewLoading || viewIsPlaceholder
+    : isLoading || (isPlaceholderData && data?.term !== debouncedSearch.trim());
   const reloadPatients = () => (needsClientRows ? refetchAll() : refetch());
+  const listError = needsClientRows ? allError : pageError;
+
 
   const patientIds = paged.map((p) => p.id);
   const { data: engagementScores = {} } = useEngagementScores(patientIds);
@@ -334,12 +242,6 @@ const Patients = () => {
     }
     toast.success("Patient updated");
     refetchAll();
-  };
-
-  const getAge = (dob: string | null) => {
-    if (!dob) return null;
-    const diff = Date.now() - new Date(dob).getTime();
-    return Math.floor(diff / (365.25 * 24 * 60 * 60 * 1000));
   };
 
   const displayColumns = activeView?.columns?.length ? activeView.columns : DEFAULT_VIEW_COLUMNS;
@@ -471,11 +373,6 @@ const Patients = () => {
               Delete ({selectedIds.size})
             </Button>
           )}
-          <SalesforceSyncButton />
-          <Button variant="outline" className="gap-2" onClick={() => setImportOpen(true)}>
-            <Upload className="h-4 w-4" />
-            Import Patients
-          </Button>
           <Button className="gap-2 w-fit" onClick={openAdd}>
             <Plus className="h-4 w-4" />
             Add Patient
@@ -493,6 +390,7 @@ const Patients = () => {
           onEdit={openEditView}
           onDelete={(v) => setDeleteViewTarget(v)}
           onPin={pinDefault}
+          onUnpin={unpinDefault}
           onClone={cloneView}
           onFields={() => setFieldsOpen(true)}
           onRefresh={() => reloadPatients()}
@@ -500,6 +398,7 @@ const Patients = () => {
           display={display}
           onDisplayChange={setDisplay}
           count={total}
+          countLoading={countLoading}
           search={search}
           onSearchChange={(v) => { setSearch(v); setPage(1); }}
           chartsOpen={chartsOpen}
@@ -508,6 +407,12 @@ const Patients = () => {
           onToggleFilters={() => { setFiltersOpen((o) => !o); setChartsOpen(false); }}
         />
       </div>
+
+      {listError && (
+        <QueryTimeoutNotice error={listError} onRetry={() => reloadPatients()} className="mb-4" />
+      )}
+
+
 
       <div className="flex flex-col items-start gap-4 lg:flex-row">
       <motion.div
@@ -594,10 +499,13 @@ const Patients = () => {
                             photoUrl={avatars[patient.id]}
                           />
                           <div>
-                            <p className="font-medium text-sm">{`${patient.first_name || ""} ${patient.last_name || ""}`.trim() || "Unnamed"}</p>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <p className="font-medium text-sm">{`${patient.first_name || ""} ${patient.last_name || ""}`.trim() || "Unnamed"}</p>
+                              {isVipPatient(patient) && <VipBadge />}
+                            </div>
                             <p className="text-xs text-muted-foreground">
                               {patient.gender || "—"}
-                              {getAge(patient.date_of_birth) !== null && ` · Age ${getAge(patient.date_of_birth)}`}
+                              {patientAgeValue(patient.date_of_birth) && ` · Age ${patientAgeValue(patient.date_of_birth)}`}
                             </p>
                           </div>
                         </div>
@@ -678,11 +586,11 @@ const Patients = () => {
         <div className="p-4 border-t flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-muted-foreground">
           <span>
             {isBoard
-              ? `Showing ${total.toLocaleString()} records`
-              : `Showing ${total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}–${Math.min(currentPage * PAGE_SIZE, total)} of ${total.toLocaleString()}`}
+              ? `Showing ${total.toLocaleString("en-IN")} records`
+              : `Showing ${paged.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}–${(currentPage - 1) * PAGE_SIZE + paged.length} of ${total.toLocaleString("en-IN")}`}
             {fetching && !loading ? " · loading…" : ""}
           </span>
-          {!isBoard && totalPages > 1 && (
+          {!isBoard && (hasMore || currentPage > 1) && (
             <div className="flex items-center gap-2">
               <Button
                 variant="outline"
@@ -693,13 +601,13 @@ const Patients = () => {
                 Previous
               </Button>
               <span className="text-xs">
-                Page {currentPage} of {totalPages}
+                {`Page ${currentPage} of ${totalPages}`}
               </span>
               <Button
                 variant="outline"
                 size="sm"
-                disabled={currentPage >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={!hasMore}
+                onClick={() => setPage((p) => p + 1)}
               >
                 Next
               </Button>
@@ -741,13 +649,14 @@ const Patients = () => {
         open={sheetOpen}
         onOpenChange={setSheetOpen}
         patient={editingPatient}
-        onSuccess={() => reloadPatients()}
-      />
-
-      <ImportPatientsDialog
-        open={importOpen}
-        onOpenChange={setImportOpen}
-        onSuccess={() => reloadPatients()}
+        // A new registration opens straight into the patient's record. The
+        // front desk registers someone in order to book them in, and was
+        // having to search the list for the name they had just typed.
+        // An edit stays on the list, which is where it was started from.
+        onSuccess={(saved) => {
+          reloadPatients();
+          if (saved?.created) navigate(`/patients/${saved.id}`);
+        }}
       />
 
       {cameraPatient && (

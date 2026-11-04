@@ -6,7 +6,7 @@ export const MC_BATCH_LIMIT = 500;
 /** The data centre is the suffix of the key, e.g. "abc123-us21" -> "us21". */
 export function dcFromKey(apiKey: string): string {
   const m = String(apiKey || "").trim().match(/-([a-z]{2,4}\d{1,3})$/i);
-  if (!m) throw new Error("MAILCHIMP_API_KEY has no data-centre suffix (expected something like ...-us21)");
+  if (!m) throw new Error("That does not look like a Mailchimp API key - it should end with a data centre, like ...-us21");
   return m[1].toLowerCase();
 }
 
@@ -65,10 +65,28 @@ export function createMailchimpClient(auth: MailchimpAuth, fetchImpl: typeof fet
   return { dc, call, must };
 }
 
-export const NOT_CONNECTED_MESSAGE = "Mailchimp is not connected. Ask an admin to set the MAILCHIMP_API_KEY secret.";
+export const NOT_CONNECTED_MESSAGE =
+  "Mailchimp is not connected. Open Email \u2192 Connection \u2192 Configuration and enter your Mailchimp API key.";
 
-export function mailchimpFromEnv(): McClient {
-  const apiKey = Deno.env.get("MAILCHIMP_API_KEY");
+/** Minimal shape of the stored connection row this module needs. */
+export interface StoredMailchimpKey {
+  api_key_enc?: string | null;
+}
+
+/**
+ * Builds a client from the key the clinic saved in comms_mailchimp_connection.
+ *
+ * The key is held encrypted and is decrypted here, in the edge function, for the
+ * life of one request - it is never written back in plain text and never returned
+ * to the browser. There is deliberately no MAILCHIMP_API_KEY fallback: one source
+ * of truth is easier to reason about than "the environment, or else the database".
+ */
+export async function mailchimpFromStoredKey(
+  conn: StoredMailchimpKey | null,
+  decrypt: (payload: string) => Promise<string>,
+): Promise<McClient> {
+  if (!conn?.api_key_enc) throw new Error(NOT_CONNECTED_MESSAGE);
+  const apiKey = await decrypt(conn.api_key_enc);
   if (!apiKey) throw new Error(NOT_CONNECTED_MESSAGE);
   return createMailchimpClient({ apiKey });
 }

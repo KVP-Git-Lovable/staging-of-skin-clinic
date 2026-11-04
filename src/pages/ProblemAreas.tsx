@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { isVisit } from "@/lib/visitStats";
 import { Plus, Pencil, Trash2, Search, ArrowLeft, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +18,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
+import { rawPatientName } from "@/lib/patientName";
 
 const ProblemAreas = () => {
   const queryClient = useQueryClient();
@@ -45,7 +47,7 @@ const ProblemAreas = () => {
       // Get all appointments that contain this primary concern id
       const { data: appointments, error } = await supabase
         .from("appointments")
-        .select("patient_id, patient_name, start_time")
+        .select("patient_id, patient_name, start_time, status")
         .contains("problem_area_ids", [selectedArea.id]);
       if (error) throw error;
       if (!appointments || appointments.length === 0) return [];
@@ -54,16 +56,20 @@ const ProblemAreas = () => {
       const patientMap = new Map<string, { patient_id: string; patient_name: string; lastAppointment: string; totalVisits: number }>();
       for (const appt of appointments) {
         if (!appt.patient_id) continue;
+        // Keep the patient in the list regardless of status - staff need to see
+        // upcoming bookings and the many Salesforce-imported past visits still
+        // marked "Confirmed". Only attended appointments count as a visit.
+        const attended = isVisit(appt.status);
         const existing = patientMap.get(appt.patient_id);
         if (existing) {
-          existing.totalVisits++;
+          if (attended) existing.totalVisits++;
           if (appt.start_time > existing.lastAppointment) existing.lastAppointment = appt.start_time;
         } else {
           patientMap.set(appt.patient_id, {
             patient_id: appt.patient_id,
             patient_name: appt.patient_name || "Unknown",
             lastAppointment: appt.start_time,
-            totalVisits: 1,
+            totalVisits: attended ? 1 : 0,
           });
         }
       }
@@ -79,7 +85,7 @@ const ProblemAreas = () => {
         const patient = patients?.find((pt) => pt.id === p.patient_id);
         return {
           ...p,
-          patient_name: patient ? `${patient.first_name} ${patient.last_name}` : p.patient_name,
+          patient_name: rawPatientName(patient) || p.patient_name,
           phone: patient?.phone || "—",
           status: patient?.status || "Active",
         };

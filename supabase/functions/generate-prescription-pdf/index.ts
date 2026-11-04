@@ -2,6 +2,10 @@ import { PDFDocument, PDFImage, PDFFont, PDFPage, StandardFonts, rgb } from "htt
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
 import { z } from "npm:zod@3.23.8";
+import { parsePrescriptionText } from "./prescriptionText.ts";
+import { isPlaceholderService } from "./placeholderService.ts";
+import { isRollUpOf } from "./procedureRollup.ts";
+import { tableRowHeight, tableStartSpace } from "./pdfTableLayout.ts";
 
 const BodySchema = z.object({
   procedureId: z.string().uuid(),
@@ -18,14 +22,31 @@ const blue = rgb(0.22, 0.43, 0.68);
 const dark = rgb(0.08, 0.08, 0.08);
 const lineGrey = rgb(0.3, 0.3, 0.3);
 
+/**
+ * Line breaks are content, not noise.
+ *
+ * This used to fold every control character into a space and then collapse all
+ * whitespace, so a field written over several lines printed as one run-on
+ * paragraph. Lab tests were the visible case - five tests on five lines in the
+ * app arrived as "Vitamin d3 Viatmin B12 TSH Hb Serum ferittin" on the
+ * document - but it flattened diagnosis, symptoms, prescriptions and notes
+ * just the same.
+ *
+ * So newlines survive here and `wrap` lays them out. Everything else the PDF
+ * font cannot draw is still replaced, and runs of spaces are still collapsed -
+ * just not across a line ending.
+ */
 function sanitize(value: unknown): string {
   return String(value ?? "")
-    .replace(/[\u0000-\u001F\u007F]+/g, " ")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0009\u000B-\u001F\u007F]+/g, " ")
     .replace(/[–—]/g, "-")
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
-    .replace(/[^\x20-\x7E]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^\x20-\x7E\n]/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
@@ -35,17 +56,35 @@ function shortNumFromUuid(uuid: string, digits = 4): string {
   return String(number).padStart(digits, "0");
 }
 
+/**
+ * The patient's age for the printed prescription.
+ *
+ * Under a year this reads in months. A baby's age in years is 0, which printed
+ * "Age: 0" on the prescription - and the dose a doctor writes for a seven month
+ * old is not the dose for a newborn, so that line has to say which.
+ *
+ * Counted by calendar month, matching patientAgeLabel in
+ * src/lib/patientIdentity.ts, so the printed sheet and the record it was
+ * written from say the same thing. (This file cannot import from src/.)
+ */
 function ageFromDob(dob?: string | null): string {
   if (!dob) return "";
-  const date = new Date(dob);
-  if (Number.isNaN(date.getTime())) return "";
-  return String(Math.floor((Date.now() - date.getTime()) / (365.25 * 24 * 3600 * 1000)));
+  const born = new Date(dob);
+  if (Number.isNaN(born.getTime())) return "";
+  const now = new Date();
+  let months = (now.getFullYear() - born.getFullYear()) * 12 + (now.getMonth() - born.getMonth());
+  if (now.getDate() < born.getDate()) months -= 1;
+  if (months < 0) return "";
+  const years = Math.floor(months / 12);
+  if (years >= 1) return String(years);
+  if (months === 0) return "<1 month";
+  return months === 1 ? "1 month" : `${months} months`;
 }
 
-function wrap(text: unknown, font: PDFFont, size: number, maxWidth: number): string[] {
-  const clean = sanitize(text);
-  if (!clean) return [""];
-  const words = clean.split(/\s+/);
+/** Word-wraps one line - no line breaks of its own. See `wrap`. */
+function wrapOneLine(clean: string, font: PDFFont, size: number, maxWidth: number): string[] {
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (!words.length) return [""];
   const lines: string[] = [];
   let line = "";
 
@@ -70,6 +109,20 @@ function wrap(text: unknown, font: PDFFont, size: number, maxWidth: number): str
   }
   if (line) lines.push(line);
   return lines;
+}
+
+/**
+ * Lays text out to `maxWidth`, keeping the author's own line breaks: each line
+ * the writer typed starts a new line on the page, and is word-wrapped within
+ * it. A prescription or a list of lab tests then reads on the document exactly
+ * as it does on the screen.
+ */
+function wrap(text: unknown, font: PDFFont, size: number, maxWidth: number): string[] {
+  const clean = sanitize(text);
+  if (!clean) return [""];
+  return clean.split("\n").flatMap((authorLine) =>
+    authorLine.trim() ? wrapOneLine(authorLine, font, size, maxWidth) : [""]
+  );
 }
 
 function drawFooter(page: PDFPage, font: PDFFont, bold: PDFFont, clinic: Record<string, unknown>) {
@@ -110,13 +163,19 @@ async function embedLogo(pdfDoc: PDFDocument, logoUrl?: string | null): Promise<
   }
 }
 
+class NotFoundError extends Error {}
+
 async function buildPrescriptionPdf(client: ReturnType<typeof createClient>, procedureId: string) {
+
   const { data: procedure, error: procedureError } = await client
     .from("procedures")
     .select("*, patients(*), staff!procedures_staff_id_fkey(*), appointments(*, staff!appointments_staff_id_fkey(*))")
     .eq("id", procedureId)
-    .single();
-  if (procedureError || !procedure) throw new Error(procedureError?.message || "Procedure not found");
+    .limit(1)
+    .maybeSingle();
+  if (procedureError) throw new Error(procedureError.message);
+  if (!procedure) throw new NotFoundError("This prescription record could not be found.");
+
 
   const [
     { data: prescriptions, error: prescriptionError },
@@ -258,8 +317,12 @@ async function buildPrescriptionPdf(client: ReturnType<typeof createClient>, pro
     const recWidth = tableWidth - serviceWidth - notesWidth;
     const colX = [tableX, tableX + serviceWidth, tableX + serviceWidth + notesWidth];
 
-    const drawHeader = (heading: string) => {
-      ensureSpace(42);
+    // `reserve` is the first row that will follow this heading. Without it the
+    // heading and the column header were placed wherever they themselves fitted,
+    // and a tall first row then moved to the next page on its own - leaving an
+    // empty table and most of a page of white space behind it.
+    const drawHeader = (heading: string, reserve = 0) => {
+      ensureSpace(tableStartSpace(22, reserve));
       page.drawText(heading, { x: MARGIN, y, size: 11, font: bold, color: blue });
       y -= 18;
       const height = 22;
@@ -272,13 +335,20 @@ async function buildPrescriptionPdf(client: ReturnType<typeof createClient>, pro
       y -= height;
     };
 
-    drawHeader("Procedure Details");
+    const heightOf = (row: { service: string; notes: string; recommendations: string }) =>
+      tableRowHeight(
+        wrap(row.service, font, 9, serviceWidth - 12).length,
+        wrap(row.notes, font, 9, notesWidth - 12).length,
+        wrap(row.recommendations, font, 9, recWidth - 12).length,
+      );
+
+    drawHeader("Procedure Details", heightOf(serviceRows[0]));
 
     for (const row of serviceRows) {
       const svcLines = wrap(row.service, font, 9, serviceWidth - 12);
       const notesLines = wrap(row.notes, font, 9, notesWidth - 12);
       const recLines = wrap(row.recommendations, font, 9, recWidth - 12);
-      const rowHeight = Math.max(25, Math.max(svcLines.length, notesLines.length, recLines.length) * 12 + 9);
+      const rowHeight = tableRowHeight(svcLines.length, notesLines.length, recLines.length);
       if (y - rowHeight < CONTENT_BOTTOM) {
         y = addContinuationPage();
         drawHeader("Procedure Details (continued)");
@@ -302,8 +372,8 @@ async function buildPrescriptionPdf(client: ReturnType<typeof createClient>, pro
     const valueWidth = tableWidth - labelWidth;
     const colX = [tableX, tableX + labelWidth];
 
-    const drawHeader = (title: string) => {
-      ensureSpace(42);
+    const drawHeader = (title: string, reserve = 0) => {
+      ensureSpace(tableStartSpace(22, reserve));
       page.drawText(title, { x: MARGIN, y, size: 11, font: bold, color: blue });
       y -= 18;
       const height = 22;
@@ -314,12 +384,18 @@ async function buildPrescriptionPdf(client: ReturnType<typeof createClient>, pro
       y -= height;
     };
 
-    drawHeader(heading);
+    drawHeader(
+      heading,
+      tableRowHeight(
+        wrap(fieldRows[0].label, font, 9, labelWidth - 12).length,
+        wrap(fieldRows[0].value, font, 9, valueWidth - 12).length,
+      ),
+    );
 
     for (const row of fieldRows) {
       const labelLines = wrap(row.label, font, 9, labelWidth - 12);
       const valueLines = wrap(row.value, font, 9, valueWidth - 12);
-      const rowHeight = Math.max(25, Math.max(labelLines.length, valueLines.length) * 12 + 9);
+      const rowHeight = tableRowHeight(labelLines.length, valueLines.length);
       if (y - rowHeight < CONTENT_BOTTOM) {
         y = addContinuationPage();
         drawHeader(`${heading} (continued)`);
@@ -333,33 +409,134 @@ async function buildPrescriptionPdf(client: ReturnType<typeof createClient>, pro
     y -= 10;
   };
 
-  drawSection("Symptoms", procedure.symptoms || procedure.consultation_notes);
-  drawSection("Diagnosis", procedure.diagnosis);
+  /** The name the importer uses when Salesforce recorded no treatment at all. */
 
-  const serviceRows = (serviceLineRows && serviceLineRows.length
+  // A "Consultation" service name is not a procedure - it means "the patient
+  // was seen". 10,586 of these rows carry procedure notes and 9,178 carry
+  // recommendations, so the text must not be lost: it prints under a "Visit
+  // notes" heading above the table instead of inside it. Real services stay in
+  // the Procedure Details table; when no real service remains, the table is
+  // not drawn at all.
+  const allServiceRows = (serviceLineRows && serviceLineRows.length
     ? serviceLineRows.map((s: Record<string, unknown>) => ({ service: s.service_name, notes: s.procedure_notes, recommendations: s.recommendations }))
     : [{ service: procedure.service_name, notes: procedure.procedure_notes, recommendations: procedure.recommendations }]
   )
-    .map((r) => ({ service: sanitize(r.service), notes: sanitize(r.notes) || "-", recommendations: sanitize(r.recommendations) || "-" }))
-    .filter((r) => r.service);
-  drawServicesTable(serviceRows);
+    .map((r) => ({ service: sanitize(r.service), notes: sanitize(r.notes), recommendations: sanitize(r.recommendations) }))
+    .filter((r) => r.service)
+    // One service, once. A visit holds a service a single time - the database
+    // enforces it now - but a prescription the clinic prints must not repeat a
+    // treatment even if a copy ever reaches it from somewhere else. Identical
+    // rows collapse; two rows that differ in what the doctor wrote both stay,
+    // because that is not a copy.
+    .filter((row, index, rows) =>
+      rows.findIndex(
+        (other) =>
+          other.service.trim().toLowerCase() === row.service.trim().toLowerCase() &&
+          other.notes === row.notes &&
+          other.recommendations === row.recommendations,
+      ) === index,
+    );
 
+  const consultationRows = allServiceRows.filter((r) => isPlaceholderService(r.service));
+  const visitNotesText = consultationRows
+    .flatMap((r) => [r.notes, r.recommendations].filter(Boolean))
+    .join("\n")
+    .trim();
+
+  const serviceRows = allServiceRows
+    .filter((r) => !isPlaceholderService(r.service))
+    // An empty column is left empty. It used to print "-", which reads as
+    // though something was recorded and found to be nothing: a treatment the
+    // doctor wrote nothing against came out as "SERVICE | - | -". 323 of the
+    // last 9,509 service lines are that. wrap("") gives one empty line, the
+    // same height a dash took, so nothing in the table shifts.
+    .map((r) => ({ service: r.service, notes: r.notes, recommendations: r.recommendations }));
+
+  // The same lines in the shape the shared roll-up rule expects. It never saw
+  // the "-" placeholders that used to be substituted above, and still does not.
+  const rollUpLines = allServiceRows.map((r) => ({
+    service_name: r.service,
+    procedure_notes: r.notes,
+    recommendations: r.recommendations,
+  }));
+
+  /**
+   * The visit's own notes - the procedure notes and recommendations attached to
+   * the "Consultation" placeholder row. These are not a service performed, so
+   * they print under their own heading above the Procedure Details table, the
+   * same way Special Instructions does, instead of being squeezed into a table
+   * column. The text is never dropped: 10,586 rows carry notes, 9,178 carry
+   * recommendations.
+   */
+  const drawVisitNotes = () => {
+    const text = sanitize(visitNotesText);
+    if (!text) return;
+    ensureSpace(30);
+    page.drawText("Visit notes", { x: MARGIN, y, size: 11, font: bold, color: blue });
+    y -= 15;
+    for (const textLine of wrap(text, font, 10, PAGE_WIDTH - 2 * MARGIN - 8)) {
+      ensureSpace(13);
+      page.drawText(textLine, { x: MARGIN + 8, y, size: 10, font, color: dark });
+      y -= 13;
+    }
+    y -= 10;
+  };
+
+  /**
+   * The visit's special instructions, under their own heading.
+   *
+   * These (Salesforce's Special_Instructions__c, filled on 17,581 visits) only
+   * ever appeared squeezed into a column of the Procedure Details table, where
+   * the clinic could not find them. They get their own labelled block - but
+   * only when the table is not already printing the same words, however many
+   * services the visit has.
+   */
+  const drawSpecialInstructions = () => {
+    const text = sanitize(procedure.recommendations);
+    if (!text) return;
+    // Skip it when it is nothing more than the roll-up of the lines already
+    // printed in Procedure Details. This used to compare a raw line ("1v2")
+    // against the prefixed parent ("FILLERS: 1v2"), so on any visit with two
+    // services it never matched and the same words printed twice - once in the
+    // table, once here. Same rule as the screen; see procedureRollup.ts beside
+    // this file, and keep the two in step.
+    if (isRollUpOf(text, rollUpLines, "recommendations")) return;
+    if (visitNotesText.split(/\n/).includes(text)) return;
+    ensureSpace(30);
+    page.drawText("Special Instructions", { x: MARGIN, y, size: 11, font: bold, color: blue });
+    y -= 15;
+    for (const textLine of wrap(text, font, 10, PAGE_WIDTH - 2 * MARGIN - 8)) {
+      ensureSpace(13);
+      page.drawText(textLine, { x: MARGIN + 8, y, size: 10, font, color: dark });
+      y -= 13;
+    }
+    y -= 10;
+  };
+
+  // This visit's own findings first, then the patient's standing history.
+  // Diagnosis and Symptoms used to be loose sections above Procedure Details,
+  // and Lab Tests was not on the document at all. Empty rows stay hidden, as
+  // every row here always has.
   const medicalFields: [string, unknown][] = [
-    ["Medical History", patient.medical_history],
+    ["Diagnosis", procedure.diagnosis],
+    // Kept in step with src/lib/medicalFields.ts - the screen and the document
+    // must head these the same way.
+    ["Symptoms", procedure.symptoms || procedure.consultation_notes],
+    ["Lab Tests", procedure.lab_tests],
+    ["History/Examination details", patient.medical_history],
     ["Current Medications", patient.current_medications],
-    ["Allergies", patient.allergies],
+    ["Dietary Advice", patient.dietary_advice],
     ["Previous Treatments", patient.previous_treatments],
     ["Skin Type", patient.skin_type],
-    ["Skin Concerns", patient.skin_concerns],
   ];
   const medicalRows = medicalFields
     .map(([label, value]) => ({ label, value: sanitize(value) }))
     .filter((row) => row.value);
-  drawKeyValueTable("Medical Information", medicalRows);
 
   const noteRows = (stickyNoteRows || [])
     .map((note: Record<string, unknown>) => ({ title: sanitize(note.title), content: sanitize(note.content) }))
     .filter((note) => note.content);
+  const drawNotes = () => {
   if (noteRows.length) {
     ensureSpace(30);
     page.drawText("Notes", { x: MARGIN, y, size: 11, font: bold, color: blue });
@@ -379,14 +556,31 @@ async function buildPrescriptionPdf(client: ReturnType<typeof createClient>, pro
     }
     y -= 4;
   }
+  };
 
-  const rows = (prescriptions || []).map((prescription: Record<string, unknown>, index: number) => {
+  const drawMedications = () => {
+  // Structured prescription rows are what this app writes when a doctor
+  // prescribes here. The 25,346 visits imported from Salesforce have no such
+  // rows - their medicines are one free-text field, which used to mean the
+  // Products/Medications table simply did not appear on those documents even
+  // though the visit had a prescription. So fall back to that text, read by
+  // the same parser the screen uses.
+  const structured = (prescriptions || []).map((prescription: Record<string, unknown>, index: number) => {
     const details = [prescription.dosage, prescription.frequency, prescription.duration ? `for ${prescription.duration}` : "", prescription.instructions]
       .map(sanitize)
       .filter(Boolean)
       .join(" - ");
     return { serial: String(index + 1), product: sanitize(prescription.medicine_name) || "-", instruction: details || "-" };
   });
+  // Only Salesforce-imported visits keep medicines in procedure_notes; on an
+  // app-entered visit that field is the doctor's clinical notes.
+  const rows = structured.length || !procedure.sf_id
+    ? structured
+    : parsePrescriptionText(procedure.procedure_notes as string | null).map((item, index) => ({
+        serial: String(index + 1),
+        product: sanitize(item.product) || "-",
+        instruction: sanitize(item.instruction) || "-",
+      }));
 
   if (rows.length) {
     const tableX = MARGIN;
@@ -405,18 +599,26 @@ async function buildPrescriptionPdf(client: ReturnType<typeof createClient>, pro
       y -= height;
     };
 
-    ensureSpace(42);
-    page.drawText("Prescription", { x: MARGIN, y, size: 11, font: bold, color: blue });
+    ensureSpace(
+      tableStartSpace(
+        24,
+        tableRowHeight(
+          wrap(rows[0].product, font, 9, productWidth - 12).length,
+          wrap(rows[0].instruction, font, 9, instructionWidth - 12).length,
+        ),
+      ),
+    );
+    page.drawText("Products/Medications", { x: MARGIN, y, size: 11, font: bold, color: blue });
     y -= 18;
     drawTableHeader();
 
     for (const row of rows) {
       const productLines = wrap(row.product, font, 9, productWidth - 12);
       const instructionLines = wrap(row.instruction, font, 9, instructionWidth - 12);
-      const rowHeight = Math.max(25, Math.max(productLines.length, instructionLines.length) * 12 + 9);
+      const rowHeight = tableRowHeight(productLines.length, instructionLines.length);
       if (y - rowHeight < CONTENT_BOTTOM) {
         y = addContinuationPage();
-        page.drawText("Prescription (continued)", { x: MARGIN, y, size: 11, font: bold, color: blue });
+        page.drawText("Products/Medications (continued)", { x: MARGIN, y, size: 11, font: bold, color: blue });
         y -= 18;
         drawTableHeader();
       }
@@ -428,7 +630,18 @@ async function buildPrescriptionPdf(client: ReturnType<typeof createClient>, pro
       instructionLines.forEach((line, index) => page.drawText(line, { x: tableX + serialWidth + productWidth + 6, y: y - 9 - index * 12, size: 9, font, color: dark }));
       y -= rowHeight;
     }
+    y -= 10;
   }
+  };
+
+  // The order the document reads in: what was found, what was given, what was
+  // done, then anything written alongside it.
+  drawKeyValueTable("Medical Information", medicalRows);
+  drawMedications();
+  drawVisitNotes();
+  drawSpecialInstructions();
+  drawServicesTable(serviceRows);
+  drawNotes();
 
   pages.forEach((pdfPage) => drawFooter(pdfPage, font, bold, clinic));
   const bytes = await pdfDoc.save();
@@ -439,7 +652,15 @@ async function buildPrescriptionPdf(client: ReturnType<typeof createClient>, pro
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
-    const parsed = BodySchema.safeParse(await req.json());
+    // An empty or malformed body must read as a validation error, not crash the function.
+    let rawBody: unknown = null;
+    try {
+      rawBody = await req.json();
+    } catch {
+      rawBody = null;
+    }
+    const parsed = BodySchema.safeParse(rawBody);
+
     if (!parsed.success) {
       return new Response(JSON.stringify({ error: parsed.error.flatten().fieldErrors }), {
         status: 400,
@@ -476,7 +697,14 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
+    if (error instanceof NotFoundError) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
     console.error("generate-prescription-pdf error:", error);
+
     return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

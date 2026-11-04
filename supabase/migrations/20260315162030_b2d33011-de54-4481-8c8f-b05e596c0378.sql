@@ -1,0 +1,1 @@
+ALTER TABLE public.saved_reports ADD COLUMN IF NOT EXISTS display_options jsonb DEFAULT NULL;

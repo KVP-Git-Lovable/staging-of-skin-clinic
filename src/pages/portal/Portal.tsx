@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { withDrPrefix } from "@/lib/staffName";
+import { numVal } from "@/lib/numberInput";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Home, Calendar, ClipboardList, Camera, Receipt, Pill,
@@ -8,7 +10,7 @@ import {
 import PortalShop from "@/components/portal/PortalShop";
 import PortalBot from "@/components/portal/PortalBot";
 import PortalSurveyFill from "@/components/portal/PortalSurveyFill";
-import { useClinicSettings } from "@/hooks/useClinicSettings";
+import clinicLogo from "@/assets/skin-clinic-logo.png";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TimePicker12h } from "@/components/shared/TimePicker12h";
@@ -97,7 +99,6 @@ function PortalSurveysList({ patientId, onOpen }: { patientId: string; onOpen: (
 const Portal = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { name: clinicName, logoUrl: clinicLogo } = useClinicSettings();
   const { tab: tabParam } = useParams<{ tab?: string }>();
   const tabSlugMap: Record<string, string> = {
     home: "home",
@@ -445,9 +446,9 @@ const Portal = () => {
       <header className="bg-gradient-to-r from-primary to-[hsl(174,62%,30%)] text-primary-foreground px-4 py-4 safe-area-top">
         <div className="max-w-lg mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <img src={clinicLogo} alt={clinicName} className="h-9 w-9 rounded-lg bg-white object-contain p-0.5" />
+            <img src={clinicLogo} alt="The Skin Clinic" className="h-9 w-9 rounded-lg bg-white object-contain p-0.5" />
             <div>
-              <p className="font-bold text-sm" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{clinicName}</p>
+              <p className="font-bold text-sm" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>The Skin Clinic</p>
               <p className="text-xs opacity-80">Patient Portal</p>
             </div>
           </div>
@@ -676,8 +677,8 @@ const Portal = () => {
                       <div>
                         <p className="font-semibold text-sm">{p.service_name}</p>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          {new Date(p.procedure_date).toLocaleDateString("en-IN", { month: "long", day: "numeric", year: "numeric" })}
-                          {p.staff && ` • Dr. ${p.staff.first_name} ${p.staff.last_name}`}
+                          {p.date_not_recorded ? "Date not recorded" : new Date(p.procedure_date).toLocaleDateString("en-IN", { month: "long", day: "numeric", year: "numeric" })}
+                          {p.staff && ` • ${withDrPrefix(`${p.staff.first_name} ${p.staff.last_name}`)}`}
                         </p>
                       </div>
                       <div className="flex items-center gap-1">
@@ -891,11 +892,11 @@ const Portal = () => {
             </div>
             <div>
               <Label>Quantity</Label>
-              <Input type="number" className="mt-1.5" min={1} value={pharmaQty} onChange={(e) => setPharmaQty(parseInt(e.target.value) || 1)} />
+              <Input type="number" className="mt-1.5" min={1} value={numVal(pharmaQty)} onChange={(e) => setPharmaQty(parseInt(e.target.value) || 1)} />
             </div>
             <div>
               <Label>Notes</Label>
-              <Textarea className="mt-1.5" placeholder="Any special instructions..." rows={2} value={pharmaNotes} onChange={(e) => setPharmaNotes(e.target.value)} />
+              <Textarea className="mt-1.5" placeholder="Any special instructions..." rows={2} value={numVal(pharmaNotes)} onChange={(e) => setPharmaNotes(e.target.value)} />
             </div>
             <Button className="w-full gap-2" onClick={() => requestPharma.mutate()} disabled={!pharmaProductId || requestPharma.isPending}>
               {requestPharma.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
@@ -948,7 +949,7 @@ const Portal = () => {
                 <div>
                   <p className="font-semibold text-base">{selectedProcedure.service_name}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    {new Date(selectedProcedure.procedure_date).toLocaleDateString("en-IN", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
+                    {selectedProcedure.date_not_recorded ? "Date not recorded" : new Date(selectedProcedure.procedure_date).toLocaleDateString("en-IN", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
                   </p>
                 </div>
                 <Badge variant="secondary">{selectedProcedure.status}</Badge>

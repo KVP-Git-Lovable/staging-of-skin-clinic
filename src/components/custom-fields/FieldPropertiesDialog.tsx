@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { numVal } from "@/lib/numberInput";
 import {
   Dialog,
   DialogContent,
@@ -163,14 +164,14 @@ export function FieldPropertiesDialog({ open, onOpenChange, field, sections, onS
           {meta.hasLength && (
             <div className="space-y-1.5">
               <Label>Max Length</Label>
-              <Input type="number" value={maxLength} onChange={(e) => setMaxLength(e.target.value)} placeholder="255" />
+              <Input type="number" value={numVal(maxLength)} onChange={(e) => setMaxLength(e.target.value)} placeholder="255" />
             </div>
           )}
 
           {meta.hasDecimals && (
             <div className="space-y-1.5">
               <Label>Decimal Places</Label>
-              <Input type="number" value={decimals} onChange={(e) => setDecimals(e.target.value)} />
+              <Input type="number" value={numVal(decimals)} onChange={(e) => setDecimals(e.target.value)} />
             </div>
           )}
 

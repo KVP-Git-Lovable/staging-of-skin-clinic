@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { onlyCountableInvoices } from "@/lib/revenueScope";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +23,7 @@ const StaffPerformanceCharts = ({ staffId, staffName }: { staffId: string; staff
   const { data: procedures = [] } = useQuery({
     queryKey: ["staff-perf-procs", staffId],
     queryFn: async () => {
-      const { data } = await supabase.from("procedures").select("*").eq("staff_id", staffId);
+      const { data } = await supabase.from("procedures").select("*").eq("staff_id", staffId).eq("date_not_recorded", false);
       return data || [];
     },
   });
@@ -34,7 +35,8 @@ const StaffPerformanceCharts = ({ staffId, staffName }: { staffId: string; staff
       const { data: appts } = await supabase.from("appointments").select("id").eq("staff_id", staffId);
       if (!appts?.length) return [];
       const { data } = await supabase.from("invoices").select("*").in("appointment_id", appts.map((a: any) => a.id));
-      return data || [];
+      // A cancelled bill is money never taken - see src/lib/revenueScope.ts.
+      return onlyCountableInvoices(data || []);
     },
   });
 

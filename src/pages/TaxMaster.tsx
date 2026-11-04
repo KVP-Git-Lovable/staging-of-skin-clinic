@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { numVal } from "@/lib/numberInput";
 import { Plus, Percent, Lock, Edit2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -127,15 +128,15 @@ export default function TaxMaster() {
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <Label>IGST (%)</Label>
-                  <Input type="number" step="0.01" className="mt-1.5" placeholder="18" value={igst} onChange={(e) => setIgst(e.target.value)} />
+                  <Input type="number" step="0.01" className="mt-1.5" placeholder="18" value={numVal(igst)} onChange={(e) => setIgst(e.target.value)} />
                 </div>
                 <div>
                   <Label>CGST (%)</Label>
-                  <Input type="number" step="0.01" className="mt-1.5" placeholder="9" value={cgst} onChange={(e) => setCgst(e.target.value)} />
+                  <Input type="number" step="0.01" className="mt-1.5" placeholder="9" value={numVal(cgst)} onChange={(e) => setCgst(e.target.value)} />
                 </div>
                 <div>
                   <Label>SGST (%)</Label>
-                  <Input type="number" step="0.01" className="mt-1.5" placeholder="9" value={sgst} onChange={(e) => setSgst(e.target.value)} />
+                  <Input type="number" step="0.01" className="mt-1.5" placeholder="9" value={numVal(sgst)} onChange={(e) => setSgst(e.target.value)} />
                 </div>
               </div>
               <div>

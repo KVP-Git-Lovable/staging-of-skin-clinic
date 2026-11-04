@@ -1,3 +1,4 @@
+import { reconcileLineTax, storedTaxOf, taxTotalRows } from "./invoiceTaxRows.ts";
 import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from "https://esm.sh/pdf-lib@1.17.1";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -10,9 +11,19 @@ function fmtINR(n: number) {
   return `INR ${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// Extra characters Helvetica (WinAnsi / cp1252) can print beyond Latin-1.
+const WINANSI_EXTRA = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
+
 function sanitize(s: any): string {
-  // Strip only control characters that WinAnsi cannot encode; preserve spaces.
-  return String(s ?? "").replace(/[\u0000-\u001F\u007F]+/g, " ");
+  // Control characters become spaces; invisible copy-paste marks (bidi,
+  // zero-width, BOM) are dropped; anything else the font cannot encode
+  // (emoji, Indic script) is dropped so one stray character never fails the PDF.
+  return String(s ?? "")
+    .replace(/[\u0000-\u001F\u007F]+/g, " ")
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, "")
+    .replace(/\u20B9/g, "Rs.")
+    .replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ")
+    .replace(/[^\u0020-\u007E\u00A1-\u00FF]/gu, (ch) => (WINANSI_EXTRA.has(ch) ? ch : ""));
 }
 
 function pct(n: any) {
@@ -277,15 +288,26 @@ async function buildInvoicePdf(supabase: any, inv: any): Promise<{ url: string; 
       const master = hsnMap.get(String(hsn ?? "").trim());
       const gstRate = snapshotRate || hsnRate(hsn);
       let sgst: number, cgst: number, igst: number;
-      if (master && master.total > 0 && !snapshotRate) {
+      // The Tax Master wins whenever it has this HSN, even if the line carries
+      // a snapshot rate. It is what the invoice was actually charged from, and
+      // the two can disagree: 999722 is CGST 2.5 + SGST 2.5 = 5%, while the
+      // snapshot (taken from services.gst_percent) still said 2.5. Letting the
+      // snapshot win sent that 2.5 down the halving branch below and printed
+      // SGST 1.25 / CGST 1.25 on an invoice charged 2.5 + 2.5.
+      if (master && master.total > 0) {
         sgst = master.sgst; cgst = master.cgst; igst = master.igst;
       } else if (sameState) {
+        // Only for an HSN the master does not carry: assume an even split.
         sgst = gstRate / 2; cgst = gstRate / 2; igst = 0;
       } else {
         sgst = 0; cgst = 0; igst = gstRate;
       }
       const rate = sgst + cgst + igst;
-      return { name: String(name || ""), qty, charges, hsn: hsn || "", sgst, cgst, igst, taxAmount: gross * rate / 100, amount: gross };
+      const taxAmount = gross * rate / 100;
+      // Tax-inclusive, so the Amount column adds up to Total Billed. Printed
+      // pre-tax it never reconciled: three lines totalling 10,100 under a
+      // Total Billed of 10,250.
+      return { name: String(name || ""), qty, charges, hsn: hsn || "", sgst, cgst, igst, taxAmount, amount: gross + taxAmount };
     };
 
     if (Array.isArray(inv.line_items) && inv.line_items.length > 0) {
@@ -316,12 +338,24 @@ async function buildInvoicePdf(supabase: any, inv: any): Promise<{ url: string; 
     // printed total past what was actually billed.
     const sumCharges = lineItems.reduce((s, r) => s + r.amount, 0);
     const invTotal = Number(inv.total_amount) || 0;
+    const storedTax = storedTaxOf(inv);
     if (sumCharges === 0 && invTotal > 0 && lineItems.length > 0) {
+      // The bill's own GST, not its tax_rate: that column stopped being written
+      // when bills moved to per-line GST, so `Number(inv.tax_rate) || 0` is 0 on
+      // every bill raised since - which left the base at the tax-INCLUSIVE
+      // total and then added tax on top of it, printing an Amount larger than
+      // the Total Billed underneath it.
       const gstRate = Number(inv.tax_rate) || 0;
-      const base = gstRate > 0 ? invTotal / (1 + gstRate / 100) : invTotal;
+      const base = storedTax > 0 ? invTotal - storedTax
+        : gstRate > 0 ? invTotal / (1 + gstRate / 100)
+        : invTotal;
       const per = base / lineItems.length;
       lineItems = lineItems.map((r) => makeRow(r.name, r.qty, per / (r.qty || 1), r.hsn, gstRate));
     }
+
+    // Scaled to the GST the bill actually carries - see invoiceTaxRows.ts
+    // beside this file for why, and the app's own suite for the tests.
+    lineItems = reconcileLineTax(lineItems, storedTax, sameState);
 
     // ---- PDF ----
     const pdfDoc = await PDFDocument.create();
@@ -533,6 +567,14 @@ async function buildInvoicePdf(supabase: any, inv: any): Promise<{ url: string; 
       y -= rowH;
     };
 
+
+    // The GST the bill carries, spelled out: a tax invoice that prints a GST %
+    // against every line and then no tax anywhere in its totals is not a tax
+    // invoice, and the same bill on screen has been showing CGST and SGST all
+    // along. Same stored figures, so the two documents say the same thing.
+    for (const row of taxTotalRows(inv, sameState, lineItems.reduce((s, r) => s + r.taxAmount, 0))) {
+      drawTotalsRow(row.label, fmtINR(row.value));
+    }
 
     const balanceDue = Number(inv.total_amount || 0) - Number(inv.paid_amount || 0);
     drawTotalsRow("Total Billed", fmtINR(Number(inv.total_amount || 0)));

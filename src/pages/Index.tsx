@@ -21,8 +21,15 @@ import {
   eachHourOfInterval, eachWeekOfInterval, differenceInDays,
 } from "date-fns";
 import { useNavigate } from "react-router-dom";
+import { npsBreakdown } from "@/lib/feedbackScores";
 import { useMoneyFormat } from "@/lib/currency";
 import { formatMoneyCompact } from "@/lib/currency";
+import { kpiColumnClass } from "@/lib/kpiGrid";
+import { invoiceMapByAppointment, type VisitBill } from "@/lib/invoicesForAppointments";
+import { appointmentPatientName, appointmentPatientInitialsText } from "@/lib/appointmentPatientName";
+import { appointmentStatusLabel, showsAsBilled, BILLED_BADGE_CLASSES } from "@/lib/appointmentStatus";
+import { useLiveAppointments } from "@/hooks/useLiveAppointments";
+import { MyDayCard } from "@/components/attendance/MyDayCard";
 
 
 // Data-heavy panels are capped so a large date range can never turn into a
@@ -153,7 +160,7 @@ const Index = () => {
 
 
   // Queries
-  const { data: staffList = [] } = useQuery({
+  const { data: staffList = [], isLoading: staffLoading } = useQuery({
     queryKey: ["staff-active-list"],
     queryFn: async () => {
       const { data, error } = await supabase.from("staff").select("id, first_name, last_name, role, specialization").eq("is_active", true).order("first_name");
@@ -171,7 +178,12 @@ const Index = () => {
     },
   });
 
-  const { data: appointments = [], isError: apptError, refetch: refetchAppts } = useQuery({
+  // The front desk re-books all day and this is the screen a doctor lands on.
+  // Without this it held whatever it fetched on load - see
+  // APPOINTMENT_QUERY_KEYS for why mounting the hook was not enough on its own.
+  useLiveAppointments();
+
+  const { data: appointments = [], isError: apptError, isLoading: apptLoading, refetch: refetchAppts } = useQuery({
     queryKey: ["dashboard-appointments", startISO, endISO],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -184,9 +196,30 @@ const Index = () => {
       if (error) throw error;
       return data;
     },
+    // A socket event missed while this screen was closed is corrected the
+    // moment it is opened. Scoped here rather than changed globally: the
+    // app-wide staleTime is what stopped every query re-running on focus.
+    refetchOnMount: "always",
   });
 
-  const { data: invoices = [], isError: invoiceError, refetch: refetchInvoices } = useQuery({
+  // Patient feedback over the same window as every other card. It replaced
+  // Revenue by Primary Concern, which was one "Unspecified" bar and always
+  // would be: the concern is filled on 7 of 56,763 appointments.
+  const { data: feedback = [] } = useQuery({
+    queryKey: ["dashboard-feedback", startISO, endISO],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patient_feedback")
+        .select("nps_score, service_rating")
+        .gte("created_at", startISO)
+        .lte("created_at", endISO)
+        .limit(DASH_ROW_CAP);
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  const { data: invoices = [], isError: invoiceError, isLoading: invoiceLoading, refetch: refetchInvoices } = useQuery({
     queryKey: ["dashboard-invoices", startISO, endISO],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -213,7 +246,7 @@ const Index = () => {
     },
   });
 
-  const { data: totalPatients = 0 } = useQuery({
+  const { data: totalPatients = 0, isLoading: patientCountLoading } = useQuery({
     queryKey: ["dashboard-patient-count"],
     queryFn: async () => {
       const { count, error } = await supabase.from("patients").select("*", { count: "exact", head: true });
@@ -222,7 +255,7 @@ const Index = () => {
     },
   });
 
-  const { data: todayAttendance = [] } = useQuery({
+  const { data: todayAttendance = [], isLoading: attendanceLoading } = useQuery({
     queryKey: ["dashboard-attendance"],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -234,7 +267,7 @@ const Index = () => {
     },
   });
 
-  const { data: activeCampaigns = [] } = useQuery({
+  const { data: activeCampaigns = [], isLoading: campaignsLoading } = useQuery({
     queryKey: ["dashboard-active-campaigns"],
     queryFn: async () => {
       const { data, error } = await supabase.from("campaigns" as any).select("id, amount_spent").eq("status", "Active");
@@ -243,7 +276,7 @@ const Index = () => {
     },
   });
 
-  const { data: problemAreas = [] } = useQuery({
+  const { data: problemAreas = [], isLoading: areasLoading } = useQuery({
     queryKey: ["dashboard-problem-areas"],
     queryFn: async () => {
       const { data, error } = await supabase.from("problem_areas").select("id, name");
@@ -252,7 +285,7 @@ const Index = () => {
     },
   });
 
-  const { data: newPatients = { rows: [] as any[], count: 0 } } = useQuery({
+  const { data: newPatients = { rows: [] as any[], count: 0 }, isLoading: newPatientsLoading } = useQuery({
     queryKey: ["dashboard-new-patients", startISO, endISO],
     queryFn: async () => {
       // Count comes from the database; only a capped slice of rows is pulled
@@ -325,6 +358,22 @@ const Index = () => {
   }, [invoices, filtered, selectedStaff, selectedService, apptById, doctorLookup, areaLookup]);
 
   // Chart data
+  /**
+   * Appointments that actually carry a bill, not ones a trigger happened to
+   * mark Completed. The card read 0 on a day a payment had been taken,
+   * because the patient paid before her slot and the trigger skipped her.
+   * Cancelled bills are already out of `invoices` for this purpose.
+   */
+  // invoiceMapByAppointment rather than a local filter. This copy excluded
+  // "Cancelled" only, so a MERGED bill would still have counted the visit as
+  // billed. No invoice carries that status today, so nothing on this screen
+  // changes - but three screens each had their own idea of what counts as a
+  // bill, and they disagreed. There is one definition now.
+  const billedApptIds = useMemo(
+    () => new Set(invoiceMapByAppointment(invoices as VisitBill[]).keys()),
+    [invoices],
+  );
+
   const chartData = useMemo(() => {
     // Status pie
     const statusMap: Record<string, number> = {};
@@ -372,11 +421,6 @@ const Index = () => {
       .map((name) => ({ name, paid: drBillPaid[name] || 0, invoiced: drBillInvoiced[name] || 0 }))
       .sort((a, b) => b.invoiced - a.invoiced)
       .slice(0, 10);
-    const revenueByProblemArea = Object.entries(areaRevenue)
-      .map(([name, value]) => ({ name, value: Math.round(value) }))
-      .filter((d) => d.value > 0)
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 10);
     const revenueByPaymentMode = Object.entries(modeRevenue)
       .map(([name, value]) => ({ name, value: Math.round(value) }))
       .filter((d) => d.value > 0)
@@ -422,11 +466,13 @@ const Index = () => {
       invoiced: invByBucket[k],
     }));
 
-    // Appointment Trend — completed appointments per bucket (same buckets as revenue trend)
+    // Appointment Trend — billed appointments per bucket (same buckets as the
+    // revenue trend, and the same test as the card above it, so the chart and
+    // the number over it cannot disagree).
     const completedByBucket: Record<string, number> = {};
     Object.keys(paidByBucket).forEach((k) => { completedByBucket[k] = 0; });
     filtered.forEach((a: any) => {
-      if (a.status !== "Completed") return;
+      if (!billedApptIds.has(a.id)) return;
       const k = bucketKey(new Date(a.start_time));
       if (completedByBucket[k] !== undefined) completedByBucket[k] += 1;
     });
@@ -441,16 +487,19 @@ const Index = () => {
       .sort((a, b) => b.value - a.value)
       .slice(0, 10);
 
-    return { appointmentStatus, appointmentsByDr, revenueByDr, revenueByProblemArea, revenueByPaymentMode, revenueByDate, revenueByService, appointmentsByDate };
-  }, [filtered, filteredInvoices, start, end]);
+    return { appointmentStatus, appointmentsByDr, revenueByDr, revenueByPaymentMode, revenueByDate, revenueByService, appointmentsByDate };
+  }, [filtered, filteredInvoices, billedApptIds, start, end]);
+
+  // The same npsBreakdown the Patient Feedback report reads, so the card and the
+  // report cannot disagree about who counts as a promoter.
+  const feedbackSummary = useMemo(() => npsBreakdown(feedback as { nps_score?: number | null; service_rating?: number | null }[]), [feedback]);
 
   // Stat card values
   const paidRevenue = filteredInvoices.reduce((s, inv: any) => s + Number(inv.paid_amount || 0), 0);
   const invoicedRevenue = filteredInvoices.reduce((s, inv: any) => s + Number(inv.total_amount || 0), 0);
-  const completedCount = filtered.filter((a: any) => a.status === "Completed").length;
+  const billedCount = filtered.filter((a: any) => billedApptIds.has(a.id)).length;
   const scheduledCount = filtered.filter((a: any) => a.status === "Scheduled").length;
   const confirmedAppts = filtered.filter((a: any) => a.status === "Confirmed");
-  const completedAppts = filtered.filter((a: any) => a.status === "Completed");
   const checkedInStaff = todayAttendance.filter((a: any) => a.check_in_time).length;
   const pendingAmount = pendingInvoices.reduce((s, inv: any) => s + (Number(inv.total_amount) - Number(inv.paid_amount)), 0);
   const dateLabel = DATE_RANGE_OPTIONS.find((o) => o.key === selectedDateRange)?.label || "Today";
@@ -490,11 +539,24 @@ const Index = () => {
         return openDrill("invoices", `Revenue by Doctor${suffix}`, id ? { staff: id } : {});
       }
       case "appointment_trend":
-        return openDrill("appointments", `Appointment Trend — Completed${suffix}`, { status: "Completed" });
+        return openDrill("appointments", `Appointment Trend — Billed${suffix}`, { billed: "1" });
       case "revenue_by_service":
         return openDrill("invoices", `Revenue by Service${suffix}`, key && key !== "Unspecified" ? { service: key } : {});
-      case "revenue_by_problem_area":
-        return openDrill("invoices", `Revenue by Primary Concern${suffix}`, key ? { problem_area: key } : {});
+      case "patient_feedback": {
+        // The report already lists every response with the patient, the score
+        // and the comment, and already filters by NPS group - so the card sends
+        // the band and the dashboard's own dates rather than growing a second
+        // list of its own.
+        const params = new URLSearchParams({ from: format(start, "yyyy-MM-dd"), to: format(end, "yyyy-MM-dd") });
+        // The chart's bars read "Promoters (9-10)" etc, but the report's
+        // nps_category filter holds the singular bands npsCategory() returns -
+        // "Detractors" would match nothing and show an empty report.
+        const band = { Promoters: "Promoter", Passives: "Passive", Detractors: "Detractor" }[
+          (key || "").split(" ")[0]
+        ];
+        if (band) params.set("nps_category", band);
+        return navigate(`/reports/patient_feedback?${params.toString()}`);
+      }
       case "revenue_by_payment_mode":
         return openDrill("invoices", `Revenue by Payment Mode${suffix}`, key ? { payment_mode: key } : {});
       default:
@@ -512,12 +574,36 @@ const Index = () => {
     });
   }, [appointments, todayStart, todayEnd]);
 
+  // Which stat cards this dashboard shows, so the row's column count fits them
+  // rather than leaving two or three empty columns - only Clinic 360 fills four.
+  const statCardKeys = [
+    "appointments_total", "appointments_confirmed", "appointments_completed", "new_patients",
+    "revenue", "total_patients", "staff_present", "active_campaigns",
+  ];
+  const kpiGridCols = kpiColumnClass(statCardKeys.filter((k) => shows(k)).length);
+
+  // Loading, grouped by what actually fails together.
+  //  - the appointment stat cards wait on the appointments query;
+  //  - every revenue figure waits on invoices AND appointments, because
+  //    filteredInvoices filters invoices by the appointment ids it built;
+  //  - the by-doctor and primary-concern charts additionally wait on their
+  //    lookup tables, which render WRONG rather than empty while loading
+  //    (every appointment reads "Unassigned", every invoice "Unspecified").
+  const revenueLoading = apptLoading || invoiceLoading;
+  const chartsLoading = revenueLoading || staffLoading || areasLoading;
+
   return (
     <div>
       <div className="page-header">
         <h1 className="page-title">{activeDashboard?.name || "Dashboard"}</h1>
         <p className="page-subtitle hidden sm:block">Clinic overview for {format(new Date(), "EEEE, MMMM d")}</p>
       </div>
+
+      {/* Above the KPIs on purpose: starting the day is the first thing
+          somebody does when they sit down, and it used to be three
+          navigations away under Employees > Attendance. Renders nothing for
+          an account with no staff record. */}
+      <MyDayCard />
 
       {(apptError || invoiceError) && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3">
@@ -563,39 +649,39 @@ const Index = () => {
         onCustomEndChange={setCustomEnd}
       />
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-4 items-stretch auto-rows-fr">
+      <div className={`grid ${kpiGridCols} gap-3 md:gap-4 mb-4 items-stretch auto-rows-fr`}>
         {shows("appointments_total") && (
           <div className="cursor-pointer h-full" onClick={() => openDrill("appointments", `Total Appointments — ${dateLabel}`)}>
-            <StatCard title="Total Appointments" value={filtered.length} change={dateLabel} changeType="neutral" icon={Calendar} iconColor="bg-info/10 text-info" delay={0} />
+            <StatCard title="Total Appointments" value={filtered.length} change={dateLabel} changeType="neutral" icon={Calendar} iconColor="bg-info/10 text-info" delay={0} loading={apptLoading} />
           </div>
         )}
         {shows("appointments_confirmed") && (
           <div className="cursor-pointer h-full" onClick={() => openDrill("appointments", `Confirmed Appointments — ${dateLabel}`, { status: "Confirmed" })}>
-            <StatCard title="Confirmed Appointments" value={confirmedAppts.length} change={`${scheduledCount} scheduled • ${dateLabel}`} changeType="neutral" icon={ClipboardList} iconColor="bg-primary/10 text-primary" delay={0.05} />
+            <StatCard title="Confirmed Appointments" value={confirmedAppts.length} change={`${scheduledCount} scheduled • ${dateLabel}`} changeType="neutral" icon={ClipboardList} iconColor="bg-primary/10 text-primary" delay={0.05} loading={apptLoading} />
           </div>
         )}
         {shows("appointments_completed") && (
-          <div className="cursor-pointer h-full" onClick={() => openDrill("appointments", `Completed Appointments — ${dateLabel}`, { status: "Completed" })}>
-            <StatCard title="Completed Appointments" value={completedCount} change={dateLabel} changeType="positive" icon={UserCheck} iconColor="bg-success/10 text-success" delay={0.1} />
+          <div className="cursor-pointer h-full" onClick={() => openDrill("appointments", `Billed Appointments — ${dateLabel}`, { billed: "1" })}>
+            <StatCard title="Billed Appointments" value={billedCount} change={dateLabel} changeType="positive" icon={UserCheck} iconColor="bg-success/10 text-success" delay={0.1} loading={apptLoading} />
           </div>
         )}
         {shows("new_patients") && (
           <div className="cursor-pointer h-full" onClick={() => openDrill("patients", `New Patients — ${dateLabel}`)}>
-            <StatCard title="New Patients Added" value={newPatients.count} change={dateLabel} changeType="neutral" icon={Users} delay={0.15} />
+            <StatCard title="New Patients Added" value={newPatients.count} change={dateLabel} changeType="neutral" icon={Users} delay={0.15} loading={newPatientsLoading} />
           </div>
         )}
         {shows("revenue") && (
           <div className="cursor-pointer h-full" onClick={() => openDrill("invoices", `Revenue — ${dateLabel}`)}>
-            <StatCard title="Revenue" value={formatMoneyCompact(paidRevenue)} change={`of ${formatMoneyCompact(invoicedRevenue)} invoiced • ${dateLabel}`} changeType="positive" icon={IndianRupee} iconColor="bg-success/10 text-success" delay={0.2} />
+            <StatCard title="Revenue" value={formatMoneyCompact(paidRevenue)} change={`of ${formatMoneyCompact(invoicedRevenue)} invoiced • ${dateLabel}`} changeType="positive" icon={IndianRupee} iconColor="bg-success/10 text-success" delay={0.2} loading={revenueLoading} />
           </div>
         )}
         {shows("total_patients") && (
           <div className="cursor-pointer h-full" onClick={() => openDrill("patients", "Total Patients", { from: "", to: "" })}>
-            <StatCard title="Total Patients" value={totalPatients} change="All time" changeType="neutral" icon={Users} delay={0.22} />
+            <StatCard title="Total Patients" value={totalPatients} change="All time" changeType="neutral" icon={Users} delay={0.22} loading={patientCountLoading} />
           </div>
         )}
         {shows("staff_present") && (
-          <StatCard title="Staff Present" value={`${checkedInStaff}`} change="Today" changeType="neutral" icon={UserCheck} iconColor="bg-warning/10 text-warning" delay={0.24} />
+          <StatCard title="Staff Present" value={`${checkedInStaff}`} change="Today" changeType="neutral" icon={UserCheck} iconColor="bg-warning/10 text-warning" delay={0.24} loading={attendanceLoading} />
         )}
         {shows("active_campaigns") && (
           <div onClick={() => navigate("/campaigns")} className="cursor-pointer h-full">
@@ -607,6 +693,7 @@ const Index = () => {
               icon={Megaphone}
               iconColor="bg-primary/10 text-primary"
               delay={0.2}
+              loading={campaignsLoading}
             />
           </div>
         )}
@@ -614,10 +701,12 @@ const Index = () => {
 
       {(shows("charts") || shows("revenue_by_service") || shows("appointment_trend")) && (
         <DashboardCharts
-          data={shows("charts") ? chartData : ({ ...chartData, appointmentStatus: [], appointmentsByDr: [], revenueByDr: [], revenueByProblemArea: [], revenueByPaymentMode: [], revenueByDate: [] } as any)}
+          feedback={feedbackSummary}
+          data={shows("charts") ? chartData : ({ ...chartData, appointmentStatus: [], appointmentsByDr: [], revenueByDr: [], revenueByPaymentMode: [], revenueByDate: [] } as any)}
           onChartClick={handleChartClick}
           showRevenueByService={shows("revenue_by_service")}
           showAppointmentTrend={shows("appointment_trend")}
+          loading={chartsLoading}
         />
       )}
 
@@ -628,7 +717,7 @@ const Index = () => {
       {/* Lists section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
         {shows("today_appointments") && (
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="lg:col-span-2 data-table">
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="lg:col-span-2 data-table">
 
           <div className="p-4 md:p-5 border-b flex items-center justify-between">
             <h2 className="font-display font-semibold text-base md:text-lg">Today's Appointments</h2>
@@ -642,16 +731,16 @@ const Index = () => {
                 <div key={apt.id} className="flex items-center justify-between p-3 md:p-4 hover:bg-muted/50 transition-colors gap-2 cursor-pointer" onClick={() => navigate("/appointments")}>
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-display font-semibold text-xs shrink-0">
-                      {apt.patients ? `${apt.patients.first_name[0]}${apt.patients.last_name[0]}` : apt.patient_name?.[0] || "?"}
+                      {appointmentPatientInitialsText(apt)}
                     </div>
                     <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">{apt.patients ? `${apt.patients.first_name} ${apt.patients.last_name}` : apt.patient_name || "Walk-in"}</p>
+                      <p className="font-medium text-sm truncate">{appointmentPatientName(apt, "Walk-in")}</p>
                       <p className="text-xs text-muted-foreground truncate">{apt.service}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="hidden sm:inline text-xs text-muted-foreground">{format(new Date(apt.start_time), "h:mm a")}</span>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${statusColors[apt.status] || "bg-muted"}`}>{apt.status}</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${showsAsBilled(apt.status, billedApptIds.has(apt.id)) ? BILLED_BADGE_CLASSES : statusColors[apt.status] || "bg-muted"}`}>{appointmentStatusLabel(apt.status, billedApptIds.has(apt.id))}</span>
                   </div>
                 </div>
               ))
@@ -661,7 +750,7 @@ const Index = () => {
         )}
 
         {shows("pending_invoices") && (
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }} className="data-table">
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.54 }} className="data-table">
 
           <div className="p-4 md:p-5 border-b flex items-center justify-between">
             <div className="flex items-center gap-2">

@@ -45,6 +45,7 @@ export const TRASH_OBJECT_LABELS: Record<string, string> = {
   category_master: "Category",
   unit_master: "Unit",
   saved_reports: "Saved Report",
+  knowledge_articles: "Knowledge Article",
 };
 
 export function objectLabel(objectType: string) {

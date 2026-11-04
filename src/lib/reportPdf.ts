@@ -1,8 +1,9 @@
 import { format } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
-import { formatNumber } from "@/lib/currency";
+import { formatAmountExact, formatNumber } from "@/lib/currency";
 import { REPORT_DATE_RANGE_OPTIONS } from "@/lib/reportDateRange";
-import type { ReportColumn, ReportConfig } from "@/lib/reportsCatalog";
+import { displayDate } from "@/lib/dateInput";
+import type { ReportColumn, ReportConfig, ReportSummaryCard } from "@/lib/reportsCatalog";
 import type { FilterState } from "@/components/reports/ReportFilterBar";
 import bundledLogo from "@/assets/skin-clinic-logo.png";
 
@@ -41,20 +42,72 @@ function cellValue(col: ReportColumn, row: ReportRow) {
  * the table on screen never disagree. col.render returns a ReactNode and cannot be
  * used here, so those columns fall through to the raw value.
  */
-export function reportCellText(col: ReportColumn, row: ReportRow): string {
+export function reportCellText(col: ReportColumn, row: ReportRow, empty = "-"): string {
   const v = cellValue(col, row);
-  if (v === null || v === undefined || v === "") return "-";
+  if (v === null || v === undefined || v === "") return empty;
+  return formatCell(col, v);
+}
+
+/**
+ * The same cell for the CSV download.
+ *
+ * The download used to write whatever the row held, so a date column that read
+ * "05/10/2026" on screen and in the printed report arrived in Excel as
+ * "2026-10-05T14:20:43.29+00:00" - a timestamp nobody asked for, in a format
+ * Excel will not treat as a date. One formatter for all three now. An empty
+ * cell stays empty rather than becoming a dash, because a spreadsheet counts
+ * and filters on blanks.
+ */
+export function reportCellCsv(col: ReportColumn, row: ReportRow): string {
+  const v = cellValue(col, row);
+  if (v === null || v === undefined || v === "") return "";
+  // Money goes out as a bare number, to two decimals. Grouped into
+  // "1,66,322.50" it would land in Excel as text, and a column of text cannot
+  // be summed - which is the one thing a finance export exists for. But bare
+  // used to mean every digit JavaScript holds: a Rs 1,000 bill charged
+  // inclusive of 5% GST is 1000/1.05, which does not divide evenly, and
+  // B-49052 exported its GST as 47.61904762 against 952.3809524. Two decimals
+  // is what the same figure reads as on screen and in the printed report, and
+  // 47.62 + 952.38 still comes back to the 1000.00 on the bill.
+  if (col.type === "currency") return Number(v).toFixed(2);
+  // A count has no paise and must not grow any - "5.00" of something.
+  if (col.type === "number") return String(Number(v));
+  return formatCell(col, v);
+}
+
+function formatCell(col: ReportColumn, v: unknown): string {
   switch (col.type) {
+    // Money is the figure someone totals by hand against a bank statement, so
+    // it never abbreviates and never loses its paise. Sending it through
+    // formatNumber rounded to whole rupees while decimals are off, and a day
+    // whose summary card read Rs 1,66,322.50 printed rows adding up to
+    // Rs 1,66,324.00 - three half-rupee bills, each rounded up, in a document
+    // that could not be reconciled against itself.
     case "currency":
+      return formatAmountExact(Number(v));
+    // A count has no paise and should not grow any.
     case "number":
       return formatNumber(Number(v));
+    // dd/MM/yyyy, the one date format the rest of the app settled on.
     case "date":
-      try { return format(new Date(v), "dd MMM yyyy"); } catch { return String(v); }
+      return displayDate(v as string) || String(v);
     case "datetime":
-      try { return format(new Date(v), "dd MMM yyyy h:mm a"); } catch { return String(v); }
+      try { return `${displayDate(v as string)} ${format(new Date(v as string), "h:mm a")}`.trim(); } catch { return String(v); }
     default:
       return String(v);
   }
+}
+
+/**
+ * The columns as an export row should be read.
+ *
+ * A report that builds its own export rows has already resolved them - the
+ * service is that line's service, the GST is that line's GST - so the columns'
+ * accessors, which expect a whole invoice, must not run again. The heading and
+ * the type stay, so the figures format and align exactly as they do today.
+ */
+export function exportColumns(columns: ReportColumn[]): ReportColumn[] {
+  return columns.map(({ key, label, type }) => ({ key, label, type }));
 }
 
 /** Currency columns say which currency, since the values carry no symbol. */
@@ -103,6 +156,25 @@ export function pdfHeadCells(columns: ReportColumn[]) {
     content: sanitize(reportColumnHeader(c)),
     styles: isNumeric(c) ? NUMERIC_STYLES : {},
   }));
+}
+
+/**
+ * The totals line, styled per cell for the same reason the head is: autoTable's
+ * `columnStyles` reaches the body only, so a figure set by it would sit under a
+ * heading it no longer lines up with.
+ *
+ * Empty reads as empty, not as the "-" a body cell shows: a dash under Patient
+ * on a totals line looks like a missing value rather than a column that has no
+ * total.
+ */
+export function pdfFootCells(columns: ReportColumn[], totals: ReportRow) {
+  return columns.map((c) => {
+    const v = cellValue(c, totals);
+    return {
+      content: v === null || v === undefined || v === "" ? "" : sanitize(formatCell(c, v)),
+      styles: isNumeric(c) ? NUMERIC_STYLES : {},
+    };
+  });
 }
 
 const presetLabel = (key?: string) =>
@@ -222,13 +294,57 @@ async function loadClinicHeader(): Promise<ClinicHeader> {
 export interface ReportPdfArgs {
   report: ReportConfig;
   rows: ReportRow[];
-  summary: { label: string; value: string }[];
+  summary: ReportSummaryCard[];
   filterState: FilterState;
   dayOnly: boolean;
+  /** A line under the columns that get added up. */
+  totals?: ReportRow | null;
+  /** What the document counts, when a row is not a record - a bill split
+   *  across its services is still one bill. */
+  recordCount?: number;
+  /**
+   * What an empty cell prints. A dash says "nothing was recorded", which is
+   * right on an ordinary row and wrong on the second line of a bill, where the
+   * date and the patient are blank because they are already on the line above.
+   */
+  emptyCell?: string;
+}
+
+/** Summary boxes per row before wrapping, so each stays wide enough to read. */
+export const SUMMARY_BOXES_PER_ROW = 4;
+export const SUMMARY_BOX_HEIGHT = 40;
+/** Room for the hint line under the figure. */
+export const SUMMARY_BOX_HEIGHT_WITH_HINT = 52;
+const SUMMARY_BOX_GAP = 10;
+
+/**
+ * Where each summary box goes, relative to the block's top-left corner.
+ *
+ * The boxes used to share one row however many there were, which was fine for
+ * the three or four every report had. The Invoices report now shows one box
+ * per payment instrument, and dividing the page width by eight leaves each too
+ * narrow for the figure inside it - so they wrap instead, keeping the width a
+ * full row of four would have.
+ */
+export function summaryBoxLayout(
+  count: number,
+  availableWidth: number,
+  perRowLimit = SUMMARY_BOXES_PER_ROW,
+  gap = SUMMARY_BOX_GAP,
+  boxH = SUMMARY_BOX_HEIGHT,
+) {
+  const perRow = Math.max(1, Math.min(perRowLimit, count));
+  const boxW = (availableWidth - gap * (perRow - 1)) / perRow;
+  const boxes = Array.from({ length: Math.max(0, count) }, (_, i) => ({
+    x: (i % perRow) * (boxW + gap),
+    y: Math.floor(i / perRow) * (boxH + gap),
+  }));
+  const rows = Math.ceil(Math.max(0, count) / perRow);
+  return { perRow, boxW, boxes, height: rows === 0 ? 0 : rows * (boxH + gap) - gap };
 }
 
 /** Assemble the document. Split from the save so the output can be inspected in tests. */
-export async function buildReportPdf({ report, rows, summary, filterState, dayOnly }: ReportPdfArgs) {
+export async function buildReportPdf({ report, rows, summary, filterState, dayOnly, totals, recordCount, emptyCell }: ReportPdfArgs) {
   const [{ jsPDF }, { autoTable }, clinic, filterLine] = await Promise.all([
     import("jspdf"),
     import("jspdf-autotable"),
@@ -298,39 +414,55 @@ export async function buildReportPdf({ report, rows, summary, filterState, dayOn
     y += 12;
   }
   doc.text(
-    sanitize(`${rows.length.toLocaleString()} record(s)  -  generated ${format(new Date(), "dd MMM yyyy h:mm a")}`),
+    sanitize(`${(recordCount ?? rows.length).toLocaleString()} record(s)  -  generated ${format(new Date(), "dd MMM yyyy h:mm a")}`),
     margin,
     y,
   );
   doc.setTextColor(0);
   y += 16;
 
-  // Summary boxes.
+  // Summary boxes. Taller only when something needs a hint line, so every other
+  // report keeps the geometry it had.
   if (summary.length) {
-    const gap = 10;
-    const boxW = (pageWidth - margin * 2 - gap * (summary.length - 1)) / summary.length;
-    const boxH = 40;
+    const boxH = summary.some((s) => s.hint) ? SUMMARY_BOX_HEIGHT_WITH_HINT : SUMMARY_BOX_HEIGHT;
+    const layout = summaryBoxLayout(summary.length, pageWidth - margin * 2, SUMMARY_BOXES_PER_ROW, undefined, boxH);
     summary.forEach((s, i) => {
-      const x = margin + i * (boxW + gap);
+      const x = margin + layout.boxes[i].x;
+      const boxY = y + layout.boxes[i].y;
       doc.setDrawColor(215);
-      doc.roundedRect(x, y, boxW, boxH, 3, 3);
+      doc.roundedRect(x, boxY, layout.boxW, boxH, 3, 3);
       doc.setFontSize(7.5);
       doc.setTextColor(110);
-      doc.text(sanitize(s.label).toUpperCase(), x + 8, y + 14);
+      doc.text(sanitize(s.label).toUpperCase(), x + 8, boxY + 14);
       doc.setFont("helvetica", "bold");
       doc.setFontSize(12);
       doc.setTextColor(0);
-      doc.text(sanitize(s.value), x + 8, y + 31);
+      doc.text(sanitize(s.value), x + 8, boxY + 31);
       doc.setFont("helvetica", "normal");
+      if (s.hint) {
+        doc.setFontSize(6.5);
+        doc.setTextColor(120);
+        // A hint is the stored payment mode, so its length is the clinic's data,
+        // not ours. Measure rather than guess a character count: splitTextToSize
+        // gives the part that fits the box, and only that part is drawn.
+        const [fitted] = doc.splitTextToSize(sanitize(s.hint), layout.boxW - 16);
+        doc.text(fitted ?? "", x + 8, boxY + 44);
+        doc.setTextColor(0);
+      }
     });
-    y += boxH + 16;
+    y += layout.height + 16;
   }
 
   autoTable(doc, {
     startY: y,
     margin: { left: margin, right: margin, bottom: 34 },
     head: [pdfHeadCells(report.columns)],
-    body: rows.map((r) => report.columns.map((c) => sanitize(reportCellText(c, r)))),
+    body: rows.map((r) => report.columns.map((c) => sanitize(reportCellText(c, r, emptyCell)))),
+    ...(totals ? { foot: [pdfFootCells(report.columns, totals)] } : {}),
+    // autoTable repeats the foot on every page by default, which would put a
+    // running total that is not running at the bottom of each one.
+    showFoot: "lastPage" as const,
+    footStyles: { fillColor: [237, 242, 241], textColor: 20, fontStyle: "bold" as const },
     styles: {
       fontSize: 8,
       cellPadding: 4,

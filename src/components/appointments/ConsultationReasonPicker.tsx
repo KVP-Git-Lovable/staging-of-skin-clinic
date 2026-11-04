@@ -200,6 +200,39 @@ export function ConsultationReasonPicker({
   );
 }
 
+/**
+ * Inverse of buildConsultationReasonsForSave: turn stored reasons back into the
+ * tag list plus the two free-text boxes.
+ *
+ * The appointment form never needed this - it only ever creates - but anything
+ * that EDITS a saved record does: without it, opening a record and saving again
+ * would drop whatever was typed into "Others".
+ */
+export function parseConsultationReasonsForEdit(stored: string[] | null | undefined): {
+  reasons: string[];
+  othersAestheticText: string;
+  othersClinicalText: string;
+} {
+  const reasons: string[] = [];
+  let othersAestheticText = "";
+  let othersClinicalText = "";
+
+  for (const raw of stored ?? []) {
+    const value = String(raw ?? "");
+    if (value === OTHER_AESTHETIC || value.startsWith(`${OTHER_AESTHETIC}: `)) {
+      othersAestheticText = value.slice(OTHER_AESTHETIC.length + 2);
+      reasons.push(OTHER_AESTHETIC);
+    } else if (value === OTHER_CLINICAL || value.startsWith(`${OTHER_CLINICAL}: `)) {
+      othersClinicalText = value.slice(OTHER_CLINICAL.length + 2);
+      reasons.push(OTHER_CLINICAL);
+    } else if (value) {
+      reasons.push(value);
+    }
+  }
+
+  return { reasons, othersAestheticText, othersClinicalText };
+}
+
 export function buildConsultationReasonsForSave(
   reasons: string[],
   othersAestheticText: string,
@@ -210,4 +243,16 @@ export function buildConsultationReasonsForSave(
     if (r === OTHER_CLINICAL) return othersClinicalText.trim() ? `Others (Clinical): ${othersClinicalText.trim()}` : OTHER_CLINICAL;
     return r;
   });
+}
+
+/**
+ * "None" is the select's cleared state, but it is a real string the moment it is
+ * saved - a patient whose type was cleared would read "None" on their record
+ * instead of blank. Both screens that write consultation_type run the value
+ * through here so they agree on what "no type" means in the column.
+ */
+export function normaliseConsultationType(value: string | null | undefined): string | null {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed || trimmed === "None") return null;
+  return trimmed;
 }

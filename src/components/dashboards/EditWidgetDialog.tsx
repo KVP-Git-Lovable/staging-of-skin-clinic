@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { numVal } from "@/lib/numberInput";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -188,7 +189,7 @@ export function EditWidgetDialog({ component, onClose, onSave }: Props) {
                 <Input
                   type="number"
                   min={1}
-                  value={opts.max_groups ?? 100}
+                  value={numVal(opts.max_groups ?? 100)}
                   onChange={(e) => set({ max_groups: Number(e.target.value) || 1 })}
                 />
               </div>

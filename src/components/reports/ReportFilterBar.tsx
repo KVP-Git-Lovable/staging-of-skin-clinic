@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DateInput } from "@/components/shared/DateInput";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -42,12 +43,15 @@ interface Props {
    * ends are just set to the same day.
    */
   singleDay?: boolean;
+  /** Set when this report's rows are scoped to the viewer, so a doctor filter
+   *  would offer choices that change nothing. See ReportView. */
+  hideDoctorFilter?: boolean;
 }
 
 /** Clinicians only: Doctor and Referral Doctor roles. */
 const isDoctorRole = (role?: string | null) => /doctor/i.test(role || "");
 
-export function ReportFilterBar({ filters, state, onChange, showSearch = true, singleDay = false }: Props) {
+export function ReportFilterBar({ hideDoctorFilter, filters, state, onChange, showSearch = true, singleDay = false }: Props) {
   const dateRange = filters.find((f) => f.type === "dateRange");
   const selects = filters.filter((f) => f.type === "select");
   const hasDoctor = filters.some((f) => f.type === "doctor");
@@ -189,20 +193,20 @@ export function ReportFilterBar({ filters, state, onChange, showSearch = true, s
                 <>
                   <div className="min-w-[130px]">
                     <label className="text-[10px] uppercase tracking-wide text-muted-foreground">From</label>
-                    <Input
-                      type="date"
+                    <DateInput
                       value={state.customStart || ""}
-                      onChange={(e) => applyPreset("custom", e.target.value, undefined)}
-                      className="h-8 text-xs"
+                      onChange={(isoDate) => applyPreset("custom", isoDate, undefined)}
+                      withCalendar
+                      inputClassName="h-8 text-xs"
                     />
                   </div>
                   <div className="min-w-[130px]">
                     <label className="text-[10px] uppercase tracking-wide text-muted-foreground">To</label>
-                    <Input
-                      type="date"
+                    <DateInput
                       value={state.customEnd || ""}
-                      onChange={(e) => applyPreset("custom", undefined, e.target.value)}
-                      className="h-8 text-xs"
+                      onChange={(isoDate) => applyPreset("custom", undefined, isoDate)}
+                      withCalendar
+                      inputClassName="h-8 text-xs"
                     />
                   </div>
                 </>
@@ -211,7 +215,7 @@ export function ReportFilterBar({ filters, state, onChange, showSearch = true, s
           )
         )}
 
-        {hasDoctor && (
+        {hasDoctor && !hideDoctorFilter && (
           <div className="min-w-[150px]">
             <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Doctor</label>
             <Select value={state.selects.doctor || "all"} onValueChange={(v) => setSelect("doctor", v)}>
@@ -297,6 +301,10 @@ function DateField({ label, value, onChange, clearable = true }: { label: string
           <Calendar
             mode="single"
             selected={value}
+            // Opens on the month already filtered for, not on today. A report
+            // filtered to 10 September opened on October once the month turned,
+            // so changing the day meant paging backwards first.
+            defaultMonth={value}
             onSelect={(d) => { onChange(d ?? undefined); setOpen(false); }}
             initialFocus
             className={cn("p-3 pointer-events-auto")}

@@ -1,9 +1,18 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { X, Search, Check, ChevronsUpDown, Plus, Trash2, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/shared/DateInput";
+import { patientAgeLabel } from "@/lib/patientIdentity";
 import { Label } from "@/components/ui/label";
+import {
+  ConsultationReasonPicker,
+  buildConsultationReasonsForSave,
+  normaliseConsultationType,
+  parseConsultationReasonsForEdit,
+  type ConsultationType,
+} from "@/components/appointments/ConsultationReasonPicker";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -29,17 +38,19 @@ import {
 } from "@/components/ui/popover";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { useQuery } from "@tanstack/react-query";
-import { fetchAll } from "@/lib/supabasePaginate";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useValidator } from "@/hooks/useValidationRules";
 import { useCustomFields } from "@/lib/custom-fields/api";
 import { CustomFieldsRenderer, validateCustomFields } from "@/components/custom-fields/CustomFieldsRenderer";
+import { PATIENT_SOURCE_OPTIONS, optionsIncluding } from "@/lib/patientSourceOptions";
+import { referralKind, referrerStillApplies, referringPatientId } from "@/lib/patientReferral";
+import { PatientCombobox } from "./PatientCombobox";
+import { ReferringDoctorPicker } from "./ReferringDoctorPicker";
 import type { ValidationMessage } from "@/lib/validation/engine";
 import { AlertCircle } from "lucide-react";
 import { Sparkles, Loader2 } from "lucide-react";
 import type { Tables, TablesInsert } from "@/integrations/supabase/types";
 import { findDuplicates, type DuplicateMatch } from "@/lib/duplicates/engine";
-import DuplicateAlertDialog from "@/components/duplicates/DuplicateAlertDialog";
 import DuplicateNotificationBand from "@/components/duplicates/DuplicateNotificationBand";
 import DuplicateResolveDialog from "@/components/duplicates/DuplicateResolveDialog";
 
@@ -66,7 +77,13 @@ interface PatientFormSheetProps {
   onOpenChange: (open: boolean) => void;
   patient?: Patient | null;
   defaultValues?: Partial<Patient> | null;
-  onSuccess: () => void;
+  /**
+   * Given the patient that was saved, so a caller can go somewhere useful.
+   * `created` distinguishes a new registration from an edit - the Patients page
+   * opens the new patient's record, which is where the front desk goes next to
+   * book them in, and does not move on an edit.
+   */
+  onSuccess: (saved?: { id: string; created: boolean }) => void;
 }
 
 const emptyForm: TablesInsert<"patients"> = {
@@ -75,6 +92,7 @@ const emptyForm: TablesInsert<"patients"> = {
   date_of_birth: null,
   gender: null,
   phone: null,
+  alternate_phone: null,
   email: null,
   address: null,
   city: null,
@@ -99,22 +117,21 @@ const emptyForm: TablesInsert<"patients"> = {
   source_ad_details: null,
   source_referral_doctor: null,
   source_other_text: null,
+  consultation_type: null,
+  consultation_reasons: null,
 };
 
 export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, onSuccess }: PatientFormSheetProps) {
+  const queryClient = useQueryClient();
   const [form, setForm] = useState<TablesInsert<"patients">>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<string[]>([]);
-  const [referralPatientSearch, setReferralPatientSearch] = useState("");
-  const [referralPopoverOpen, setReferralPopoverOpen] = useState(false);
-  const [selectedReferralPatientName, setSelectedReferralPatientName] = useState("");
-  const [refDocOpen, setRefDocOpen] = useState(false);
-  const [refDocSearch, setRefDocSearch] = useState("");
-  const [addDoctorOpen, setAddDoctorOpen] = useState(false);
-  const [newDoctorName, setNewDoctorName] = useState("");
-  const [savingDoctor, setSavingDoctor] = useState(false);
-  const [deletingDoctorId, setDeletingDoctorId] = useState<string | null>(null);
-  const [deletingDoctorName, setDeletingDoctorName] = useState("");
+
+  // Reason for Consultation. The tag list and the two "Others" boxes are edited
+  // separately and folded into form.consultation_reasons on save.
+  const [consultationReasons, setConsultationReasons] = useState<string[]>([]);
+  const [othersAestheticText, setOthersAestheticText] = useState("");
+  const [othersClinicalText, setOthersClinicalText] = useState("");
   const [familyRows, setFamilyRows] = useState<FamilyRow[]>([]);
   const [activeTab, setActiveTab] = useState("personal");
   const [removedFamilyIds, setRemovedFamilyIds] = useState<string[]>([]);
@@ -123,64 +140,10 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
   const [resolveWith, setResolveWith] = useState<Record<string, any> | null>(null);
 
   const [duplicateAck, setDuplicateAck] = useState(false);
-  const [dupMatches, setDupMatches] = useState<DuplicateMatch[]>([]);
-  const [dupDialogOpen, setDupDialogOpen] = useState(false);
   const [familyExisting, setFamilyExisting] = useState<Record<string, any>>({});
   const { toast } = useToast();
   const isEditing = !!patient;
 
-  const { data: referralDoctors = [], refetch: refetchDoctors } = useQuery({
-    queryKey: ["referral-doctors-list"],
-    queryFn: async () => {
-      const [staffResult, externalResult] = await Promise.all([
-        supabase
-          .from("staff")
-          .select("id, first_name, last_name, role, specialization")
-          .in("role", ["Doctor", "Referral Doctor"])
-          .eq("is_active", true)
-          .order("first_name"),
-        supabase
-          .from("external_doctors")
-          .select("id, name, specialization")
-          .order("name")
-      ]);
-
-      const staffDocs = (staffResult.data || []).map(s => ({
-        ...s,
-        type: "internal",
-        display_name: `${s.first_name} ${s.last_name}`
-      }));
-
-      const externalDocs = (externalResult.data || []).map(e => ({
-        ...e,
-        type: "external",
-        display_name: e.name
-      }));
-
-      return [...staffDocs, ...externalDocs].sort((a, b) =>
-        a.display_name.localeCompare(b.display_name)
-      );
-    },
-  });
-  const filteredRefDocs = useMemo(() => {
-    const q = refDocSearch.toLowerCase();
-    return referralDoctors.filter((s: any) =>
-      `${s.first_name} ${s.last_name}`.toLowerCase().includes(q) ||
-      (s.specialization || "").toLowerCase().includes(q)
-    );
-  }, [referralDoctors, refDocSearch]);
-
-  const { data: allPatients = [] } = useQuery({
-    queryKey: ["patients-lookup"],
-    queryFn: async () =>
-      await fetchAll<any>((from, to) =>
-        supabase
-          .from("patients")
-          .select("id, first_name, last_name")
-          .order("first_name")
-          .range(from, to)
-      ),
-  });
 
 
   useEffect(() => {
@@ -191,6 +154,7 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
         date_of_birth: patient.date_of_birth,
         gender: patient.gender,
         phone: patient.phone,
+        alternate_phone: patient.alternate_phone,
         email: patient.email,
         address: patient.address,
         city: patient.city,
@@ -216,11 +180,16 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
         source_referral_doctor: (patient as any).source_referral_doctor || null,
         source_other_text: (patient as any).source_other_text || null,
         doctor_id: (patient as any).doctor_id || null,
+        consultation_type: patient.consultation_type ?? null,
+        consultation_reasons: patient.consultation_reasons ?? null,
       });
-      // Set referral patient name if source is "Referred by Patient"
-      if ((patient as any).source === "Referred by Patient" && (patient as any).source_referral_doctor) {
-        const refPat = allPatients.find(p => p.id === (patient as any).source_referral_doctor);
-        if (refPat) setSelectedReferralPatientName(`${refPat.first_name} ${refPat.last_name}`);
+      // Unpack the stored reasons, or editing and saving a patient would drop
+      // whatever was typed into "Others".
+      {
+        const parsed = parseConsultationReasonsForEdit(patient.consultation_reasons);
+        setConsultationReasons(parsed.reasons);
+        setOthersAestheticText(parsed.othersAestheticText);
+        setOthersClinicalText(parsed.othersClinicalText);
       }
     } else if (defaultValues) {
       setForm({
@@ -233,8 +202,14 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
     } else {
       setForm(emptyForm);
     }
-    // NOTE: `allPatients` is intentionally excluded — it is a new array reference on
-    // every render and would reset the form on each keystroke while editing.
+    // Reset the consultation-reason state whenever the sheet is not loading an
+    // existing patient, so tags from a previously edited patient don't bleed
+    // into a new (or default-values) patient and get saved onto their record.
+    if (!patient) {
+      setConsultationReasons([]);
+      setOthersAestheticText("");
+      setOthersClinicalText("");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patient?.id, open]);
 
@@ -258,22 +233,6 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
 
   const updateField = (field: keyof typeof form, value: string | null) => {
     setForm((prev) => ({ ...prev, [field]: value || null }));
-  };
-
-  const handleDeleteExternalDoctor = async (doctorId: string) => {
-    try {
-      const { error } = await supabase
-        .from("external_doctors")
-        .delete()
-        .eq("id", doctorId);
-      if (error) throw error;
-      await refetchDoctors();
-      setDeletingDoctorId(null);
-      setDeletingDoctorName("");
-      toast({ title: "Doctor deleted successfully" });
-    } catch (err: any) {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    }
   };
 
   const validate = useValidator("patients");
@@ -455,24 +414,18 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
     }
   };
 
-  const handleSave = async (opts: { skipDuplicateCheck?: boolean } = {}) => {
+  // No duplicate gate here. This used to re-run findDuplicates and return
+  // early on ANY match, whatever its severity, diverting into a modal whose
+  // "save anyway" button was itself hidden for blocking rules - so a patient
+  // sharing a family phone number could not be registered at all. The live
+  // band above the form is the whole warning now.
+  const handleSave = async () => {
     if (!form.first_name.trim()) {
       toast({ title: "Error", description: "First name is required", variant: "destructive" });
       return;
     }
 
     const cfErrors = validateCustomFields(customFieldDefs, customValues);
-    if (!opts.skipDuplicateCheck) {
-      const matches = await findDuplicates("patients", form as Record<string, any>, {
-        excludeId: patient?.id ?? null,
-      });
-      if (matches.length > 0) {
-        setDupMatches(matches);
-        setDupDialogOpen(true);
-        return;
-      }
-    }
-
     setCustomErrors(cfErrors);
     if (Object.keys(cfErrors).length) {
       toast({ title: "Validation failed", description: String(Object.values(cfErrors)[0]), variant: "destructive" });
@@ -494,7 +447,16 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
     setSaving(true);
     try {
       let patientId: string | null = patient?.id || null;
-      const payload = { ...form, ...customValues } as any;
+      const payload = {
+        ...form,
+        // The picker's cleared state is the literal string "None"; stored as-is
+        // it would read back as a consultation type of "None".
+        consultation_type: normaliseConsultationType(form.consultation_type),
+        consultation_reasons: consultationReasons.length
+          ? buildConsultationReasonsForSave(consultationReasons, othersAestheticText, othersClinicalText)
+          : null,
+        ...customValues,
+      } as any;
       if (isEditing && patient) {
         const { error } = await supabase
           .from("patients")
@@ -538,7 +500,17 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
         await saveFamilyRows(patientId);
       }
 
-      onSuccess();
+      // The patient list the booking, billing, procedure and photo screens
+      // each read is one cached query that nothing here ever refreshed, so a
+      // patient created on this page was invisible to them for a minute -
+      // which is exactly the window the front desk books in. The booking now
+      // reads the patient by id regardless (bookingPatient.ts); this stops
+      // every other screen showing a list without them.
+      queryClient.invalidateQueries({ queryKey: ["patients-list"] });
+      // Or a patient registered just now is missing from every picker's
+      // unsearched list until its five minutes of staleness run out.
+      queryClient.invalidateQueries({ queryKey: ["patients-combobox-initial"] });
+      onSuccess(patientId ? { id: patientId, created: !isEditing } : undefined);
       onOpenChange(false);
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -549,13 +521,6 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
 
   return (
     <>
-    <DuplicateAlertDialog
-      open={dupDialogOpen}
-      matches={dupMatches}
-      objectKey="patients"
-      onClose={() => setDupDialogOpen(false)}
-      onIgnore={() => void handleSave({ skipDuplicateCheck: true })}
-    />
     <DuplicateResolveDialog
       open={!!resolveWith && !!patient}
       onClose={() => setResolveWith(null)}
@@ -591,12 +556,16 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
           </div>
         )}
 
-        {liveMatches.length > 0 && (
+        {/* duplicateAck was set in two places and read in none, so dismissing
+            only worked until the next keystroke re-ran the check. It hides the
+            band now, and the live check clears it when a fresh match arrives,
+            so editing the phone brings the warning back. */}
+        {liveMatches.length > 0 && !duplicateAck && (
           <DuplicateNotificationBand
             className="mt-4"
             matches={liveMatches}
             objectKey="patients"
-            onIgnore={() => { setDuplicateAck(true); setLiveMatches([]); }}
+            onIgnore={() => setDuplicateAck(true)}
             onResolve={(rec) => setResolveWith(rec)}
           />
         )}
@@ -631,14 +600,29 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
               <div>
                 <Label>Date of Birth</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={form.date_of_birth || ""}
-                  onChange={(e) => updateField("date_of_birth", e.target.value)}
+                  onChange={(iso) => updateField("date_of_birth", iso)}
                   className="mt-1.5"
+                />
+              </div>
+              <div>
+                {/* Read, not asked for: the age the record will show, worked
+                    out by the same function as the patient page, so a year
+                    typed wrong is obvious here rather than three screens
+                    later. Nothing is stored - there is no age column. */}
+                <Label htmlFor="patient-age">Age</Label>
+                <Input
+                  id="patient-age"
+                  readOnly
+                  tabIndex={-1}
+                  aria-readonly="true"
+                  className="mt-1.5 bg-muted/50 text-muted-foreground"
+                  value={patientAgeLabel(form.date_of_birth)}
+                  placeholder="—"
                 />
               </div>
               <div>
@@ -660,13 +644,25 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <Label>Phone</Label>
                 <Input
                   value={form.phone || ""}
                   onChange={(e) => updateField("phone", e.target.value)}
                   placeholder="+91 98765 43210"
+                  className="mt-1.5"
+                />
+              </div>
+              <div>
+                {/* Patients who live abroad give the clinic both numbers, and
+                    one field meant the second went into the notes or replaced
+                    the first. Searching the patient list finds either. */}
+                <Label>Alternate Phone</Label>
+                <Input
+                  value={form.alternate_phone || ""}
+                  onChange={(e) => updateField("alternate_phone", e.target.value)}
+                  placeholder="+971 50 123 4567"
                   className="mt-1.5"
                 />
               </div>
@@ -688,54 +684,36 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
                 <ChevronDown className="h-4 w-4 transition-transform" />
               </CollapsibleTrigger>
               <CollapsibleContent className="p-3 space-y-4 border-t">
+                {/* Address, State, Pincode and the two Emergency Contact boxes
+                    are gone: the clinic does not collect them, and State,
+                    Pincode and Emergency Contact were empty on all 27,281
+                    patients. They stay in the payloads above and below, so an
+                    edit here cannot blank the 4,113 addresses already stored -
+                    the fields came off the screen, not out of the record.
+                    City stays because it was not on the list. */}
                 <div>
-                  <Label>Address</Label>
-                  <Textarea
-                    value={form.address || ""}
-                    onChange={(e) => updateField("address", e.target.value)}
-                    placeholder="Street address"
+                  <Label>City</Label>
+                  <Input
+                    value={form.city || ""}
+                    onChange={(e) => updateField("city", e.target.value)}
                     className="mt-1.5"
-                    rows={2}
                   />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>State</Label>
-                    <Input
-                      value={form.state || ""}
-                      onChange={(e) => updateField("state", e.target.value)}
-                      className="mt-1.5"
-                    />
-                  </div>
-                  <div>
-                    <Label>Pincode</Label>
-                    <Input
-                      value={form.pincode || ""}
-                      onChange={(e) => updateField("pincode", e.target.value)}
-                      className="mt-1.5"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Emergency Contact Name</Label>
-                    <Input
-                      value={form.emergency_contact_name || ""}
-                      onChange={(e) => updateField("emergency_contact_name", e.target.value)}
-                      className="mt-1.5"
-                    />
-                  </div>
-                  <div>
-                    <Label>Emergency Contact Phone</Label>
-                    <Input
-                      value={form.emergency_contact_phone || ""}
-                      onChange={(e) => updateField("emergency_contact_phone", e.target.value)}
-                      className="mt-1.5"
-                    />
-                  </div>
                 </div>
               </CollapsibleContent>
             </Collapsible>
+
+            <div className="border rounded-md p-3">
+              <ConsultationReasonPicker
+                consultationType={(form.consultation_type || "") as ConsultationType | ""}
+                onConsultationTypeChange={(v) => setForm((f) => ({ ...f, consultation_type: v }))}
+                consultationReasons={consultationReasons}
+                onConsultationReasonsChange={setConsultationReasons}
+                othersAestheticText={othersAestheticText}
+                setOthersAestheticText={setOthersAestheticText}
+                othersClinicalText={othersClinicalText}
+                setOthersClinicalText={setOthersClinicalText}
+              />
+            </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -761,7 +739,14 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
                     ...prev,
                     source: v,
                     source_ad_details: v !== "Advertisement" ? null : (prev as any).source_ad_details,
-                    source_referral_doctor: (v !== "Dr. referral" && v !== "Referred by Patient") ? null : (prev as any).source_referral_doctor,
+                    // The column holds a doctor's NAME for one kind of referral
+                    // and the referring patient's ID for the other, so a switch
+                    // between the two has to clear it - a name left in a column
+                    // read as an id resolves to nobody. Moving between two
+                    // sources of the SAME kind keeps it.
+                    source_referral_doctor: referrerStillApplies((prev as any).source, v)
+                      ? (prev as any).source_referral_doctor
+                      : null,
                     source_other_text: v !== "Other" ? null : (prev as any).source_other_text,
                   }))}
                 >
@@ -769,12 +754,13 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Walk-in">Walk-in</SelectItem>
-                    <SelectItem value="Advertisement">Advertisement</SelectItem>
-                    <SelectItem value="Dr. referral">Dr. referral</SelectItem>
-                    <SelectItem value="Referred by Patient">Referred by Patient</SelectItem>
-                    <SelectItem value="Campaign">Campaign</SelectItem>
-                    <SelectItem value="Other">Other</SelectItem>
+                    {/* One list, shared with the patient Details tab - the two
+                        had drifted to different options and different wording.
+                        A value a record already holds stays on the list, so an
+                        imported "Social media" is not silently replaced. */}
+                    {optionsIncluding(form.source, PATIENT_SOURCE_OPTIONS).map((o) => (
+                      <SelectItem key={o} value={o}>{o}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -792,139 +778,40 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
               </div>
             )}
 
-            {((form as any).source && (form as any).source.toLowerCase().includes("referral")) && (
+            {referralKind((form as any).source) === "doctor" && (
               <div className="animate-fade-in">
                 <Label>Referred Doctor Name *</Label>
-                <Popover open={refDocOpen} onOpenChange={setRefDocOpen}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      role="combobox"
-                      className="w-full mt-1.5 justify-between font-normal"
-                    >
-                      <span className="truncate">
-                        {(form as any).source_referral_doctor || "Select referring doctor..."}
-                      </span>
-                      <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-[300px] p-2" align="start">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Search className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <Input
-                        placeholder="Search doctors..."
-                        value={refDocSearch}
-                        onChange={(e) => setRefDocSearch(e.target.value)}
-                        className="h-8"
-                      />
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="h-8 w-8 p-0 shrink-0"
-                        onClick={() => setAddDoctorOpen(true)}
-                        title="Add new doctor"
-                      >
-                        <Plus className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    <div className="max-h-56 overflow-y-auto space-y-0.5">
-                      {filteredRefDocs.length === 0 ? (
-                        <p className="text-xs text-muted-foreground text-center py-3">
-                          No doctors found.
-                        </p>
-                      ) : (
-                        filteredRefDocs.map((s: any) => {
-                          const name = s.display_name;
-                          const selected = (form as any).source_referral_doctor === name;
-                          return (
-                            <div key={s.id} className="group relative">
-                              <button
-                                type="button"
-                                className={cn(
-                                  "w-full text-left px-2 py-1.5 text-sm rounded flex items-center gap-2 hover:bg-accent",
-                                  selected && "bg-accent"
-                                )}
-                                onClick={() => {
-                                  setForm((prev) => ({ ...prev, source_referral_doctor: name }));
-                                  setRefDocOpen(false);
-                                  setRefDocSearch("");
-                                }}
-                              >
-                                <Check className={cn("h-3.5 w-3.5", selected ? "opacity-100" : "opacity-0")} />
-                                <div className="flex-1 min-w-0">
-                                  <p className="truncate">{name}</p>
-                                  <p className="text-[10px] text-muted-foreground truncate">
-                                    {s.type === "external" ? "External Doctor" : [s.role, s.specialization].filter(Boolean).join(" · ")}
-                                    {s.specialization && s.type === "external" && ` · ${s.specialization}`}
-                                  </p>
-                                </div>
-                              </button>
-                              {s.type === "external" && (
-                                <button
-                                  type="button"
-                                  className="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/20 text-destructive transition-opacity"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setDeletingDoctorId(s.id);
-                                    setDeletingDoctorName(name);
-                                  }}
-                                  title="Delete external doctor"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </PopoverContent>
-                </Popover>
+                {/* The same picker the patient Details tab now shows, so a
+                    doctor's name is chosen from one list wherever it is set. */}
+                <div className="mt-1.5">
+                  <ReferringDoctorPicker
+                    value={(form as any).source_referral_doctor}
+                    onChange={(name) => setForm((prev) => ({ ...prev, source_referral_doctor: name }))}
+                  />
+                </div>
               </div>
             )}
 
-            {(form as any).source === "Referred by Patient" && (
+            {referralKind((form as any).source) === "patient" && (
               <div className="animate-fade-in">
                 <Label>Referring Patient *</Label>
-                <Popover open={referralPopoverOpen} onOpenChange={setReferralPopoverOpen}>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className="w-full mt-1.5 justify-start font-normal">
-                      {selectedReferralPatientName || "Select patient..."}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-72 p-2" align="start">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Search className="h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Search patients..."
-                        value={referralPatientSearch}
-                        onChange={(e) => setReferralPatientSearch(e.target.value)}
-                        className="h-8"
-                      />
-                    </div>
-                    <div className="max-h-48 overflow-y-auto space-y-0.5">
-                      {allPatients
-                        .filter(p => patient ? p.id !== patient.id : true)
-                        .filter(p => `${p.first_name} ${p.last_name}`.toLowerCase().includes(referralPatientSearch.toLowerCase()))
-                        .slice(0, 20)
-                        .map(p => (
-                          <button
-                            key={p.id}
-                            className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-accent"
-                            onClick={() => {
-                              setForm(prev => ({ ...prev, source_referral_doctor: p.id }));
-                              setSelectedReferralPatientName(`${p.first_name} ${p.last_name}`);
-                              setReferralPopoverOpen(false);
-                              setReferralPatientSearch("");
-                            }}
-                          >
-                            {p.first_name} {p.last_name}
-                          </button>
-                        ))}
-                    </div>
-                  </PopoverContent>
-                </Popover>
+                {/* The same picker the Details tab shows, so a referring patient
+                    is chosen the same way wherever it is set. The list it
+                    replaced read every one of the ~27,000 patients into memory
+                    and showed the first 20 by name - which are the records that
+                    hold a phone number in the name column, rendered here as a
+                    bare phone number with no label at all. */}
+                <div className="mt-1.5">
+                  <PatientCombobox
+                    value={referringPatientId((form as any).source_referral_doctor)}
+                    onValueChange={(patientId) =>
+                      setForm((prev) => ({ ...prev, source_referral_doctor: patientId }))
+                    }
+                    placeholder="Select patient..."
+                    // Nobody refers themselves.
+                    excludeId={patient?.id}
+                  />
+                </div>
               </div>
             )}
 
@@ -1222,85 +1109,6 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
           </Button>
         </div>
 
-        {/* Add External Doctor Modal */}
-        <Dialog open={addDoctorOpen} onOpenChange={setAddDoctorOpen}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>Add External Doctor</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="doctor-name">Doctor Name *</Label>
-                <Input
-                  id="doctor-name"
-                  placeholder="e.g., Dr. John Smith"
-                  value={newDoctorName}
-                  onChange={(e) => setNewDoctorName(e.target.value)}
-                  className="mt-1.5"
-                />
-              </div>
-              <div className="flex gap-2 pt-2">
-                <Button variant="outline" className="flex-1" onClick={() => { setAddDoctorOpen(false); setNewDoctorName(""); }}>
-                  Cancel
-                </Button>
-                <Button
-                  className="flex-1"
-                  onClick={async () => {
-                    if (!newDoctorName.trim()) {
-                      toast({ title: "Error", description: "Please enter doctor name" });
-                      return;
-                    }
-                    setSavingDoctor(true);
-                    try {
-                      const { data, error } = await supabase.from("external_doctors").insert({
-                        name: newDoctorName.trim(),
-                      }).select();
-                      if (error) throw error;
-                      if (data && data[0]) {
-                        setForm((prev) => ({ ...prev, source_referral_doctor: data[0].name }));
-                        await refetchDoctors();
-                        toast({ title: "Success", description: "Doctor added successfully" });
-                      }
-                      setAddDoctorOpen(false);
-                      setNewDoctorName("");
-                    } catch (err: any) {
-                      toast({ title: "Error", description: err.message });
-                    } finally {
-                      setSavingDoctor(false);
-                    }
-                  }}
-                  disabled={savingDoctor || !newDoctorName.trim()}
-                >
-                  {savingDoctor ? "Adding..." : "Add Doctor"}
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        {/* Delete External Doctor Confirmation */}
-        <Dialog open={!!deletingDoctorId} onOpenChange={(open) => { if (!open) setDeletingDoctorId(null); }}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Delete Doctor?</DialogTitle>
-            </DialogHeader>
-            <p className="text-sm text-muted-foreground">
-              Are you sure you want to delete <span className="font-medium">{deletingDoctorName}</span>? This action cannot be undone.
-            </p>
-            <div className="flex gap-2 pt-4">
-              <Button variant="outline" className="flex-1" onClick={() => setDeletingDoctorId(null)}>
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                className="flex-1"
-                onClick={() => deletingDoctorId && handleDeleteExternalDoctor(deletingDoctorId)}
-              >
-                Delete
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
       </DialogContent>
     </Dialog>
     </>

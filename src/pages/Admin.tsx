@@ -1,8 +1,9 @@
 import { Link } from "react-router-dom";
 import { Card } from "@/components/ui/card";
-import { ShieldCheck, SlidersHorizontal, ChevronRight, CopyCheck, Trash2, History, Coins, Users } from "lucide-react";
+import { ShieldCheck, SlidersHorizontal, ChevronRight, CopyCheck, Trash2, History, Coins, Users, ImageIcon, BookOpen, ClipboardList} from "lucide-react";
 
 const sections = [
+  { title: "Knowledge Articles", description: "Clinical protocols", url: "/knowledge", icon: BookOpen },
   {
     title: "Validation Rules",
     description: "Enforce data quality with branching criteria, error and alert messages.",
@@ -28,6 +29,12 @@ const sections = [
     icon: History,
   },
   {
+    title: "Knowledge Article Categories",
+    description: "Create, edit, order and activate the categories used for service knowledge articles.",
+    url: "/admin/knowledge-categories",
+    icon: BookOpen,
+  },
+  {
     title: "Currency & Billing",
     description: "Set decimals, decimal digits and Indian (Lakh/Crore) or US (K/M) number formatting.",
     url: "/admin/currency",
@@ -38,6 +45,18 @@ const sections = [
     description: "Create users, manage profiles and assign profiles. Admins only.",
     url: "/user-management",
     icon: Users,
+  },
+  {
+    title: "Photo Fingerprints",
+    description: "Let Photos search find a patient from a copy of a photo already on their record.",
+    url: "/admin/photo-fingerprints",
+    icon: ImageIcon,
+  },
+  {
+    title: "Visits to Review",
+    description: "Past visits marked Completed with no bill and no procedure recorded against them.",
+    url: "/admin/visits-to-review",
+    icon: ClipboardList,
   },
   {
     title: "Trash Policy & Audit",

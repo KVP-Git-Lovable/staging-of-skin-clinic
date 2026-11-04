@@ -1,6 +1,7 @@
-import { useState, useRef, useCallback, useEffect, lazy, Suspense } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, lazy, Suspense } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { Plus, Camera, Upload } from "lucide-react";
+import { Plus } from "lucide-react";
+import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { motion } from "framer-motion";
@@ -9,15 +10,17 @@ import {
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CameraCapture } from "@/components/shared/CameraCapture";
+import { ViewPrescriptionButton } from "@/components/prescriptions/ViewPrescriptionButton";
 import { ProcedureFormDialog } from "@/components/procedures/ProcedureFormDialog";
 import { ProcedureDetailSheet } from "@/components/procedures/ProcedureDetailSheet";
-import { ImportProceduresDialog } from "@/components/procedures/ImportProceduresDialog";
+import { useUrlPanel } from "@/hooks/useUrlPanel";
 import { useModuleListViews } from "@/hooks/useModuleListViews";
 import ViewBar from "@/components/listViews/ViewBar";
 import ViewEditorDialog, { type PickOption } from "@/components/listViews/ViewEditorDialog";
 import FieldsDisplayDialog from "@/components/listViews/FieldsDisplayDialog";
 import ViewFiltersPanel from "@/components/listViews/ViewFiltersPanel";
+import { getReportDateRange } from "@/lib/reportDateRange";
+import { withinRange } from "@/lib/listDateFilter";
 import ListKanban from "@/components/listViews/ListKanban";
 import KanbanSettingsDialog from "@/components/listViews/KanbanSettingsDialog";
 import { applyFilters as applyListFilters, fieldDefIn, type ListDisplayMode, type ListView } from "@/lib/listViews/engine";
@@ -38,8 +41,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { toast } from "sonner";
-import { SalesforceSyncButton } from "@/components/salesforce/SalesforceSyncButton";
 import { withDrPrefix } from "@/lib/staffName";
+import { procedureDateLabel } from "@/lib/procedureDate";
 
 const DEFAULT_PROCEDURE_FIELDS = DEFAULT_PROCEDURE_VIEW_COLUMNS;
 
@@ -64,17 +67,32 @@ const Procedures = () => {
   const navigate = useNavigate();
   // Seeded from ?q= so global search can hand a term to this list view
   const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get("q") || "");
+
+  // A period to look at, offered in the Filters panel. It belongs to the page
+  // rather than to the view, so it works on the standard views too - whose
+  // own filters are locked, which is why there was no way to ask for one
+  // day's visits at all. "all" is every visit, as before.
+  const [datePreset, setDatePreset] = useState("all");
+  const [dateStart, setDateStart] = useState("");
+  const [dateEnd, setDateEnd] = useState("");
+  const dateRange = useMemo(
+    () => getReportDateRange(datePreset, dateStart, dateEnd),
+    [datePreset, dateStart, dateEnd],
+  );
   const [createOpen, setCreateOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get("id"));
-  const [cameraProc, setCameraProc] = useState<any>(null);
+  // Two-way now. It was seeded from ?id= but never wrote back, so opening a
+  // record left no history entry and Back walked out of the list.
+  const { openId: selectedId, open: openProcedure, close: closeProcedure } = useUrlPanel("id");
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const rowRefs = useRef<Record<string, HTMLTableRowElement | HTMLDivElement | null>>({});
   const queryClient = useQueryClient();
 
+  // "procedures" is the section key - it names the saved views in the database
+  // and the column layouts in the browser, so it stays. Only the label, which
+  // the dropdown prints as "All Prescriptions", follows the module's name.
   const {
-    allViews, userId: viewsUserId, activeView, selectView, saveView, saveCharts, deleteView, pinDefault, updateStandardColumns,
-  } = useModuleListViews("procedures", "Procedures", DEFAULT_PROCEDURE_VIEW_COLUMNS);
+    allViews, userId: viewsUserId, activeView, selectView, saveView, saveCharts, deleteView, pinDefault, unpinDefault, updateStandardColumns,
+  } = useModuleListViews("procedures", "Prescriptions", DEFAULT_PROCEDURE_VIEW_COLUMNS);
   const [viewEditorOpen, setViewEditorOpen] = useState(false);
   const [editingView, setEditingView] = useState<ListView | null>(null);
   const [deleteViewTarget, setDeleteViewTarget] = useState<ListView | null>(null);
@@ -85,21 +103,12 @@ const Procedures = () => {
   const [kanbanOpen, setKanbanOpen] = useState(false);
   const [kanban, setKanban] = useState(() => getKanbanConfig("procedures", ALL_VIEW_ID));
 
+  // Marks the row so it is easy to find once the visit is closed. The visit
+  // itself no longer closes on save, so there is nothing to scroll to yet and
+  // nothing to offer a way back into - it says "Prescription saved" where the
+  // doctor is looking, which is inside the visit.
   const handleProcedureSaved = useCallback((savedId: string) => {
     setHighlightedId(savedId);
-    // Scroll to the row after a short delay to let the sheet close
-    setTimeout(() => {
-      rowRefs.current[savedId]?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, 300);
-    toast.success("Procedure saved", {
-      description: "View Record",
-      action: {
-        label: "View Record",
-        onClick: () => setSelectedId(savedId),
-      },
-      duration: 6000,
-    });
-    // Clear highlight after 3 seconds
     setTimeout(() => setHighlightedId(null), 3000);
   }, []);
 
@@ -109,6 +118,10 @@ const Procedures = () => {
       const { data, error } = await supabase
         .from("procedures")
         .select("*, patients(first_name, last_name), staff:staff!procedures_staff_id_fkey(first_name, last_name), appointments(staff:staff_id(first_name, last_name), reason_for_consultation)")
+        // Visits imported without a date are left out: the clinic wants the
+        // record to match Salesforce exactly, nothing more. The rows are still
+        // in the database - see the 20260925 migration - just not listed.
+        .eq("date_not_recorded", false)
         .order("procedure_date", { ascending: false });
       if (error) throw error;
       return data;
@@ -139,7 +152,7 @@ const Procedures = () => {
   const moveKanbanCard = async (proc: any, field: string, value: string) => {
     const { error } = await supabase.from("procedures").update({ [field]: value || null } as any).eq("id", proc.id);
     if (error) { toast.error(error.message); return; }
-    toast.success("Procedure updated");
+    toast.success("Prescription updated");
     queryClient.invalidateQueries({ queryKey: ["procedures"] });
   };
 
@@ -148,6 +161,7 @@ const Procedures = () => {
   }, [activeView?.id]);
 
   let filtered = procedures.filter((p: any) => {
+    if (!withinRange(p.procedure_date, dateRange)) return false;
     const name = `${p.patients?.first_name || ""} ${p.patients?.last_name || ""}`.toLowerCase();
     return name.includes(search.toLowerCase()) || p.service_name?.toLowerCase().includes(search.toLowerCase());
   });
@@ -164,6 +178,9 @@ const Procedures = () => {
   const toViewRow = (proc: any) => ({
     id: proc.id,
     procedure_date: proc.procedure_date,
+    // Carried so the list/kanban path can tell an undated visit from one on
+    // 1 January 1900 - formatCell reads the whole row.
+    date_not_recorded: proc.date_not_recorded,
     patient: `${proc.patients?.first_name || ""} ${proc.patients?.last_name || ""}`.trim(),
     service_name: proc.service_name || "",
     doctor: proc.staff_id || "",
@@ -189,11 +206,6 @@ const Procedures = () => {
           <p className="page-subtitle">Record consultations & prescriptions</p>
         </div>
         <div className="flex gap-2 w-fit flex-wrap">
-          <SalesforceSyncButton />
-          <Button variant="outline" className="gap-2" onClick={() => setImportOpen(true)}>
-            <Upload className="h-4 w-4" />
-            Import Prescriptions
-          </Button>
           <Button className="gap-2" onClick={() => navigate("/procedures/new")}>
             <Plus className="h-4 w-4" />
             New Prescription
@@ -211,6 +223,7 @@ const Procedures = () => {
           onEdit={(v) => { setEditingView(v); setViewEditorOpen(true); }}
           onDelete={(v) => setDeleteViewTarget(v)}
           onPin={pinDefault}
+          onUnpin={unpinDefault}
           onClone={(v) => { setEditingView({ ...v, id: undefined as any, name: `${v.name} (Copy)`, is_default: false }); setViewEditorOpen(true); }}
           onFields={() => setViewFieldsOpen(true)}
           onRefresh={() => queryClient.invalidateQueries({ queryKey: ["procedures"] })}
@@ -219,6 +232,7 @@ const Procedures = () => {
           displayModes={["table", "kanban"]}
           onKanbanSettings={() => setKanbanOpen(true)}
           count={filtered.length}
+          countLoading={isLoading}
           search={search}
           onSearchChange={setSearch}
           itemLabel="Procedures"
@@ -241,6 +255,17 @@ const Procedures = () => {
                 onSave={(filters) => { if (activeView) saveView({ ...activeView, filters }); }}
                 onClose={() => setViewFiltersOpen(false)}
                 itemLabel="procedures"
+                dateFilter={{
+                  preset: datePreset,
+                  customStart: dateStart,
+                  customEnd: dateEnd,
+                  label: "Visit date",
+                  onChange: ({ preset, customStart, customEnd }) => {
+                    setDatePreset(preset);
+                    setDateStart(customStart);
+                    setDateEnd(customEnd);
+                  },
+                }}
               />
             ) : activeView && !activeView.is_standard ? (
               <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading charts…</div>}>
@@ -251,6 +276,9 @@ const Procedures = () => {
                   onChange={(charts) => saveCharts(activeView.id, charts)}
                   onClose={() => setViewChartsOpen(false)}
                   fields={PROCEDURE_VIEW_FIELDS}
+                  // A chart grouped by a picklist shows the names behind the
+                  // ids the column stores - the doctor field holds a staff id.
+                  optionsFor={viewOptionsFor}
                   itemLabel="Procedures"
                   defaultGroupField="status"
                 />
@@ -275,7 +303,7 @@ const Procedures = () => {
               options={kanbanOptions}
               columns={displayColumns}
               fields={PROCEDURE_VIEW_FIELDS}
-              onOpen={(row) => setSelectedId(row.id)}
+              onOpen={(row) => openProcedure(row.id)}
               onMove={moveKanbanCard}
               titleField="patient"
             />
@@ -288,7 +316,7 @@ const Procedures = () => {
         {isLoading ? (
           <div className="text-center py-8 text-muted-foreground text-sm">Loading...</div>
         ) : filtered.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground text-sm">No procedures found</div>
+          <div className="text-center py-8 text-muted-foreground text-sm">No prescriptions found</div>
         ) : (
           filtered.map((proc: any) => (
             <motion.div
@@ -297,7 +325,7 @@ const Procedures = () => {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               className={`stat-card p-3 cursor-pointer active:scale-[0.98] transition-all duration-500 ${highlightedId === proc.id ? "ring-2 ring-primary bg-primary/5" : ""}`}
-              onClick={() => setSelectedId(proc.id)}
+              onClick={() => openProcedure(proc.id)}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -309,10 +337,14 @@ const Procedures = () => {
                 </div>
                 <div className="flex flex-col items-end gap-1 shrink-0">
                   <Badge variant="secondary" className="text-xs">{proc.status}</Badge>
-                  <span className="text-xs text-muted-foreground">{new Date(proc.procedure_date).toLocaleDateString()}</span>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setCameraProc(proc); }}>
-                    <Camera className="h-3.5 w-3.5" />
-                  </Button>
+                  <span className="text-xs text-muted-foreground">{procedureDateLabel(proc, "dd/MM/yyyy")}</span>
+                  {/* Reading or printing a prescription should not mean
+                      opening it - opening it is one slip away from changing
+                      what was saved. */}
+                  <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                    <ViewPrescriptionButton procedureId={proc.id} className="h-7 w-7" />
+                    <ViewPrescriptionButton procedureId={proc.id} action="print" className="h-7 w-7" />
+                  </div>
                 </div>
               </div>
             </motion.div>
@@ -330,18 +362,18 @@ const Procedures = () => {
               {shouldShowColumn("service_name") && <TableHead>Service</TableHead>}
               {shouldShowColumn("doctor") && <TableHead>Doctor</TableHead>}
               {shouldShowColumn("status") && <TableHead>Status</TableHead>}
-              <TableHead className="w-12"></TableHead>
+              <TableHead className="w-24"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow><TableCell colSpan={displayColumns.length + 1} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>
             ) : filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={displayColumns.length + 1} className="text-center py-8 text-muted-foreground">No procedures found</TableCell></TableRow>
+              <TableRow><TableCell colSpan={displayColumns.length + 1} className="text-center py-8 text-muted-foreground">No prescriptions found</TableCell></TableRow>
             ) : (
               filtered.map((proc: any) => (
-                <TableRow key={proc.id} ref={(el) => { rowRefs.current[proc.id] = el; }} className={`cursor-pointer hover:bg-muted/50 transition-all duration-500 ${highlightedId === proc.id ? "ring-2 ring-primary bg-primary/5" : ""}`} onClick={() => setSelectedId(proc.id)}>
-                  {shouldShowColumn("procedure_date") && <TableCell className="text-sm">{new Date(proc.procedure_date).toLocaleDateString()}</TableCell>}
+                <TableRow key={proc.id} ref={(el) => { rowRefs.current[proc.id] = el; }} className={`cursor-pointer hover:bg-muted/50 transition-all duration-500 ${highlightedId === proc.id ? "ring-2 ring-primary bg-primary/5" : ""}`} onClick={() => openProcedure(proc.id)}>
+                  {shouldShowColumn("procedure_date") && <TableCell className="text-sm">{procedureDateLabel(proc, "dd/MM/yyyy")}</TableCell>}
                   {shouldShowColumn("patient") && <TableCell className="font-medium">{proc.patients?.first_name} {proc.patients?.last_name}</TableCell>}
                   {shouldShowColumn("service_name") && <TableCell>{proc.service_name}</TableCell>}
                   {shouldShowColumn("doctor") && (
@@ -354,10 +386,13 @@ const Procedures = () => {
                       <Badge variant="secondary" className="text-xs">{proc.status}</Badge>
                     </TableCell>
                   )}
-                  <TableCell>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); setCameraProc(proc); }} title="Take Photo">
-                      <Camera className="h-4 w-4" />
-                    </Button>
+                  {/* Stopped once on the cell rather than per button, as the
+                      invoice table does. */}
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <div className="flex justify-end gap-1">
+                      <ViewPrescriptionButton procedureId={proc.id} />
+                      <ViewPrescriptionButton procedureId={proc.id} action="print" />
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
@@ -372,35 +407,11 @@ const Procedures = () => {
         <ProcedureFormDialog open={createOpen} onOpenChange={setCreateOpen} />
       )}
 
-      <ImportProceduresDialog
-        open={importOpen}
-        onOpenChange={setImportOpen}
-        onSuccess={() => queryClient.invalidateQueries({ queryKey: ["procedures"] })}
-      />
-
       <ProcedureDetailSheet
         procedureId={selectedId}
-        onClose={() => {
-          setSelectedId(null);
-          if (searchParams.get("id")) {
-            const next = new URLSearchParams(searchParams);
-            next.delete("id");
-            setSearchParams(next, { replace: true });
-          }
-        }}
+        onClose={closeProcedure}
         onSaved={handleProcedureSaved}
       />
-
-      {cameraProc && (
-        <CameraCapture
-          open={!!cameraProc}
-          onOpenChange={(o) => { if (!o) setCameraProc(null); }}
-          patientId={cameraProc.patient_id}
-          patientName={`${cameraProc.patients?.first_name || ""} ${cameraProc.patients?.last_name || ""}`}
-          context="procedure"
-          contextId={cameraProc.id}
-        />
-      )}
 
       <KanbanSettingsDialog
         open={kanbanOpen}
@@ -433,7 +444,7 @@ const Procedures = () => {
       <FieldsDisplayDialog
         open={viewFieldsOpen}
         onOpenChange={setViewFieldsOpen}
-        viewName={activeView?.name ?? "All Procedures"}
+        viewName={activeView?.name ?? "All Prescriptions"}
         columns={displayColumns}
         onSave={(cols) => {
           if (!activeView) return;

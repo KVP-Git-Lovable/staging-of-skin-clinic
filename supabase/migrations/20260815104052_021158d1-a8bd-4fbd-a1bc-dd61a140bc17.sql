@@ -1,0 +1,1 @@
+ALTER TABLE public.services ADD COLUMN IF NOT EXISTS problem_area_ids uuid[] NOT NULL DEFAULT '{}'::uuid[];

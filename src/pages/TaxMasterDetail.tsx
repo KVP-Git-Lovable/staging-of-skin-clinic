@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { numVal } from "@/lib/numberInput";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Save, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -134,7 +135,7 @@ const TaxMasterDetail = () => {
               step="0.01"
               className="mt-1.5"
               placeholder="0"
-              value={igst}
+              value={numVal(igst)}
               onChange={(e) => setIgst(e.target.value)}
             />
           </div>
@@ -145,7 +146,7 @@ const TaxMasterDetail = () => {
               step="0.01"
               className="mt-1.5"
               placeholder="0"
-              value={cgst}
+              value={numVal(cgst)}
               onChange={(e) => setCgst(e.target.value)}
             />
           </div>
@@ -156,7 +157,7 @@ const TaxMasterDetail = () => {
               step="0.01"
               className="mt-1.5"
               placeholder="0"
-              value={sgst}
+              value={numVal(sgst)}
               onChange={(e) => setSgst(e.target.value)}
             />
           </div>

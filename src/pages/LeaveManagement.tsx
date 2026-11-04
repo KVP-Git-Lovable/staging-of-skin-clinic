@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { DateInput } from "@/components/shared/DateInput";
+import { displayDate } from "@/lib/dateInput";
+import { numVal } from "@/lib/numberInput";
 import { Plus, Search, Calendar, Loader2, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -98,7 +101,10 @@ const LeaveManagement = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("leave_applications")
-        .select("*, staff(first_name, last_name), leave_types(name)")
+        // leave_applications reaches staff twice - staff_id and approved_by -
+        // so an implicit embed is ambiguous and PostgREST refuses the whole
+        // request. The response alias stays `staff`, so rows read the same.
+        .select("*, staff:staff!leave_applications_staff_id_fkey(first_name, last_name), leave_types(name)")
         .order("created_at", { ascending: false });
       if (error) throw error;
       return data;
@@ -245,11 +251,11 @@ const LeaveManagement = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Start Date *</Label>
-                    <Input type="date" className="mt-1.5" value={appStartDate} onChange={(e) => setAppStartDate(e.target.value)} />
+                    <DateInput className="mt-1.5" value={appStartDate} onChange={(isoDate) => setAppStartDate(isoDate)} />
                   </div>
                   <div>
                     <Label>End Date *</Label>
-                    <Input type="date" className="mt-1.5" value={appEndDate} onChange={(e) => setAppEndDate(e.target.value)} />
+                    <DateInput className="mt-1.5" value={appEndDate} onChange={(isoDate) => setAppEndDate(isoDate)} />
                   </div>
                 </div>
                 {appStartDate && appEndDate && (
@@ -300,7 +306,7 @@ const LeaveManagement = () => {
                     <TableCell className="font-medium">{app.staff?.first_name} {app.staff?.last_name}</TableCell>
                     <TableCell className="text-sm">{app.leave_types?.name}</TableCell>
                     <TableCell className="text-sm">
-                      {new Date(app.start_date).toLocaleDateString()} — {new Date(app.end_date).toLocaleDateString()}
+                      {displayDate(app.start_date)} — {displayDate(app.end_date)}
                     </TableCell>
                     <TableCell className="text-sm font-medium">{app.days}</TableCell>
                     <TableCell className="text-sm text-muted-foreground truncate max-w-[150px]">{app.reason || "—"}</TableCell>
@@ -357,11 +363,11 @@ const LeaveManagement = () => {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <Label>Year</Label>
-                      <Input type="number" className="mt-1.5" value={balYear} onChange={(e) => setBalYear(parseInt(e.target.value))} />
+                      <Input type="number" className="mt-1.5" value={numVal(balYear)} onChange={(e) => setBalYear(parseInt(e.target.value))} />
                     </div>
                     <div>
                       <Label>Opening Days *</Label>
-                      <Input type="number" className="mt-1.5" value={balOpening} onChange={(e) => setBalOpening(parseFloat(e.target.value) || 0)} />
+                      <Input type="number" className="mt-1.5" value={numVal(balOpening)} onChange={(e) => setBalOpening(parseFloat(e.target.value) || 0)} />
                     </div>
                   </div>
                   <Button className="w-full" onClick={() => createBalance.mutate()} disabled={!balStaffId || !balLeaveTypeId || balOpening <= 0 || createBalance.isPending}>
@@ -421,7 +427,7 @@ const LeaveManagement = () => {
                   </div>
                   <div>
                     <Label>Default Days/Year</Label>
-                    <Input type="number" className="mt-1.5" value={ltDays} onChange={(e) => setLtDays(parseFloat(e.target.value) || 0)} />
+                    <Input type="number" className="mt-1.5" value={numVal(ltDays)} onChange={(e) => setLtDays(parseFloat(e.target.value) || 0)} />
                   </div>
                   <Button className="w-full" onClick={() => createLeaveType.mutate()} disabled={!ltName || createLeaveType.isPending}>
                     {createLeaveType.isPending ? "Creating..." : "Create Leave Type"}

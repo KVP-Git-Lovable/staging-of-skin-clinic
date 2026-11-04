@@ -6,8 +6,18 @@ export interface DuplicateMatch {
   rule: DuplicateRule;
   record: Record<string, any>;
   matchedFields: MatchField[];
-  /** "block" when any matched field is configured to stop the save. */
-  severity: "alert" | "block";
+  /**
+   * Always "alert". A duplicate warns; it never stops a save.
+   *
+   * It used to be able to. Blocking is wrong for this clinic: 5,618 of 27,117
+   * patients already share a phone number with someone, and in 2,385 of those
+   * 2,480 groups every patient has a different name - families on one number.
+   * So a phone match is usually a real new patient, and staff were left unable
+   * to register them at all. Rules stored with the old "block" severity are
+   * read and ignored rather than migrated away, so no configuration can bring
+   * the dead end back.
+   */
+  severity: "alert";
   title: string;
   message: string;
 }
@@ -38,7 +48,7 @@ function similarity(a: string, b: string): number {
   return 1 - prev[short.length] / long.length;
 }
 
-function fieldMatches(field: MatchField, input: any, existing: any): boolean {
+export function fieldMatches(field: MatchField, input: any, existing: any): boolean {
   const a = norm(input);
   const b = norm(existing);
   if (!a || !b) return false;
@@ -142,12 +152,11 @@ export async function findDuplicates(
       if (opts.excludeId && record.id === opts.excludeId) continue;
       const matchedFields = evaluateRecord(rule, values, record);
       if (!matchedFields || matchedFields.length === 0) continue;
-      const blocking = matchedFields.some((f) => f.severity === "block");
       results.push({
         rule,
         record,
         matchedFields,
-        severity: blocking || rule.notification?.severity === "error" ? "block" : "alert",
+        severity: "alert",
         title: rule.notification?.title || "Possible duplicate found",
         message: renderTemplate(rule.notification?.message || "", { objectKey, record, matchedFields }),
       });
@@ -177,7 +186,8 @@ export interface RuleTrace {
   fieldTraces: FieldTrace[];
   expression: string;
   isDuplicate: boolean;
-  severity: "alert" | "block";
+  /** Always "alert", for the same reason as DuplicateMatch.severity. */
+  severity: "alert";
   message: string;
 }
 
@@ -206,7 +216,6 @@ export function traceRule(
   });
   const isDuplicate = !!running;
   const matchedFields = fieldTraces.filter((t) => t.matched).map((t) => t.field);
-  const blocking = matchedFields.some((f) => f.severity === "block");
   return {
     rule,
     record,
@@ -216,7 +225,7 @@ export function traceRule(
       .map((t, i) => `${i > 0 ? `${t.field.joiner.toUpperCase()} ` : ""}${t.label}(${t.matched ? "match" : "no match"})`)
       .join(" "),
     isDuplicate,
-    severity: blocking || rule.notification?.severity === "error" ? "block" : "alert",
+    severity: "alert" as const,
     message: renderTemplate(rule.notification?.message || "", { objectKey, record, matchedFields }),
   };
 }
