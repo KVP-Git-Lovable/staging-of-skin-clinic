@@ -32,6 +32,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { motion } from "framer-motion";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { useQuery } from "@tanstack/react-query";
 
 import { SkinTracker } from "@/components/shared/SkinTracker";
@@ -212,6 +213,7 @@ function SurveyAnswersView({ surveyId, answers, templateId }: { surveyId: string
 
 const PatientDetail = () => {
   const { dataScope } = useAuth();
+  const canSeeBilling = useCanSeeBillingAmounts();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -870,7 +872,7 @@ const PatientDetail = () => {
           <TabsList className="w-max md:w-full md:flex-wrap md:h-auto md:justify-start">
             <TabsTrigger value="details" title="Details" aria-label="Details" className="gap-1 text-xs md:text-sm"><Info className="h-3.5 w-3.5" /> Details</TabsTrigger>
             <TabsTrigger value="appointments" title="Appointments" aria-label="Appointments" className="gap-1 text-xs md:text-sm"><Calendar className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Appts</span> ({appointments.length})</TabsTrigger>
-            <TabsTrigger value="invoices" title="Invoices" aria-label="Invoices" className="gap-1 text-xs md:text-sm"><Receipt className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Invoices</span> ({invoices.length})</TabsTrigger>
+            {canSeeBilling && <TabsTrigger value="invoices" title="Invoices" aria-label="Invoices" className="gap-1 text-xs md:text-sm"><Receipt className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Invoices</span> ({invoices.length})</TabsTrigger>}
             <TabsTrigger value="photos" title="Photos" aria-label="Photos" className="gap-1 text-xs md:text-sm"><Camera className="h-3.5 w-3.5" /> ({photos.length})</TabsTrigger>
             <TabsTrigger value="procedures" title="Prescriptions" aria-label="Prescriptions" className="gap-1 text-xs md:text-sm"><ClipboardList className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Prescriptions</span> ({procedures.length})</TabsTrigger>
             <TabsTrigger value="prescriptions" title="Prescriptions" aria-label="Prescriptions" className="gap-1 text-xs md:text-sm"><Pill className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Rx</span> ({prescriptions.length})</TabsTrigger>
@@ -1401,7 +1403,7 @@ const PatientDetail = () => {
         </TabsContent>
 
         {/* Invoices Tab */}
-        <TabsContent value="invoices">
+        {canSeeBilling && <TabsContent value="invoices">
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-4">
             <div className="flex justify-end mb-3">
               <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={() => navigate(`/billing?patientId=${id}&newInvoice=1`)}>
@@ -1471,7 +1473,7 @@ const PatientDetail = () => {
               </table>
             </div>
           </motion.div>
-        </TabsContent>
+        </TabsContent>}
 
         {/* Photos Tab */}
         <TabsContent value="photos">

@@ -66,6 +66,8 @@ interface Props {
   onChartClick: (type: string, key?: string) => void;
   showRevenueByService?: boolean;
   showAppointmentTrend?: boolean;
+  /** False hides every revenue / payment-mode chart (billing-amounts permission). */
+  showMoney?: boolean;
   /** Queries still in flight. Skeletons instead of "No data", and nothing hides. */
   loading?: boolean;
 }
@@ -242,7 +244,7 @@ function HorizontalBarCard({
   );
 }
 
-export function DashboardCharts({ data, feedback, onChartClick, showRevenueByService, showAppointmentTrend, loading }: Props) {
+export function DashboardCharts({ data, feedback, onChartClick, showRevenueByService, showAppointmentTrend, showMoney = true, loading }: Props) {
   const isMobile = useIsMobile();
   const { formatMoney, formatNumber } = useMoneyFormat();
   const money = (v: number, n: string) => [formatMoney(Number(v)), n] as [string, string];
@@ -268,7 +270,7 @@ export function DashboardCharts({ data, feedback, onChartClick, showRevenueBySer
   const show = (empty: boolean) => Boolean(loading) || !empty;
 
   // Row 1 — Revenue Trend (always shown)
-  if (show(data.revenueByDate.every((d) => d.paid === 0 && d.invoiced === 0)))
+  if (showMoney && show(data.revenueByDate.every((d) => d.paid === 0 && d.invoiced === 0)))
   cards.push(
     <ChartCard key="revenue_trend" title="Revenue Trend (₹)" delay={nextDelay()} loading={loading} onClick={() => onChartClick("revenue_by_date")}>
       <ResponsiveContainer width="100%" height={220}>
@@ -318,7 +320,7 @@ export function DashboardCharts({ data, feedback, onChartClick, showRevenueBySer
   }
 
   // Row 2 — Revenue by Doctor
-  if (show(data.revenueByDr.length === 0))
+  if (showMoney && show(data.revenueByDr.length === 0))
   cards.push(
     <ChartCard key="revenue_by_dr" title="Revenue by Doctor (₹)" delay={nextDelay()} loading={loading} onClick={() => onChartClick("revenue_by_dr")}>
       <ResponsiveContainer width="100%" height={220}>
@@ -356,7 +358,7 @@ export function DashboardCharts({ data, feedback, onChartClick, showRevenueBySer
   );
 
   // Row 3 — Revenue by Payment Mode
-  if (show(data.revenueByPaymentMode.length === 0))
+  if (showMoney && show(data.revenueByPaymentMode.length === 0))
   cards.push(
     <ChartCard key="revenue_by_payment_mode" title="Revenue by Payment Mode (₹)" delay={nextDelay()} loading={loading} onClick={() => onChartClick("revenue_by_payment_mode")}>
       <ResponsiveContainer width="100%" height={220}>
@@ -436,7 +438,7 @@ export function DashboardCharts({ data, feedback, onChartClick, showRevenueBySer
   );
 
   // Row 4 — Revenue by Service (conditional)
-  if (showRevenueByService && show((data.revenueByService || []).length === 0)) {
+  if (showMoney && showRevenueByService && show((data.revenueByService || []).length === 0)) {
     cards.push(
       <HorizontalBarCard
         key="revenue_by_service"

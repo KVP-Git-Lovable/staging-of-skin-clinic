@@ -158,3 +158,25 @@ export function formatCell(row: any, key: string): string {
 export function computeChartData(rows: any[], chart: ViewChart): { name: string; value: number }[] {
   return computeChartDataGeneric(rows, chart, PATIENT_FIELDS, rawValue);
 }
+
+/**
+ * Patient fields that carry or reveal money. engagement_tier is banded on
+ * lifetime billing, so it reveals spend as surely as lifetime_value does.
+ * Hidden for roles with "Billing amounts & payment modes" switched off.
+ */
+export const BILLING_PATIENT_FIELD_KEYS = ["lifetime_value", "engagement_tier", "engagement_revenue_value"];
+
+/** True when a patient field key is one of the money-revealing ones. */
+export function isBillingPatientField(key: string): boolean {
+  return BILLING_PATIENT_FIELD_KEYS.includes(key);
+}
+
+/** The field list a viewer may see: everything, or everything but the money fields. */
+export function patientFieldsFor(canSeeBilling: boolean, fields: FieldDef[] = PATIENT_FIELDS): FieldDef[] {
+  return canSeeBilling ? fields : fields.filter((f) => !isBillingPatientField(f.key));
+}
+
+/** A list of column/field keys with the money ones dropped when restricted. Returns the same array when not. */
+export function patientKeysFor(canSeeBilling: boolean, keys: string[]): string[] {
+  return canSeeBilling ? keys : keys.filter((k) => !isBillingPatientField(k));
+}

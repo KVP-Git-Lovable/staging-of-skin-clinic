@@ -88,6 +88,7 @@ import { AiRepository } from "@/components/shared/AiRepository";
 import { SurveyFill } from "@/components/surveys/SurveyFill";
 import { SurveyRecommendations } from "@/components/surveys/SurveyRecommendations";
 import { useAuth } from "@/hooks/useAuth";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { procedureDateLabel } from "@/lib/procedureDate";
 import { appointmentDeleteNote } from "@/lib/appointmentDeleteNote";
 // Shared with the Patient Feedback report, so a visit cannot read "Passive"
@@ -530,6 +531,7 @@ interface AppointmentDetailSheetProps {
 }
 
 export function AppointmentDetailSheet({ appointmentId, onClose, variant = "sheet", fullScreen = false }: AppointmentDetailSheetProps) {
+  const canSeeBilling = useCanSeeBillingAmounts();
   const isPage = variant === "page";
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -1499,7 +1501,9 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
                   <TabsTrigger value="procedures" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs py-3">Prescriptions</TabsTrigger>
                   <TabsTrigger value="prev-appointments" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs py-3">Previous Appointments</TabsTrigger>
                   <TabsTrigger value="prev-procedures" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs py-3">Previous Prescriptions</TabsTrigger>
+                  {canSeeBilling && (
                   <TabsTrigger value="billing" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs py-3">Billing</TabsTrigger>
+                  )}
                   <TabsTrigger value="photos" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs py-3">Photos</TabsTrigger>
                   <TabsTrigger value="feedback" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs py-3">Feedback</TabsTrigger>
                   <TabsTrigger value="survey" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent text-xs py-3">Survey</TabsTrigger>
@@ -1924,6 +1928,7 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
                   )}
                 </TabsContent>
 
+                {canSeeBilling && (
                 <TabsContent value="billing" className="p-6 space-y-4 mt-0">
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold font-display flex items-center gap-2">
@@ -2097,6 +2102,7 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
                     <p className="text-sm text-muted-foreground text-center py-8">No patient linked to this appointment.</p>
                   )}
                 </TabsContent>
+                )}
 
                 <TabsContent value="photos" className="p-6 space-y-4 mt-0">
                   {/* Wraps, because the heading and three buttons are wider

@@ -23,6 +23,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import CreateUserDialog from "@/components/users/CreateUserDialog";
 import EditUserDialog from "@/components/users/EditUserDialog";
 import { ThemePicker } from "@/components/theme/ThemePicker";
+import { BILLING_AMOUNTS_KEY } from "@/lib/billingVisibility";
 
 const ALL_MODULES = [
   { key: "dashboard", label: "Dashboard" },
@@ -53,7 +54,15 @@ const ALL_MODULES = [
   { key: "category_master", label: "Category Master" },
   { key: "settings", label: "Settings" },
   { key: "user_management", label: "User Management" },
-];
+  // Not a module: a single switch. Untick View to hide invoice amounts, amounts
+  // paid, revenue figures and payment modes from this role everywhere in the app.
+  // A role with no row keeps seeing them (see lib/billingVisibility.ts), so the
+  // editor treats a missing row as ticked.
+  { key: BILLING_AMOUNTS_KEY, label: "Billing amounts & payment modes (untick to hide)", viewOnly: true },
+] as { key: string; label: string; viewOnly?: boolean }[];
+
+/** Rows the editor shows ticked when the role has no row for them yet. */
+const defaultsToVisible = (key: string) => key === BILLING_AMOUNTS_KEY;
 
 type PermMap = Record<string, { can_view: boolean; can_create: boolean; can_edit: boolean; can_delete: boolean }>;
 
@@ -150,7 +159,7 @@ export default function UserManagement() {
   const permMap: PermMap = dirtyPerms ?? Object.fromEntries(
     ALL_MODULES.map((m) => {
       const p = permissions.find((p: any) => p.module_key === m.key);
-      return [m.key, { can_view: p?.can_view ?? false, can_create: p?.can_create ?? false, can_edit: p?.can_edit ?? false, can_delete: p?.can_delete ?? false }];
+      return [m.key, { can_view: p?.can_view ?? defaultsToVisible(m.key), can_create: p?.can_create ?? false, can_edit: p?.can_edit ?? false, can_delete: p?.can_delete ?? false }];
     })
   );
 
@@ -187,7 +196,7 @@ export default function UserManagement() {
       const rows = ALL_MODULES.map((m) => ({
         role_id: selectedRoleId,
         module_key: m.key,
-        can_view: dirtyPerms[m.key]?.can_view ?? false,
+        can_view: dirtyPerms[m.key]?.can_view ?? defaultsToVisible(m.key),
         can_create: dirtyPerms[m.key]?.can_create ?? false,
         can_edit: dirtyPerms[m.key]?.can_edit ?? false,
         can_delete: dirtyPerms[m.key]?.can_delete ?? false,
@@ -213,7 +222,7 @@ export default function UserManagement() {
       const rows = ALL_MODULES.map((m) => ({
         role_id: data.id,
         module_key: m.key,
-        can_view: false,
+        can_view: defaultsToVisible(m.key),
         can_create: false,
         can_edit: false,
         can_delete: false,
@@ -319,7 +328,7 @@ export default function UserManagement() {
 
   const togglePerm = (moduleKey: string, field: "can_view" | "can_create" | "can_edit" | "can_delete" | "all") => {
     const current = dirtyPerms ?? { ...permMap };
-    const mod = current[moduleKey] ?? { can_view: false, can_create: false, can_edit: false, can_delete: false };
+    const mod = current[moduleKey] ?? { can_view: defaultsToVisible(moduleKey), can_create: false, can_edit: false, can_delete: false };
     if (field === "all") {
       const allChecked = mod.can_view && mod.can_create && mod.can_edit && mod.can_delete;
       const val = !allChecked;
@@ -630,8 +639,21 @@ export default function UserManagement() {
                 <TableBody>
                   {ALL_MODULES.map((m) => {
                     const isAdminRole = selectedRole?.name?.toLowerCase() === "admin";
-                    const mod = permMap[m.key] ?? { can_view: false, can_create: false, can_edit: false, can_delete: false };
+                    const mod = permMap[m.key] ?? { can_view: defaultsToVisible(m.key), can_create: false, can_edit: false, can_delete: false };
                     const allChecked = mod.can_view && mod.can_create && mod.can_edit && mod.can_delete;
+                    if (m.viewOnly) {
+                      return (
+                        <TableRow key={m.key}>
+                          <TableCell>{m.label}</TableCell>
+                          <TableCell className="text-center">
+                            <Checkbox checked={isAdminRole || mod.can_view} disabled={isAdminRole} onCheckedChange={() => togglePerm(m.key, "can_view")} />
+                          </TableCell>
+                          <TableCell colSpan={4} className="text-xs text-muted-foreground">
+                            Controls invoice totals, amounts paid, revenue figures and payment modes.
+                          </TableCell>
+                        </TableRow>
+                      );
+                    }
                     return (
                       <TableRow key={m.key}>
                         <TableCell>{m.label}</TableCell>

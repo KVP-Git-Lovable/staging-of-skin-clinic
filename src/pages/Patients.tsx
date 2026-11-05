@@ -14,8 +14,9 @@ import PatientKanban from "@/components/patients/listviews/PatientKanban";
 import PatientSplitView from "@/components/patients/listviews/PatientSplitView";
 import KanbanSettingsDialog from "@/components/patients/listviews/KanbanSettingsDialog";
 import FieldsDisplayDialog from "@/components/patients/listviews/FieldsDisplayDialog";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { usePatientListViews } from "@/hooks/usePatientListViews";
-import { applyFilters, sortRows, DEFAULT_VIEW_COLUMNS, fieldDef, GENDER_OPTIONS, STATUS_OPTIONS, SKIN_TYPE_OPTIONS, BLOOD_GROUP_OPTIONS, SOURCE_OPTIONS, ENGAGEMENT_TIER_OPTIONS, DERIVED_PATIENT_FIELDS, type ListView, type ListDisplayMode } from "@/lib/patientFields";
+import { applyFilters, sortRows, DEFAULT_VIEW_COLUMNS, fieldDef, GENDER_OPTIONS, STATUS_OPTIONS, SKIN_TYPE_OPTIONS, BLOOD_GROUP_OPTIONS, SOURCE_OPTIONS, ENGAGEMENT_TIER_OPTIONS, DERIVED_PATIENT_FIELDS, isBillingPatientField, type ListView, type ListDisplayMode } from "@/lib/patientFields";
 import { ALL_VIEW_ID, RECENT_VIEW_ID, getKanbanConfig, setKanbanConfig } from "@/lib/standardViews";
 import { getRecentlyViewed, markRecentlyViewed } from "@/lib/recentlyViewed";
 import DeleteConfirmDialog from "@/components/shared/DeleteConfirmDialog";
@@ -59,6 +60,10 @@ import {
   type Patient,
 } from "@/lib/patientsPage";
 
+// A saved chart that groups by or adds up a money field (hidden when billing is restricted).
+const isMoneyChart = (c: { group_field: string; aggregate_field?: string | null }) =>
+  isBillingPatientField(c.group_field) || (!!c.aggregate_field && isBillingPatientField(c.aggregate_field));
+
 const PATIENT_FIELDS = [
   { value: "name", label: "Patient Name" },
   { value: "contact", label: "Contact" },
@@ -84,6 +89,7 @@ const PICKLIST_OPTIONS: Record<string, { value: string; label: string }[]> = {
 };
 
 const Patients = () => {
+  const canSeeBilling = useCanSeeBillingAmounts();
 
   const patientsTableRef = useStackedTable<HTMLTableElement>();
   const navigate = useNavigate();
@@ -223,11 +229,25 @@ const Patients = () => {
     [doctorOptions]
   );
 
+  // A stored board that groups by category (banded on billing) or sums a money
+  // field is shown grouped by status with no sum when billing is hidden. Nothing is saved.
+  const kanbanShown = useMemo(
+    () =>
+      canSeeBilling
+        ? kanban
+        : {
+            group_field: isBillingPatientField(kanban.group_field) ? "status" : kanban.group_field,
+            summarize_field:
+              kanban.summarize_field && isBillingPatientField(kanban.summarize_field) ? null : kanban.summarize_field,
+          },
+    [canSeeBilling, kanban]
+  );
+
   const kanbanOptions = useMemo(() => {
-    const src = fieldDef(kanban.group_field)?.optionsSource;
+    const src = fieldDef(kanbanShown.group_field)?.optionsSource;
     if (src === "doctor") return doctorOptions;
     return PICKLIST_OPTIONS[src ?? ""] ?? [];
-  }, [kanban.group_field, doctorOptions]);
+  }, [kanbanShown.group_field, doctorOptions]);
 
   const openPatient = (row: Patient) => {
     markRecentlyViewed("patients", row.id);
@@ -262,8 +282,8 @@ const Patients = () => {
       s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" }
     );
   const tableRows = useMemo(
-    () => (sort.key ? sortRows(paged, sort.key, sort.dir) : paged),
-    [paged, sort]
+    () => (sort.key && (canSeeBilling || !isBillingPatientField(sort.key)) ? sortRows(paged, sort.key, sort.dir) : paged),
+    [paged, sort, canSeeBilling]
   );
 
   const saveInline = async (row: Patient, key: string, value: any) => {
@@ -442,7 +462,7 @@ const Patients = () => {
         ) : display === "kanban" ? (
           <PatientKanban
             rows={paged}
-            config={kanban}
+            config={kanbanShown}
             options={kanbanOptions}
             columns={displayColumns}
             avatars={avatars}
@@ -637,10 +657,15 @@ const Patients = () => {
             />
           ) : activeView && !activeView.is_standard ? (
             <ViewChartsPanel
-              charts={activeView.charts ?? []}
+              charts={canSeeBilling ? activeView.charts ?? [] : (activeView.charts ?? []).filter((c) => !isMoneyChart(c))}
               rows={viewRows}
               canManage={activeView.owner_id === userId}
-              onChange={(charts) => saveCharts(activeView.id, charts)}
+              onChange={(charts) =>
+                saveCharts(
+                  activeView.id,
+                  canSeeBilling ? charts : [...(activeView.charts ?? []).filter(isMoneyChart), ...charts]
+                )
+              }
               onClose={() => setChartsOpen(false)}
             />
           ) : (

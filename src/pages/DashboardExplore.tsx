@@ -6,6 +6,7 @@ import * as XLSX from "xlsx";
 import { format } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
 import { formatMoney } from "@/lib/currency";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { invoiceServiceLabel, invoiceServiceNames, rowMatchesService } from "@/lib/invoiceReportRows";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -79,6 +80,7 @@ const KIND_LABEL: Record<Kind, string> = {
 
 export default function DashboardExplore() {
   const [params] = useSearchParams();
+  const canSeeBilling = useCanSeeBillingAmounts();
   const kind = (params.get("kind") as Kind) || "appointments";
   const title = params.get("title") || KIND_LABEL[kind];
   const urlFrom = params.get("from") || "";
@@ -351,6 +353,15 @@ export default function DashboardExplore() {
   };
 
   const exportPdf = () => window.print();
+
+  // The invoice list is nothing but amounts and payment modes.
+  if (kind === "invoices" && !canSeeBilling) {
+    return (
+      <div className="p-4 md:p-6">
+        <p className="text-sm text-muted-foreground">You do not have access to billing details.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 md:p-6 print:p-0">

@@ -14,6 +14,7 @@ import { buildOrFilter, buildPrefixFilter, buildTokenFilters, fuzzyRank } from "
 import { hashImageFile } from "@/lib/photoHashImage";
 import { matchQualityLabel, POSSIBLE_MAX } from "@/lib/photoHash";
 import { cn } from "@/lib/utils";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { format } from "date-fns";
 import { procedureDateLabel } from "@/lib/procedureDate";
 import {
@@ -76,6 +77,7 @@ const SCOPES: { key: "all" | Kind; label: string }[] = [
 
 export function GlobalSearch({ className }: { className?: string }) {
   const navigate = useNavigate();
+  const canSeeBilling = useCanSeeBillingAmounts();
   // The search that was last typed, so moving to another tab and back does not
   // mean typing the number again. GlobalSearch is mounted once in the header,
   // so this only has to be read back after a full reload.
@@ -274,7 +276,9 @@ export function GlobalSearch({ className }: { className?: string }) {
           id: i.id,
           kind: "invoice" as const,
           title: i.invoice_number || "Invoice",
-          subtitle: `${i.patient_name || ""} · ₹${Number(i.total_amount || 0).toLocaleString("en-IN")}${i.status ? ` · ${i.status}` : ""}`,
+          subtitle: canSeeBilling
+            ? `${i.patient_name || ""} · ₹${Number(i.total_amount || 0).toLocaleString("en-IN")}${i.status ? ` · ${i.status}` : ""}`
+            : `${i.patient_name || ""}${i.status ? ` · ${i.status}` : ""}`,
           route: `/billing?viewInvoice=${i.id}`,
         })),
         ...(((staff as any).data || []) as any[]).slice(0, 5).map((s: any) => ({
@@ -288,14 +292,14 @@ export function GlobalSearch({ className }: { className?: string }) {
           id: s.id,
           kind: "service" as const,
           title: s.name,
-          subtitle: `${s.category || "Service"} · ₹${Number(s.price || 0).toLocaleString("en-IN")}`,
+          subtitle: canSeeBilling ? `${s.category || "Service"} · ₹${Number(s.price || 0).toLocaleString("en-IN")}` : `${s.category || "Service"}`,
           route: `/services?q=${encodeURIComponent(s.name || "")}`,
         })),
         ...(((products as any).data || []) as any[]).slice(0, 5).map((p: any) => ({
           id: p.id,
           kind: "product" as const,
           title: p.name,
-          subtitle: `${p.category || "Product"} · ₹${Number(p.mrp || 0).toLocaleString("en-IN")}`,
+          subtitle: canSeeBilling ? `${p.category || "Product"} · ₹${Number(p.mrp || 0).toLocaleString("en-IN")}` : `${p.category || "Product"}`,
           route: `/pharma?q=${encodeURIComponent(p.name || "")}`,
         })),
       ];
@@ -307,7 +311,7 @@ export function GlobalSearch({ className }: { className?: string }) {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [debounced, scope]);
+  }, [debounced, scope, canSeeBilling]);
 
   // Which patients hold this photograph. The fingerprint is matched in the
   // database (search_patient_photos_by_hash), then the patients it points at

@@ -5,6 +5,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { format } from "date-fns";
 import { formatMoneyTile } from "@/lib/currency";
 import { patientTier, tierEmoji } from "@/lib/patientTier";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 
 interface EngagementData {
   score: number;
@@ -58,7 +59,7 @@ const factorLabels = [
   },
 ];
 
-const generateAITips = (data: EngagementData): string[] => {
+const generateAITips = (data: EngagementData, canSeeBilling = true): string[] => {
   const tips: string[] = [];
   const { breakdown, stats } = data;
 
@@ -73,7 +74,7 @@ const generateAITips = (data: EngagementData): string[] => {
   }
 
   // Revenue tips
-  if (breakdown.revenueValue < 15) {
+  if (canSeeBilling && breakdown.revenueValue < 15) {
     tips.push("💰 Introduce premium services or combo packages to increase average billing value.");
     if (stats.totalBilled < 5000) {
       tips.push("🎁 Offer a first-time discount on a higher-value treatment to grow lifetime value.");
@@ -99,7 +100,9 @@ const generateAITips = (data: EngagementData): string[] => {
   }
 
   // Tier-specific tips
-  if (data.tier === "Early") {
+  if (!canSeeBilling) {
+    // The category is banded on lifetime billing, so tips that name it are left out.
+  } else if (data.tier === "Early") {
     tips.push("🌱 This is an early-stage patient. Focus on building rapport and scheduling the next 2-3 visits to establish a pattern.");
   } else if (data.tier === "Silver") {
     tips.push("🥈 Patient shows moderate engagement. A personalized outreach or exclusive offer could push them to Gold tier.");
@@ -119,6 +122,7 @@ export const EngagementScoreCard = (
   const [data, setData] = useState<EngagementData | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
+  const canSeeBilling = useCanSeeBillingAmounts();
 
   useEffect(() => {
     const fetchScore = async () => {
@@ -154,7 +158,7 @@ export const EngagementScoreCard = (
 
   if (!data) return null;
 
-  const tips = generateAITips(data);
+  const tips = generateAITips(data, canSeeBilling);
   const lastVisitLabel = data.stats.lastVisitDate
     ? format(new Date(data.stats.lastVisitDate), "MMM d, yyyy")
     : data.stats.daysSinceLastVisit < 999
@@ -194,7 +198,7 @@ export const EngagementScoreCard = (
                 <Lock className="h-3 w-3" aria-hidden />
                 <span className="sr-only">Category not shown - only this patient's own doctor can see it</span>
               </span>
-            ) : (
+            ) : !canSeeBilling ? null : (
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -232,6 +236,7 @@ export const EngagementScoreCard = (
           {/* A doctor should not read another doctor's takings off this header.
               Shown as withheld rather than dropped, so the row does not reshuffle
               and read as "nothing billed". */}
+          {canSeeBilling && (
           <div className="text-center flex-1">
             <p className="text-base font-bold">
               {hideBilled ? (
@@ -248,6 +253,7 @@ export const EngagementScoreCard = (
             </p>
             <p className="text-[10px] text-muted-foreground">Billed</p>
           </div>
+          )}
           <div className="text-center flex-1">
             <div className="flex items-center justify-center gap-0.5">
               <Calendar className="h-3 w-3 text-muted-foreground" />
@@ -262,7 +268,7 @@ export const EngagementScoreCard = (
           <div className="mt-4 space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
             {/* Factor breakdown */}
             <div className="space-y-2.5">
-              {factorLabels.map((f) => {
+              {factorLabels.filter((f) => canSeeBilling || f.key !== "revenueValue").map((f) => {
                 const value = data.breakdown[f.key as keyof typeof data.breakdown];
                 const pct = (value / f.max) * 100;
                 return (

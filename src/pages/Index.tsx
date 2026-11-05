@@ -29,6 +29,7 @@ import { invoiceMapByAppointment, type VisitBill } from "@/lib/invoicesForAppoin
 import { appointmentPatientName, appointmentPatientInitialsText } from "@/lib/appointmentPatientName";
 import { appointmentStatusLabel, showsAsBilled, BILLED_BADGE_CLASSES } from "@/lib/appointmentStatus";
 import { useLiveAppointments } from "@/hooks/useLiveAppointments";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { MyDayCard } from "@/components/attendance/MyDayCard";
 
 
@@ -101,6 +102,7 @@ function getDateRange(key: string, customStart?: string, customEnd?: string): { 
 const Index = () => {
   const navigate = useNavigate();
   const { formatMoney } = useMoneyFormat();
+  const canSeeBilling = useCanSeeBillingAmounts();
   const [selectedStaff, setSelectedStaff] = useState("all");
   const [selectedDateRange, setSelectedDateRange] = useState("today");
   const [selectedService, setSelectedService] = useState("all");
@@ -580,7 +582,7 @@ const Index = () => {
     "appointments_total", "appointments_confirmed", "appointments_completed", "new_patients",
     "revenue", "total_patients", "staff_present", "active_campaigns",
   ];
-  const kpiGridCols = kpiColumnClass(statCardKeys.filter((k) => shows(k)).length);
+  const kpiGridCols = kpiColumnClass(statCardKeys.filter((k) => shows(k) && (canSeeBilling || k !== "revenue")).length);
 
   // Loading, grouped by what actually fails together.
   //  - the appointment stat cards wait on the appointments query;
@@ -675,7 +677,7 @@ const Index = () => {
             full rather than as "₹1.95 L": at 375px two-across it had 92px of
             text and "₹19,48,000" needs 116px, so it was truncated to
             "₹19,48,0…". Nothing changes on desktop. */}
-        {shows("revenue") && (
+        {canSeeBilling && shows("revenue") && (
           <div className="col-span-2 lg:col-span-1 cursor-pointer h-full" onClick={() => openDrill("invoices", `Revenue — ${dateLabel}`)}>
             <StatCard title="Revenue" value={formatMoneyTile(paidRevenue)} change={`of ${formatMoneyTile(invoicedRevenue)} invoiced • ${dateLabel}`} changeType="positive" icon={IndianRupee} iconColor="bg-success/10 text-success" delay={0.2} loading={revenueLoading} />
           </div>
@@ -693,7 +695,7 @@ const Index = () => {
             <StatCard
               title="Active Campaigns"
               value={activeCampaigns.length}
-              change={`${formatMoneyTile(activeCampaigns.reduce((s, c: any) => s + Number(c.amount_spent || 0), 0))} total spend`}
+              change={canSeeBilling ? `${formatMoneyTile(activeCampaigns.reduce((s, c: any) => s + Number(c.amount_spent || 0), 0))} total spend` : undefined}
               changeType="neutral"
               icon={Megaphone}
               iconColor="bg-primary/10 text-primary"
@@ -704,13 +706,14 @@ const Index = () => {
         )}
       </div>
 
-      {(shows("charts") || shows("revenue_by_service") || shows("appointment_trend")) && (
+      {(shows("charts") || (canSeeBilling && shows("revenue_by_service")) || shows("appointment_trend")) && (
         <DashboardCharts
           feedback={feedbackSummary}
           data={shows("charts") ? chartData : ({ ...chartData, appointmentStatus: [], appointmentsByDr: [], revenueByDr: [], revenueByPaymentMode: [], revenueByDate: [] } as any)}
           onChartClick={handleChartClick}
           showRevenueByService={shows("revenue_by_service")}
           showAppointmentTrend={shows("appointment_trend")}
+          showMoney={canSeeBilling}
           loading={chartsLoading}
         />
       )}
@@ -754,7 +757,7 @@ const Index = () => {
         </motion.div>
         )}
 
-        {shows("pending_invoices") && (
+        {canSeeBilling && shows("pending_invoices") && (
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.54 }} className="data-table">
 
           <div className="p-4 md:p-5 border-b flex items-center justify-between">

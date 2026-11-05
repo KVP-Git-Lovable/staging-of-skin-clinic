@@ -1,5 +1,6 @@
 import { formatMoney } from "@/lib/currency";
 import { daysSinceVisit } from "@/lib/visitStats";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { CalendarDays, IndianRupee, Repeat, Timer } from "lucide-react";
 
 interface Props {
@@ -23,12 +24,13 @@ const tierStyles: Record<string, string> = {
  * used in list views and reports.
  */
 export function PatientEngagementRollups({ patient, visitsOverride, lifetimeValueOverride }: Props) {
+  const canSeeBilling = useCanSeeBillingAmounts();
   if (!patient) return null;
 
   const visits = visitsOverride ?? patient.total_visits;
   const ltv = lifetimeValueOverride ?? patient.lifetime_value;
 
-  const items = [
+  const allItems = [
     {
       icon: Repeat,
       label: "# of Visits",
@@ -59,6 +61,8 @@ export function PatientEngagementRollups({ patient, visitsOverride, lifetimeValu
       badge: true,
     },
   ];
+  // Lifetime value and the level banded on it both reveal spend.
+  const items = canSeeBilling ? allItems : allItems.filter((it) => it.label !== "Lifetime Value" && !it.badge);
 
   return (
     <div className="rounded-xl border bg-card p-4">

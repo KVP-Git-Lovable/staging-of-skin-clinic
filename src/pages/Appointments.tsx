@@ -24,7 +24,8 @@ import KanbanSettingsDialog from "@/components/listViews/KanbanSettingsDialog";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { applyFilters as applyListFilters, fieldDefIn, type ListDisplayMode, type ListView } from "@/lib/listViews/engine";
 import { ALL_VIEW_ID, getKanbanConfig, setKanbanConfig } from "@/lib/listViews/standardViews";
-import { APPOINTMENT_VIEW_FIELDS, DEFAULT_APPOINTMENT_VIEW_COLUMNS } from "@/lib/listViews/appointmentFields";
+import { APPOINTMENT_VIEW_FIELDS, DEFAULT_APPOINTMENT_VIEW_COLUMNS, withoutBillingFields, withoutBillingConditions } from "@/lib/listViews/appointmentFields";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { sortForSearch } from "@/lib/appointmentSearchSort";
 import { resolveViewSort } from "@/lib/listViews/viewSort";
 import { viewDatePreset } from "@/lib/viewDatePreset";
@@ -257,6 +258,10 @@ const badgeClasses = (status: string) =>
 
 const Appointments = () => {
   const appointmentsTableRef = useStackedTable<HTMLTableElement>();
+  // False hides every invoice amount and payment mode on this screen.
+  const canSeeBilling = useCanSeeBillingAmounts();
+  const viewFields = canSeeBilling ? APPOINTMENT_VIEW_FIELDS : withoutBillingFields(APPOINTMENT_VIEW_FIELDS);
+  const viewDefaultColumns = canSeeBilling ? DEFAULT_APPOINTMENT_VIEW_COLUMNS : withoutBillingFields(DEFAULT_APPOINTMENT_VIEW_COLUMNS);
   const queryClient = useQueryClient();
   const routerNavigate = useNavigate();
   // The open appointment lives in the address, so Back returns to it.
@@ -458,7 +463,7 @@ const Appointments = () => {
       const resolved = resolveViewSort(
         activeView.sort_field,
         activeView.sort_dir,
-        APPOINTMENT_VIEW_FIELDS,
+        viewFields,
         DEFAULT_SORT,
       );
       setSortColumn(resolved.column);
@@ -488,8 +493,14 @@ const Appointments = () => {
    * rows rather than a third of a second ahead of them.
    */
   const effectiveSort = useMemo(
-    () => sortForSearch({ column: sortColumn, direction: sortDirection }, debouncedSearchQuery, sortChosen),
-    [sortColumn, sortDirection, debouncedSearchQuery, sortChosen],
+    () => sortForSearch(
+      !canSeeBilling && withoutBillingFields([sortColumn]).length === 0
+        ? { column: DEFAULT_SORT.column, direction: DEFAULT_SORT.direction }
+        : { column: sortColumn, direction: sortDirection },
+      debouncedSearchQuery,
+      sortChosen,
+    ),
+    [sortColumn, sortDirection, debouncedSearchQuery, sortChosen, canSeeBilling],
   );
 
   // Picking a view also moves the quick-date chips to whatever date that view
@@ -696,9 +707,15 @@ const Appointments = () => {
     }
   };
 
-  const kanbanGroupFields = APPOINTMENT_VIEW_FIELDS.filter((f) => f.type === "picklist");
-  const kanbanSummaryFields = APPOINTMENT_VIEW_FIELDS.filter((f) => f.type === "number");
-  const kanbanOptions = viewOptionsFor(fieldDefIn(APPOINTMENT_VIEW_FIELDS, kanban.group_field)?.optionsSource);
+  const kanbanGroupFields = viewFields.filter((f) => f.type === "picklist");
+  const kanbanSummaryFields = viewFields.filter((f) => f.type === "number");
+  // A stored board grouped or summed by a money field falls back when money is hidden.
+  const kanbanConfig = canSeeBilling ? kanban : {
+    ...kanban,
+    group_field: withoutBillingFields([kanban.group_field]).length ? kanban.group_field : "status",
+    summarize_field: kanban.summarize_field && withoutBillingFields([kanban.summarize_field]).length ? kanban.summarize_field : null,
+  };
+  const kanbanOptions = viewOptionsFor(fieldDefIn(viewFields, kanbanConfig.group_field)?.optionsSource);
   // Kanban cards keep working off the original appointment rows (so a drag
   // still triggers the same WhatsApp-notify status-change path the inline
   // table Select uses) - this resolves the denormalized field keys
@@ -1252,8 +1269,8 @@ const Appointments = () => {
       therapist: apt.therapist_id || "",
       status: apt.status || "",
       visit_status: apt.visit_status || "",
-      bill: inv?.total_amount || 0,
-      payment_mode: inv?.payment_mode || "",
+      bill: canSeeBilling ? inv?.total_amount || 0 : 0,
+      payment_mode: canSeeBilling ? inv?.payment_mode || "" : "",
     };
   };
 
@@ -1264,7 +1281,7 @@ const Appointments = () => {
   const applyViewFilters = (items: any[], invMap: Map<string, any> = invoiceByAppointmentId) => {
     if (!activeView?.filters?.conditions?.length) return items;
     const denormalized = items.map((apt) => toViewRow(apt, invMap));
-    const kept = new Set(applyListFilters(denormalized, activeView.filters, APPOINTMENT_VIEW_FIELDS).map((r) => r.id));
+    const kept = new Set(applyListFilters(denormalized, canSeeBilling ? activeView.filters : withoutBillingConditions(activeView.filters), viewFields).map((r) => r.id));
     return items.filter((apt) => kept.has(apt.id));
   };
 
@@ -1371,7 +1388,8 @@ const Appointments = () => {
   // would render a header with no matching <col> and slide every column out
   // of true, so it is filtered on the way in rather than migrated in place.
   const displayColumns = (activeView?.columns?.length ? activeView.columns : DEFAULT_APPOINTMENT_FIELDS)
-    .filter((c) => APPOINTMENT_COLUMN_WIDTHS.some(([key]) => key === c));
+    .filter((c) => APPOINTMENT_COLUMN_WIDTHS.some(([key]) => key === c))
+    .filter((c) => canSeeBilling || withoutBillingFields([c]).length > 0);
 
   // Widths the user dragged, kept per browser. They are a display preference
   // rather than part of the shared view, so they are not written to the
@@ -2737,7 +2755,7 @@ const Appointments = () => {
               <ViewFiltersPanel
                 view={activeView}
                 canManage={!!activeView && !activeView.is_standard && activeView.owner_id === viewsUserId}
-                fields={APPOINTMENT_VIEW_FIELDS}
+                fields={viewFields}
                 optionsFor={viewOptionsFor}
                 onSave={(filters) => { if (activeView) saveView({ ...activeView, filters }); }}
                 onClose={() => setViewFiltersOpen(false)}
@@ -2751,7 +2769,7 @@ const Appointments = () => {
                   canManage={activeView.owner_id === viewsUserId}
                   onChange={(charts) => saveCharts(activeView.id, charts)}
                   onClose={() => setViewChartsOpen(false)}
-                  fields={APPOINTMENT_VIEW_FIELDS}
+                  fields={viewFields}
                   // A chart grouped by a picklist shows the names behind the
                   // ids the column stores - the doctor field holds a staff id.
                   optionsFor={viewOptionsFor}
@@ -2940,10 +2958,10 @@ const Appointments = () => {
                 {tableDisplay === "kanban" ? (
                   <ListKanban
                     rows={visibleTableRows}
-                    config={kanban}
+                    config={kanbanConfig}
                     options={kanbanOptions}
                     columns={displayColumns}
-                    fields={APPOINTMENT_VIEW_FIELDS}
+                    fields={viewFields}
                     rawValue={kanbanRawValue}
                     onOpen={(row) => openAppointment(row.id)}
                     onMove={moveKanbanCard}
@@ -3676,8 +3694,8 @@ const Appointments = () => {
         onOpenChange={setViewEditorOpen}
         view={editingView}
         onSave={saveView}
-        fields={APPOINTMENT_VIEW_FIELDS}
-        defaultColumns={DEFAULT_APPOINTMENT_VIEW_COLUMNS}
+        fields={viewFields}
+        defaultColumns={viewDefaultColumns}
         optionsFor={viewOptionsFor}
         people={staffList
           .filter((s: any) => s.auth_user_id)
@@ -3695,8 +3713,8 @@ const Appointments = () => {
           if (activeView.is_standard) updateStandardColumns(activeView.id, cols);
           else saveView({ ...activeView, columns: cols });
         }}
-        fields={APPOINTMENT_VIEW_FIELDS}
-        defaultColumns={DEFAULT_APPOINTMENT_VIEW_COLUMNS}
+        fields={viewFields}
+        defaultColumns={viewDefaultColumns}
       />
 
       {/* Changing the date of a visit that already happened overwrites it, and

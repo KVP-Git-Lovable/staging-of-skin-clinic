@@ -3,7 +3,8 @@
 // renderings (avatar+name, colored status badge) via renderCell, so nothing
 // else in the Patients page needs to change.
 import GenericListViewTable, { type SortDir } from "@/components/listViews/ListViewTable";
-import { PATIENT_FIELDS, rawValue } from "@/lib/patientFields";
+import { PATIENT_FIELDS, rawValue, patientFieldsFor, patientKeysFor } from "@/lib/patientFields";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { PatientAvatar } from "@/components/patients/PatientAvatar";
 import { VipBadge } from "@/components/shared/VipBadge";
 import { isVipPatient } from "@/lib/vipPatient";
@@ -40,10 +41,12 @@ const READ_ONLY = [
 ];
 
 export default function PatientListViewTable({ avatars = {}, ...rest }: Props) {
+  const canSeeBilling = useCanSeeBillingAmounts();
   return (
     <GenericListViewTable
       {...rest}
-      fields={PATIENT_FIELDS}
+      columns={patientKeysFor(canSeeBilling, rest.columns)}
+      fields={patientFieldsFor(canSeeBilling, PATIENT_FIELDS)}
       rawValue={rawValue}
       readOnlyKeys={READ_ONLY}
       renderCell={(row, key, value, editAffordance) => {

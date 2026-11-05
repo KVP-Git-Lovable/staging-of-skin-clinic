@@ -1,3 +1,4 @@
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { Badge } from "@/components/ui/badge";
 import { formatMoneyExact } from "@/lib/currency";
 import { paymentModeLabel, paymentSplitParts } from "@/lib/paymentSplits";
@@ -23,7 +24,10 @@ interface Props {
  * drawer, and "₹26.9K" cannot be reconciled against anything.
  */
 export function PaymentModeCell({ mode, splits }: Props) {
+  const canSeeBilling = useCanSeeBillingAmounts();
   const parts = paymentSplitParts(mode, splits);
+
+  if (!canSeeBilling) return null;
 
   if (parts.length === 0) {
     // Not a split, or a split whose rows name no mode - the stored word stands.

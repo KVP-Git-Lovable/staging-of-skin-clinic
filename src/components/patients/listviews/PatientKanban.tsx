@@ -2,7 +2,8 @@
 // supplies PATIENT_FIELDS/rawValue and the PatientAvatar card leading
 // visual so nothing else in the Patients page needs to change.
 import GenericListKanban from "@/components/listViews/ListKanban";
-import { PATIENT_FIELDS, rawValue, type KanbanConfig } from "@/lib/patientFields";
+import { PATIENT_FIELDS, rawValue, patientFieldsFor, patientKeysFor, isBillingPatientField, type KanbanConfig } from "@/lib/patientFields";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { PatientAvatar } from "@/components/patients/PatientAvatar";
 import { VipBadge } from "@/components/shared/VipBadge";
 import { isVipPatient } from "@/lib/vipPatient";
@@ -21,10 +22,18 @@ interface Props {
 }
 
 export default function PatientKanban({ avatars = {}, ...rest }: Props) {
+  const canSeeBilling = useCanSeeBillingAmounts();
+  // A saved config may sum a money field per column; leave the sum off (nothing is saved).
+  const config =
+    !canSeeBilling && rest.config.summarize_field && isBillingPatientField(rest.config.summarize_field)
+      ? { ...rest.config, summarize_field: null }
+      : rest.config;
   return (
     <GenericListKanban
       {...rest}
-      fields={PATIENT_FIELDS}
+      config={config}
+      columns={patientKeysFor(canSeeBilling, rest.columns)}
+      fields={patientFieldsFor(canSeeBilling, PATIENT_FIELDS)}
       rawValue={rawValue}
       titleField="full_name"
       renderLeading={(row) => (

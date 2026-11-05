@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { Pin } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
@@ -38,6 +39,26 @@ const OBJECT_STAFF_FIELD: Record<string, string> = {
   leave_applications: "staff_id",
 };
 
+/** Report objects / fields that carry a currency figure or payment mode. */
+const MONEY_OBJECTS = new Set(["invoices", "expenses"]);
+const MONEY_FIELDS = new Set([
+  "total_amount", "paid_amount", "tax_amount", "payment_type", "payment_mode",
+  "_sum_total_amount", "_sum_paid_amount", "price", "purchase_price", "amc_cost",
+  "mrp", "selling_price", "cost", "amount",
+]);
+
+const isMoneyReport = (report: SavedReport): boolean => {
+  if (MONEY_OBJECTS.has(report.primary_object)) return true;
+  if (report.related_object && MONEY_OBJECTS.has(report.related_object)) return true;
+  const refs = [
+    ...(report.columns || []),
+    ...(report.group_rows || []),
+    ...(report.group_columns || []),
+    ...(report.filters || []).map((f) => f.field),
+  ];
+  return refs.some((r) => typeof r === "string" && MONEY_FIELDS.has(r.split(".")[1] ?? ""));
+};
+
 interface Props {
   start: Date;
   end: Date;
@@ -46,6 +67,7 @@ interface Props {
 
 export function PinnedReports({ start, end, staffId }: Props) {
   const { user } = useAuth();
+  const canSeeBilling = useCanSeeBillingAmounts();
   const qc = useQueryClient();
 
   const { data: pins = [] } = useQuery({
@@ -87,8 +109,8 @@ export function PinnedReports({ start, end, staffId }: Props) {
   };
 
   const validPins = useMemo(
-    () => pins.filter((p) => p.saved_reports),
-    [pins]
+    () => pins.filter((p) => p.saved_reports && (canSeeBilling || !isMoneyReport(p.saved_reports))),
+    [pins, canSeeBilling]
   );
 
   const buildExtraFilters = (report: SavedReport): { extra: ReportFilter[]; applied: boolean } => {

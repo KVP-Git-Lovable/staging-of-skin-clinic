@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { toast } from "sonner";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
+import { mentionsMoney } from "@/lib/billingVisibility";
 
 interface Patient360Props {
   patientId: string;
@@ -42,6 +44,10 @@ const predictionConfig: Record<string, { color: string; icon: any; bg: string }>
 };
 
 export const Patient360 = ({ patientId, patientName }: Patient360Props) => {
+  const canSeeBilling = useCanSeeBillingAmounts();
+  // The generated insights are free text and can quote amounts; a role that may
+  // not see billing drops any line that talks about money.
+  const keepLine = (s: string) => canSeeBilling || !mentionsMoney(s);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [rawStats, setRawStats] = useState<RawStats | null>(null);
   const [loading, setLoading] = useState(false);
@@ -144,14 +150,21 @@ export const Patient360 = ({ patientId, patientName }: Patient360Props) => {
                   </div>
                 </div>
 
-                <div className="rounded-lg border p-3 bg-muted/20">
-                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Lifetime Value</p>
-                  <div className="flex items-center gap-1 mt-1">
-                    <IndianRupee className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-semibold text-lg">₹{Number(analysis.totalLifetimeValue).toLocaleString()}</span>
+                {canSeeBilling ? (
+                  <div className="rounded-lg border p-3 bg-muted/20">
+                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Lifetime Value</p>
+                    <div className="flex items-center gap-1 mt-1">
+                      <IndianRupee className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-semibold text-lg">₹{Number(analysis.totalLifetimeValue).toLocaleString()}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">{rawStats?.totalProcedures || 0} procedures</p>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">{rawStats?.totalProcedures || 0} procedures</p>
-                </div>
+                ) : (
+                  <div className="rounded-lg border p-3 bg-muted/20">
+                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Procedures</p>
+                    <span className="font-semibold text-lg mt-1 block">{rawStats?.totalProcedures || 0}</span>
+                  </div>
+                )}
               </div>
 
               {/* Visit pattern */}
@@ -178,11 +191,11 @@ export const Patient360 = ({ patientId, patientName }: Patient360Props) => {
               </div>
 
               {/* Insights */}
-              {analysis.insights.length > 0 && (
+              {analysis.insights.filter(keepLine).length > 0 && (
                 <div>
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Key Insights</p>
                   <div className="space-y-1.5">
-                    {analysis.insights.map((insight, i) => (
+                    {analysis.insights.filter(keepLine).map((insight, i) => (
                       <div key={i} className="flex items-start gap-2 text-sm">
                         <span className="text-primary mt-0.5 shrink-0">•</span>
                         <span>{insight}</span>
@@ -194,18 +207,18 @@ export const Patient360 = ({ patientId, patientName }: Patient360Props) => {
 
               {/* Risk & Opportunities */}
               <div className="grid grid-cols-1 gap-3">
-                {analysis.riskFactors.length > 0 && (
+                {analysis.riskFactors.filter(keepLine).length > 0 && (
                   <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
                     <p className="text-xs font-semibold text-destructive flex items-center gap-1 mb-2"><AlertTriangle className="h-3 w-3" /> Risk Factors</p>
-                    {analysis.riskFactors.map((r, i) => (
+                    {analysis.riskFactors.filter(keepLine).map((r, i) => (
                       <p key={i} className="text-xs text-muted-foreground mb-1">• {r}</p>
                     ))}
                   </div>
                 )}
-                {analysis.opportunities.length > 0 && (
+                {analysis.opportunities.filter(keepLine).length > 0 && (
                   <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
                     <p className="text-xs font-semibold text-emerald-700 flex items-center gap-1 mb-2"><TrendingUp className="h-3 w-3" /> Opportunities</p>
-                    {analysis.opportunities.map((o, i) => (
+                    {analysis.opportunities.filter(keepLine).map((o, i) => (
                       <p key={i} className="text-xs text-muted-foreground mb-1">• {o}</p>
                     ))}
                   </div>

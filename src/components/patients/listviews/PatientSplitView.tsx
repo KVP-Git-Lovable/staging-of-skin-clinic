@@ -3,7 +3,8 @@
 // the phone/email header meta so nothing else in the Patients page needs
 // to change.
 import GenericListSplitView from "@/components/listViews/ListSplitView";
-import { PATIENT_FIELDS, rawValue } from "@/lib/patientFields";
+import { PATIENT_FIELDS, rawValue, patientFieldsFor, patientKeysFor } from "@/lib/patientFields";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { PatientAvatar } from "@/components/patients/PatientAvatar";
 import { VipBadge } from "@/components/shared/VipBadge";
 import { isVipPatient } from "@/lib/vipPatient";
@@ -23,15 +24,16 @@ const DETAIL_FIELDS = [
 ];
 
 export default function PatientSplitView({ rows, columns, avatars = {}, onOpen }: Props) {
+  const canSeeBilling = useCanSeeBillingAmounts();
   return (
     <GenericListSplitView
       rows={rows}
-      columns={columns}
+      columns={patientKeysFor(canSeeBilling, columns)}
       onOpen={onOpen}
-      fields={PATIENT_FIELDS}
+      fields={patientFieldsFor(canSeeBilling, PATIENT_FIELDS)}
       rawValue={rawValue}
       titleField="full_name"
-      detailFields={DETAIL_FIELDS}
+      detailFields={patientKeysFor(canSeeBilling, DETAIL_FIELDS)}
       renderLeading={(row, size) => (
         <PatientAvatar
           firstName={row.first_name}

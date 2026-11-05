@@ -35,3 +35,17 @@ export const DEFAULT_APPOINTMENT_VIEW_COLUMNS = [
   "service",
   "status",
 ];
+
+// Fields that carry money: invoice total and payment mode. Hidden from roles
+// whose "Billing amounts & payment modes" permission is switched off.
+export const BILLING_FIELD_KEYS: readonly string[] = ["bill", "payment_mode"];
+
+/** Drops the money fields from a field list or column-key list. */
+export function withoutBillingFields<T extends string | { key: string }>(items: readonly T[]): T[] {
+  return items.filter((i) => !BILLING_FIELD_KEYS.includes(typeof i === "string" ? i : i.key));
+}
+
+/** Drops filter conditions that test a money field, leaving the rest as they were. */
+export function withoutBillingConditions<F extends { conditions: { field: string }[] }>(filters: F): F {
+  return { ...filters, conditions: filters.conditions.filter((c) => !BILLING_FIELD_KEYS.includes(c.field)) };
+}

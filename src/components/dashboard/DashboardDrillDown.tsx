@@ -14,9 +14,11 @@ interface Props {
   title: string;
   records: any[];
   kind: DrillKind;
+  /** False hides payment mode and amount columns. */
+  showMoney?: boolean;
 }
 
-export function DashboardDrillDown({ open, onOpenChange, title, records, kind }: Props) {
+export function DashboardDrillDown({ open, onOpenChange, title, records, kind, showMoney = true }: Props) {
   const navigate = useNavigate();
 
   const go = (path: string) => {
@@ -41,9 +43,9 @@ export function DashboardDrillDown({ open, onOpenChange, title, records, kind }:
                 <TableHead className="text-xs">Invoice #</TableHead>
                 <TableHead className="text-xs">Patient</TableHead>
                 <TableHead className="text-xs">Doctor</TableHead>
-                <TableHead className="text-xs">Payment Mode</TableHead>
-                <TableHead className="text-xs">Amount</TableHead>
-                <TableHead className="text-xs">Paid</TableHead>
+                {showMoney && <TableHead className="text-xs">Payment Mode</TableHead>}
+                {showMoney && <TableHead className="text-xs">Amount</TableHead>}
+                {showMoney && <TableHead className="text-xs">Paid</TableHead>}
                 <TableHead className="text-xs">Status</TableHead>
                 <TableHead className="text-xs">Date</TableHead>
               </TableRow>
@@ -54,9 +56,9 @@ export function DashboardDrillDown({ open, onOpenChange, title, records, kind }:
                   <TableCell className="text-xs text-primary underline font-medium">{r.invoice_number}</TableCell>
                   <TableCell className="text-xs">{r.patient_name || "Walk-in"}</TableCell>
                   <TableCell className="text-xs">{r._doctorName || "—"}</TableCell>
-                  <TableCell className="text-xs">{r.payment_mode || "—"}</TableCell>
-                  <TableCell className="text-xs">{formatMoney(Number(r.total_amount))}</TableCell>
-                  <TableCell className="text-xs">{formatMoney(Number(r.paid_amount))}</TableCell>
+                  {showMoney && <TableCell className="text-xs">{r.payment_mode || "—"}</TableCell>}
+                  {showMoney && <TableCell className="text-xs">{formatMoney(Number(r.total_amount))}</TableCell>}
+                  {showMoney && <TableCell className="text-xs">{formatMoney(Number(r.paid_amount))}</TableCell>}
                   <TableCell><Badge variant="secondary" className="text-[10px]">{r.status}</Badge></TableCell>
                   <TableCell className="text-xs">{format(new Date(r.created_at), "dd MMM yyyy")}</TableCell>
                 </TableRow>
