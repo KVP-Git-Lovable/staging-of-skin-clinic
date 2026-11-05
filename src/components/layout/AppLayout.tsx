@@ -94,7 +94,13 @@ export function AppLayout({ children }: AppLayoutProps) {
   // ProtectedRoute because /trash and /profile have no route guard at all, but
   // they are inside this layout - and /login and /signup are outside it, so
   // signing out still works.
-  if (mustChangePassword) return <ChangePasswordRequired />;
+  //
+  // STAGING ONLY: the forced "Choose your own password" screen is switched off
+  // here. The backend refuses the change with "Current password required when
+  // setting new password", which locked testers out. To restore production's
+  // behaviour, set this back to: if (mustChangePassword) return <ChangePasswordRequired />;
+  const enforceForcedPasswordChange = false;
+  if (enforceForcedPasswordChange && mustChangePassword) return <ChangePasswordRequired />;
 
   return (
     <SidebarProvider>
