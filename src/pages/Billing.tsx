@@ -1,4 +1,4 @@
-import { formatMoney, formatMoneyPrecise } from "@/lib/currency";
+import { formatMoneyExact, formatMoneyPrecise } from "@/lib/currency";
 import { edgeFunctionErrorMessage } from "@/lib/edgeFunctionError";
 import { waitForInvoicePdf } from "@/lib/invoicePdfWait";
 import { paymentModeForSplits, splitProblem, splitTotal, splitsFromInvoice } from "@/lib/paymentSplits";
@@ -119,9 +119,19 @@ const statusStyles: Record<string, string> = {
   Cancelled: "bg-muted text-muted-foreground",
 };
 
-/** Money is always shown rounded to whole rupees (no decimals). */
+/**
+ * Money is always shown rounded to whole rupees (no decimals), and NEVER
+ * abbreviated.
+ *
+ * formatMoney inherits the admin "Abbreviate large amounts" setting, so with
+ * that switched on an invoice Total read "₹2.50 L". A figure a patient is
+ * asked to pay has to carry every digit, whatever the display preference
+ * says - the same reason the report KPI cards use the exact formatter.
+ * Rounding first means this prints exactly what formatMoney printed before,
+ * so nothing on the invoice looks different today.
+ */
 const money = (n: number) =>
-  formatMoney(Math.round(Number(n) || 0));
+  formatMoneyExact(Math.round(Number(n) || 0));
 /** Tax rates keep their decimals (e.g. 2.5%). */
 const rateLabel = (n: number) =>
   `${Math.round((Number(n) || 0) * 100) / 100}`;
@@ -2613,7 +2623,7 @@ const Billing = () => {
             </button>
           )}
           <div className="text-xs text-muted-foreground">
-            Split total {formatMoney(splitTotalAmount)} — auto-applied as Paid Amount
+            Split total {formatMoneyExact(splitTotalAmount)} — auto-applied as Paid Amount
           </div>
         </div>
       )}
@@ -3985,10 +3995,10 @@ const Billing = () => {
                         )}
                         <tr className="border-t bg-muted/40 font-semibold">
                           <td className="px-3 py-2" colSpan={4}>Total</td>
-                          <td className="px-3 py-2 text-right">{formatMoney(t.amount)}</td>
+                          <td className="px-3 py-2 text-right">{formatMoneyExact(t.amount)}</td>
                           <td className="px-3 py-2" />
-                          <td className="px-3 py-2 text-right">{formatMoney(t.tax)}</td>
-                          <td className="px-3 py-2 text-right">{formatMoney(t.total)}</td>
+                          <td className="px-3 py-2 text-right">{formatMoneyExact(t.tax)}</td>
+                          <td className="px-3 py-2 text-right">{formatMoneyExact(t.total)}</td>
                         </tr>
                       </tbody>
                     </table>
@@ -4159,12 +4169,12 @@ const Billing = () => {
               <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 text-sm">
                 <div className="flex justify-between font-semibold text-primary text-base">
                   <span>Grand Total</span>
-                  <span>{formatMoney(Number(isEditing ? editData.total_amount : viewInvoice.total_amount))}</span>
+                  <span>{formatMoneyExact(Number(isEditing ? editData.total_amount : viewInvoice.total_amount))}</span>
                 </div>
                 <div className="pt-2 mt-2 border-t space-y-2">
                   <div className="flex justify-between text-xs">
                     <span className="text-muted-foreground">Paid</span>
-                    <span>{formatMoney(Number(isEditing ? editData.paid_amount : viewInvoice.paid_amount))}</span>
+                    <span>{formatMoneyExact(Number(isEditing ? editData.paid_amount : viewInvoice.paid_amount))}</span>
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-muted-foreground">Payment Mode</span>
@@ -4177,14 +4187,14 @@ const Billing = () => {
                   {Array.isArray(viewInvoice.payment_splits) && viewInvoice.payment_splits.map((p: any, i: number) => (
                     <div key={i} className="flex justify-between text-xs text-muted-foreground pl-3">
                       <span>{p.mode}</span>
-                      <span>{formatMoney(Number(p.amount || 0))}</span>
+                      <span>{formatMoneyExact(Number(p.amount || 0))}</span>
                     </div>
                   ))}
                   <div className="flex justify-between text-xs">
                     <span className="text-muted-foreground">Balance Due</span>
                     {(() => {
                       const bal = Number(isEditing ? editData.total_amount : viewInvoice.total_amount) - Number(isEditing ? editData.paid_amount : viewInvoice.paid_amount);
-                      return <span className={bal > 0 ? "text-destructive font-medium" : "text-primary font-medium"}>{formatMoney(bal)}</span>;
+                      return <span className={bal > 0 ? "text-destructive font-medium" : "text-primary font-medium"}>{formatMoneyExact(bal)}</span>;
                     })()}
                   </div>
                 </div>

@@ -60,25 +60,36 @@ const reconcilableDigits = (n: number, s: CurrencySettings) => {
   return Math.round(n * 100) % 100 === 0 ? 0 : 2;
 };
 
+/**
+ * The shortened form of a number, or null when it should not be shortened.
+ *
+ * null means "abbreviation is switched off, or this number is too small to
+ * shorten" - the caller then groups it in full. Stated once here rather than
+ * in each formatter that offers abbreviation, so the Lakh/Crore thresholds
+ * cannot drift apart from one another.
+ */
+const abbreviated = (n: number, s: CurrencySettings): string | null => {
+  if (!s.abbreviate) return null;
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  if (s.number_style === "indian") {
+    if (abs >= 1_00_00_000) return `${sign}${(abs / 1_00_00_000).toFixed(2)} Cr`;
+    if (abs >= 1_00_000) return `${sign}${(abs / 1_00_000).toFixed(2)} L`;
+    if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)}K`;
+  } else {
+    if (abs >= 1_000_000_000) return `${sign}${(abs / 1_000_000_000).toFixed(2)}B`;
+    if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)}M`;
+    if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)}K`;
+  }
+  return null;
+};
+
 /** Plain grouped number, honouring Indian vs US grouping and decimal settings. */
 export function formatNumber(value: number | string | null | undefined): string {
   const n = typeof value === "string" ? Number(value) : value;
   if (n == null || Number.isNaN(n)) return "—";
   const s = cache;
-  if (s.abbreviate) {
-    const abs = Math.abs(n);
-    const sign = n < 0 ? "-" : "";
-    if (s.number_style === "indian") {
-      if (abs >= 1_00_00_000) return `${sign}${(abs / 1_00_00_000).toFixed(2)} Cr`;
-      if (abs >= 1_00_000) return `${sign}${(abs / 1_00_000).toFixed(2)} L`;
-      if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)}K`;
-    } else {
-      if (abs >= 1_000_000_000) return `${sign}${(abs / 1_000_000_000).toFixed(2)}B`;
-      if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)}M`;
-      if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)}K`;
-    }
-  }
-  return grouped(n, s);
+  return abbreviated(n, s) ?? grouped(n, s);
 }
 
 /** Currency string using the admin-configured symbol, decimals and grouping style. */
@@ -100,7 +111,7 @@ export function formatMoney(value: number | string | null | undefined): string {
 export function formatMoneyExact(value: number | string | null | undefined): string {
   const n = typeof value === "string" ? Number(value) : value;
   if (n == null || Number.isNaN(n)) return `${cache.symbol}0`;
-  // Sign outside the symbol - "-₹2,000", the way formatMoneyCompact writes the
+  // Sign outside the symbol - "-₹2,000", the way formatMoneyTile writes the
   // negatives it shortens, rather than formatMoney's "₹-2,000".
   const sign = n < 0 ? "-" : "";
   const abs = Math.abs(n);
@@ -153,22 +164,34 @@ export function formatMoneyPrecise(value: number | string | null | undefined): s
   return `${sign}${cache.symbol}${body}`;
 }
 
-/** Currency string that always shortens large amounts (Lakh/Crore or K/M),
- *  so big figures never overflow a small card. Small amounts stay grouped. */
-export function formatMoneyCompact(value: number | string | null | undefined): string {
+/**
+ * A glance figure on a summary tile: whole rupees, shortened only when the
+ * admin has asked for it.
+ *
+ * The two screens that show a headline total - the patient Engagement card and
+ * the dashboard revenue tiles - each used to shorten unconditionally, one with
+ * its own hand-rolled `/1000` and a lowercase "k". So a clinic that had
+ * deliberately switched abbreviation OFF still read "₹24.8k" for a patient's
+ * billing, and the admin page's promise to control "how every amount is
+ * displayed across the app" was untrue.
+ *
+ * Whole rupees regardless of `show_decimals`: paise belong on an invoice,
+ * where they reconcile against a tax document, not on a tile read at a glance.
+ * Everything else - symbol, Indian vs US grouping, whether to abbreviate at
+ * all - comes from the settings like anywhere else.
+ *
+ * Sign outside the symbol ("-₹1.95 L"), the way formatMoneyExact writes it,
+ * rather than formatMoney's "₹-1.95 L".
+ */
+export function formatMoneyTile(value: number | string | null | undefined): string {
   const n = typeof value === "string" ? Number(value) : value;
   if (n == null || Number.isNaN(n)) return `${cache.symbol}0`;
-  const s = cache;
-  const abs = Math.abs(n);
-  const sign = n < 0 ? "-" : "";
-  if (s.number_style === "indian") {
-    if (abs >= 1_00_00_000) return `${sign}${s.symbol}${(abs / 1_00_00_000).toFixed(2)} Cr`;
-    if (abs >= 1_00_000) return `${sign}${s.symbol}${(abs / 1_00_000).toFixed(2)} L`;
-  } else {
-    if (abs >= 1_000_000_000) return `${sign}${s.symbol}${(abs / 1_000_000_000).toFixed(2)}B`;
-    if (abs >= 1_000_000) return `${sign}${s.symbol}${(abs / 1_000_000).toFixed(2)}M`;
-  }
-  return formatMoney(n);
+  const whole = Math.round(n);
+  const sign = whole < 0 ? "-" : "";
+  const abs = Math.abs(whole);
+  // abs, not whole: the sign is placed outside the symbol below, so
+  // `abbreviated` must not add one of its own.
+  return `${sign}${cache.symbol}${abbreviated(abs, cache) ?? grouped(abs, cache, 0)}`;
 }
 
 async function fetchCurrencySettings(): Promise<CurrencySettings> {

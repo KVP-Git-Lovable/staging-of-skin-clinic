@@ -41,7 +41,12 @@ import { describe, it, expect } from "vitest";
  * between two tables.
  */
 const AMBIGUOUS_EMBEDS: Record<string, string[]> = {
-  appointments: ["staff"],           // staff_id, therapist_id
+  // staff_id, therapist_id. The therapist foreign key is TEMPORARILY
+  // dropped (20261104150000) because the published build predates the
+  // explicit embeds and was erroring on every appointment. The entry
+  // stays: the rule it enforces is right either way, and removing it
+  // would let the outage straight back in when the key is restored.
+  appointments: ["staff"],
   assets: ["vendors"],               // vendor_id, amc_vendor_id
   comms_journeys: ["staff"],         // created_by, submitted_by, approver_id
   leads: ["staff"],                  // created_by, owner_id

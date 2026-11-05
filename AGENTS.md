@@ -2,6 +2,7 @@
 
 - Appointment staff embeds must explicitly use appointments_staff_id_fkey and retain the staff response alias; therapist_id also references staff, so implicit embeds are ambiguous.
 - The same holds for every table reached by more than one foreign key: name the relationship rather than embedding by table name. A migration that adds a second route between two tables must add that pair to AMBIGUOUS_EMBEDS in src/lib/ambiguousEmbeds.test.ts, which fails the build on an implicit embed the mocked suite cannot see.
+- A schema change must keep the CURRENTLY PUBLISHED build working without a deploy. The clinic uses clinic.quickapp.ai, which is the published build and only changes when someone publishes; a migration reaches that same database the instant it is applied. So no second foreign key between tables that are already embedded, no renamed or dropped column, no new NOT NULL without a default. A change that cannot be made backward-compatible waits for a publish and is raised first rather than applied. Pushing to main and seeing the Lovable preview update is not the clinic having the fix.
 
 - Keep service knowledge in dedicated articles with database-enforced active doctor/admin review, immutable revision snapshots, and draft-only AI suggestions; this prevents unreviewed clinical content from appearing in appointments.
 - Resolve appointment knowledge dynamically from the booked service and recorded procedure service IDs, with inclusive demographic matching; never persist guessed article assignments or automatically alter prescriptions.

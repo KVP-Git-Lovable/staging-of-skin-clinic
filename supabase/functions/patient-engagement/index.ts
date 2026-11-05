@@ -106,8 +106,17 @@ Deno.serve(async (req) => {
       visitScore = Math.min(visitScore, 100);
 
       // --- Revenue Value (25%) ---
-      const totalBilled = patientInvs.reduce((s, i) => s + Number(i.total_amount || 0), 0);
-      const avgInvoice = patientInvs.length > 0 ? totalBilled / patientInvs.length : 0;
+      // Net of cancelled and merged, the same rule the rest of the app uses to
+      // decide whether a visit was billed at all. `status` was already being
+      // selected and simply never read, so a cancelled bill counted towards a
+      // patient's lifetime value - and, now that the badge is banded on money,
+      // would have bought them a tier. The average divides by the same net
+      // list, or a cancelled invoice would still drag it down.
+      const billableInvs = patientInvs.filter(
+        (i) => !["Cancelled", "Merged"].includes(String(i.status ?? "")),
+      );
+      const totalBilled = billableInvs.reduce((s, i) => s + Number(i.total_amount || 0), 0);
+      const avgInvoice = billableInvs.length > 0 ? totalBilled / billableInvs.length : 0;
 
       let revenueScore = 0;
       // Total billed (up to 50 pts)
@@ -173,10 +182,24 @@ Deno.serve(async (req) => {
         complianceScore * 0.10
       );
 
+      // --- Tier: lifetime billing, NOT the score ---
+      //
+      // This used to be a restatement of engagementScore (>=80/60/40), and
+      // since the score is only a quarter revenue the badge did not mean what
+      // the clinic read it to mean: Silver ran from Rs 0 to Rs 3.84 lakh and
+      // Platinum began at Rs 17,700. The clinic asked for bands on money.
+      //
+      // MIRRORS src/lib/patientTier.ts and public.recalc_patient_invoice_rollups.
+      // Deno cannot import the browser bundle, so the numbers are written out
+      // again here; patientTier.test.ts reads this file and fails if they
+      // drift. The database is the authority - it is the only writer that runs
+      // for every patient - and this must agree with it exactly.
+      //
+      // Rs 3,00,000 exactly is still Gold; Platinum is strictly above.
       let tier: string, tierEmoji: string;
-      if (engagementScore >= 80) { tier = "Platinum"; tierEmoji = "🏆"; }
-      else if (engagementScore >= 60) { tier = "Gold"; tierEmoji = "🥇"; }
-      else if (engagementScore >= 40) { tier = "Silver"; tierEmoji = "🥈"; }
+      if (totalBilled > 300000) { tier = "Platinum"; tierEmoji = "🏆"; }
+      else if (totalBilled >= 100000) { tier = "Gold"; tierEmoji = "🥇"; }
+      else if (totalBilled > 0) { tier = "Silver"; tierEmoji = "🥈"; }
       else { tier = "Early"; tierEmoji = "🌱"; }
 
       results[pid] = {

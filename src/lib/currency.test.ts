@@ -1,13 +1,14 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect, afterEach } from "vitest";
 import {
   DEFAULT_CURRENCY_SETTINGS,
   formatAmountExact,
   formatMoney,
-  formatMoneyCompact,
   formatMoneyExact,
   formatNumber,
   setCurrencySettingsCache,
   formatMoneyPrecise,
+  formatMoneyTile,
 } from "./currency";
 
 afterEach(() => setCurrencySettingsCache(DEFAULT_CURRENCY_SETTINGS));
@@ -16,7 +17,8 @@ describe("formatMoneyExact", () => {
   it("shows every digit of a figure the other two shorten", () => {
     // The report cards read "Rs 1.95 L", which nobody can reconcile against a
     // bank statement or the cash drawer.
-    expect(formatMoneyCompact(194800)).toBe("₹1.95 L");
+    setCurrencySettingsCache({ ...DEFAULT_CURRENCY_SETTINGS, abbreviate: true });
+    expect(formatMoney(194800)).toBe("₹1.95 L");
     expect(formatMoneyExact(194800)).toBe("₹1,94,800");
   });
 
@@ -113,12 +115,6 @@ describe("the other formatters are unchanged by the shared grouping helper", () 
     setCurrencySettingsCache({ ...DEFAULT_CURRENCY_SETTINGS, abbreviate: true });
     expect(formatNumber(194800)).toBe("1.95 L");
   });
-
-  it("formatMoneyCompact still shortens above a lakh and not below", () => {
-    expect(formatMoneyCompact(99999)).toBe("₹99,999");
-    expect(formatMoneyCompact(100000)).toBe("₹1.00 L");
-    expect(formatMoneyCompact(12345678)).toBe("₹1.23 Cr");
-  });
 });
 
 describe("formatMoneyPrecise", () => {
@@ -168,5 +164,129 @@ describe("formatAmountExact - the report PDF's cells", () => {
     expect(formatAmountExact(-2000)).toBe("-2,000");
     expect(formatAmountExact(null)).toBe("0");
     expect(formatAmountExact("not a number")).toBe("0");
+  });
+});
+
+/**
+ * The clinic's live settings when this was written: symbol ₹, Indian
+ * grouping, show_decimals ON with 2 digits, abbreviate OFF. They had already
+ * told the app not to abbreviate, and a patient's Billed figure still read
+ * "₹24.8k" - because the card hand-rolled its own `/1000` instead of asking.
+ */
+const CLINIC = { ...DEFAULT_CURRENCY_SETTINGS, show_decimals: true, decimal_digits: 2 };
+
+describe("formatMoneyTile", () => {
+  it("shows the whole figure when the clinic has abbreviation switched OFF", () => {
+    // The bug, in one line: this used to render "₹24.8k".
+    setCurrencySettingsCache({ ...CLINIC, abbreviate: false });
+    expect(formatMoneyTile(24800)).toBe("₹24,800");
+  });
+
+  it("shortens only when the clinic asks for it", () => {
+    setCurrencySettingsCache({ ...CLINIC, abbreviate: true });
+    expect(formatMoneyTile(24800)).toBe("₹24.8K");
+    expect(formatMoneyTile(194800)).toBe("₹1.95 L");
+    expect(formatMoneyTile(12345678)).toBe("₹1.23 Cr");
+  });
+
+  it("stays on whole rupees even while decimals are switched on", () => {
+    // show_decimals is for invoices, which reconcile against a tax document.
+    // A tile is read at a glance and "₹24,800.00" is just noise.
+    setCurrencySettingsCache({ ...CLINIC, show_decimals: true, decimal_digits: 2 });
+    expect(formatMoneyTile(24800)).toBe("₹24,800");
+    expect(formatMoneyTile(24800.49)).toBe("₹24,800");
+    expect(formatMoneyTile(24800.5)).toBe("₹24,801");
+  });
+
+  it("honours the symbol and the grouping style", () => {
+    setCurrencySettingsCache({ ...CLINIC, symbol: "$", number_style: "us" });
+    expect(formatMoneyTile(1948000)).toBe("$1,948,000");
+    setCurrencySettingsCache({ ...CLINIC, symbol: "$", number_style: "us", abbreviate: true });
+    expect(formatMoneyTile(1948000)).toBe("$1.95M");
+  });
+
+  it("puts the sign OUTSIDE the symbol", () => {
+    setCurrencySettingsCache(CLINIC);
+    expect(formatMoneyTile(-24800)).toBe("-₹24,800");
+    setCurrencySettingsCache({ ...CLINIC, abbreviate: true });
+    expect(formatMoneyTile(-194800)).toBe("-₹1.95 L");
+  });
+
+  it("never renders a signed zero", () => {
+    // A rounding detail with a visible consequence: a balance of -0.40 must
+    // read "₹0", not "-₹0". The grouping already rounds the digits, so this
+    // is the one case that proves the amount is rounded BEFORE its sign is
+    // decided.
+    setCurrencySettingsCache(CLINIC);
+    expect(formatMoneyTile(-0.4)).toBe("₹0");
+    expect(formatMoneyTile(-0.6)).toBe("-₹1");
+  });
+
+  it("has something to show for nothing at all", () => {
+    setCurrencySettingsCache(CLINIC);
+    expect(formatMoneyTile(0)).toBe("₹0");
+    expect(formatMoneyTile(null)).toBe("₹0");
+    expect(formatMoneyTile(undefined)).toBe("₹0");
+    expect(formatMoneyTile("not a number")).toBe("₹0");
+  });
+
+  it("reads a numeric string, the way the API returns totals", () => {
+    setCurrencySettingsCache(CLINIC);
+    expect(formatMoneyTile("24800")).toBe("₹24,800");
+  });
+});
+
+/**
+ * The guarantee the clinic asked for by name: "make sure billing will not be
+ * affected". src/pages/Billing.tsx formats every invoice figure - Total,
+ * Paid, Balance, the split total and the HSN rollup - with formatMoneyExact,
+ * so switching abbreviation on cannot turn ₹2,50,000 into "₹2.50 L" on a
+ * document a patient is asked to pay against.
+ */
+describe("an invoice figure is never abbreviated", () => {
+  it("prints every digit even with abbreviation switched ON", () => {
+    setCurrencySettingsCache({ ...CLINIC, abbreviate: true });
+    // What formatMoney would have done to the same number:
+    expect(formatMoney(250000)).toBe("₹2.50 L");
+    // What the invoice does instead:
+    expect(formatMoneyExact(250000)).toBe("₹2,50,000.00");
+    expect(formatMoneyExact(12345678)).toBe("₹1,23,45,678.00");
+  });
+
+  it("renders exactly what it rendered before this change, with the toggle off", () => {
+    // Billing rounds to whole rupees first, so formatMoney and
+    // formatMoneyExact agree character for character on the clinic's real
+    // settings. Swapping one for the other changed no invoice on screen.
+    setCurrencySettingsCache({ ...CLINIC, abbreviate: false });
+    for (const n of [250000, 15650, 4000, 0]) {
+      expect(formatMoneyExact(Math.round(n))).toBe(formatMoney(Math.round(n)));
+    }
+  });
+});
+
+/**
+ * The tests above prove the formatters behave. These prove the two screens
+ * actually CALL them - which is the whole of this bug. The Billed figure was
+ * wrong not because a formatter misbehaved but because a component formatted
+ * money by hand and never consulted the settings at all.
+ */
+describe("the screens use the shared formatters", () => {
+  it("no invoice figure in Billing goes through the abbreviating formatter", () => {
+    // formatMoney inherits "Abbreviate large amounts". On an invoice that
+    // would print "₹2.50 L" as the amount due. Only the Exact and Precise
+    // formatters may appear here.
+    const billing = readFileSync("src/pages/Billing.tsx", "utf8");
+    const abbreviating = billing.match(/(?<![A-Za-z])formatMoney\s*\(/g) ?? [];
+    expect(abbreviating, "Billing.tsx must use formatMoneyExact / formatMoneyPrecise").toEqual([]);
+  });
+
+  it("the patient Engagement card does not format money by hand", () => {
+    // It used to read:
+    //   `₹${totalBilled >= 1000 ? `${(totalBilled / 1000).toFixed(1)}k` : ...}`
+    // which is where the clinic's "₹24.8k" came from.
+    const card = readFileSync("src/components/patients/EngagementScoreCard.tsx", "utf8");
+    expect(card).toContain("formatMoneyTile");
+    expect(card, "no hand-rolled /1000 abbreviation").not.toMatch(/\/\s*1000\s*\)?\s*\)?\.toFixed/);
+    expect(card, "no hardcoded currency symbol in the Billed figure").not.toMatch(/`₹\$\{/);
   });
 });

@@ -110,6 +110,16 @@ export const SOURCE_OPTIONS = [
 
 export const ENGAGEMENT_TIER_OPTIONS = ["Platinum", "Gold", "Silver", "Early"].map((v) => ({ value: v, label: v }));
 
+/**
+ * Fields the database works out for itself, which no screen may write.
+ *
+ * engagement_tier is banded on lifetime billing by
+ * recalc_patient_invoice_rollups on every invoice change. The Kanban groups by
+ * any picklist and writes the column name onto the card it is given, so
+ * without this a drag would overwrite a derived fact.
+ */
+export const DERIVED_PATIENT_FIELDS = ["engagement_tier", "lifetime_value", "total_visits", "days_since_last_visit"];
+
 /** Fields that can drive Kanban columns (picklists only). */
 export const KANBAN_GROUP_FIELDS = PATIENT_FIELDS.filter((f) => f.type === "picklist");
 /** Fields that can be summarised on a Kanban column header. */

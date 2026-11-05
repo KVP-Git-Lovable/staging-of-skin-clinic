@@ -23,7 +23,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { npsBreakdown } from "@/lib/feedbackScores";
 import { useMoneyFormat } from "@/lib/currency";
-import { formatMoneyCompact } from "@/lib/currency";
+import { formatMoneyTile } from "@/lib/currency";
 import { kpiColumnClass } from "@/lib/kpiGrid";
 import { invoiceMapByAppointment, type VisitBill } from "@/lib/invoicesForAppointments";
 import { appointmentPatientName, appointmentPatientInitialsText } from "@/lib/appointmentPatientName";
@@ -670,9 +670,14 @@ const Index = () => {
             <StatCard title="New Patients Added" value={newPatients.count} change={dateLabel} changeType="neutral" icon={Users} delay={0.15} loading={newPatientsLoading} />
           </div>
         )}
+        {/* The revenue tile spans the full row on a phone, one column from lg
+            up. It is the only tile holding a long figure now that it prints in
+            full rather than as "₹1.95 L": at 375px two-across it had 92px of
+            text and "₹19,48,000" needs 116px, so it was truncated to
+            "₹19,48,0…". Nothing changes on desktop. */}
         {shows("revenue") && (
-          <div className="cursor-pointer h-full" onClick={() => openDrill("invoices", `Revenue — ${dateLabel}`)}>
-            <StatCard title="Revenue" value={formatMoneyCompact(paidRevenue)} change={`of ${formatMoneyCompact(invoicedRevenue)} invoiced • ${dateLabel}`} changeType="positive" icon={IndianRupee} iconColor="bg-success/10 text-success" delay={0.2} loading={revenueLoading} />
+          <div className="col-span-2 lg:col-span-1 cursor-pointer h-full" onClick={() => openDrill("invoices", `Revenue — ${dateLabel}`)}>
+            <StatCard title="Revenue" value={formatMoneyTile(paidRevenue)} change={`of ${formatMoneyTile(invoicedRevenue)} invoiced • ${dateLabel}`} changeType="positive" icon={IndianRupee} iconColor="bg-success/10 text-success" delay={0.2} loading={revenueLoading} />
           </div>
         )}
         {shows("total_patients") && (
@@ -688,7 +693,7 @@ const Index = () => {
             <StatCard
               title="Active Campaigns"
               value={activeCampaigns.length}
-              change={`${formatMoneyCompact(activeCampaigns.reduce((s, c: any) => s + Number(c.amount_spent || 0), 0))} total spend`}
+              change={`${formatMoneyTile(activeCampaigns.reduce((s, c: any) => s + Number(c.amount_spent || 0), 0))} total spend`}
               changeType="neutral"
               icon={Megaphone}
               iconColor="bg-primary/10 text-primary"

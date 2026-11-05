@@ -15,7 +15,7 @@ import PatientSplitView from "@/components/patients/listviews/PatientSplitView";
 import KanbanSettingsDialog from "@/components/patients/listviews/KanbanSettingsDialog";
 import FieldsDisplayDialog from "@/components/patients/listviews/FieldsDisplayDialog";
 import { usePatientListViews } from "@/hooks/usePatientListViews";
-import { applyFilters, sortRows, DEFAULT_VIEW_COLUMNS, fieldDef, GENDER_OPTIONS, STATUS_OPTIONS, SKIN_TYPE_OPTIONS, BLOOD_GROUP_OPTIONS, SOURCE_OPTIONS, ENGAGEMENT_TIER_OPTIONS, type ListView, type ListDisplayMode } from "@/lib/patientFields";
+import { applyFilters, sortRows, DEFAULT_VIEW_COLUMNS, fieldDef, GENDER_OPTIONS, STATUS_OPTIONS, SKIN_TYPE_OPTIONS, BLOOD_GROUP_OPTIONS, SOURCE_OPTIONS, ENGAGEMENT_TIER_OPTIONS, DERIVED_PATIENT_FIELDS, type ListView, type ListDisplayMode } from "@/lib/patientFields";
 import { ALL_VIEW_ID, RECENT_VIEW_ID, getKanbanConfig, setKanbanConfig } from "@/lib/standardViews";
 import { getRecentlyViewed, markRecentlyViewed } from "@/lib/recentlyViewed";
 import DeleteConfirmDialog from "@/components/shared/DeleteConfirmDialog";
@@ -235,6 +235,15 @@ const Patients = () => {
   };
 
   const moveKanbanCard = async (row: Patient, field: string, value: string) => {
+    // engagement_tier is worked out from the patient's billing by the
+    // database, on every invoice change. It is a picklist, so the Kanban will
+    // happily group by it - but dragging a card used to write the new column
+    // name straight onto the patient, silently contradicting their actual
+    // spend until something recomputed it. Grouping stays, the write does not.
+    if (DERIVED_PATIENT_FIELDS.includes(field)) {
+      toast.error("Category is worked out from the patient's billing and cannot be moved by hand");
+      return;
+    }
     const { error } = await supabase.from("patients").update({ [field]: value || null } as any).eq("id", row.id);
     if (error) {
       toast.error(error.message);

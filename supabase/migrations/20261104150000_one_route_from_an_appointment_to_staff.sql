@@ -1,0 +1,60 @@
+-- Give an appointment one route to staff again, so the published app works.
+--
+-- Dr Ashwini opened an appointment on clinic.quickapp.ai and got "Could not
+-- load this appointment". The list beside it loaded fine. That split is the
+-- diagnosis: the list selects "*, patients(...)" and takes doctor names from a
+-- separate staff query, while the detail EMBEDS staff - and the embed became
+-- ambiguous the moment 20261104120000 gave appointments a second foreign key
+-- to staff. PostgREST does not choose between two candidate relationships; it
+-- refuses the request.
+--
+-- The application code was already corrected: every appointments query names
+-- appointments_staff_id_fkey explicitly, and a test enforces it. That fix is
+-- in the repository and in the Lovable preview. It is NOT on
+-- clinic.quickapp.ai, which serves the PUBLISHED build and has not been
+-- published since. The migration, by contrast, reached the clinic the instant
+-- it was applied, because the published app and the preview share one
+-- database.
+--
+-- So: old code, new schema. The honest framing is that the migration was not
+-- backward-compatible with the deployed frontend, and it should never have
+-- been applied in that shape without a publish to go with it.
+--
+-- Removing the second foreign key removes the ambiguity at its source, which
+-- fixes the clinic with no deployment at all - and would fix it whatever build
+-- turns out to be deployed.
+
+alter table public.appointments
+  drop constraint if exists appointments_therapist_id_fkey;
+
+-- WHAT THIS DOES NOT TOUCH. The therapist feature is unaffected:
+--   * therapist_id            - the constraint went, not the column
+--   * therapist_name          - its trigger reads staff directly, no FK needed
+--   * appointments_therapist_id_idx     - independent of the constraint
+--   * therapist_id in history_tracking_config  - swap audit unchanged
+--   * every therapist picker and the Notes prefill - nothing in the app
+--     embeds `therapist`, so no PostgREST relationship was ever required
+-- Verified after the drop, in a rolled-back transaction: assigning filled the
+-- name, swapping updated it, and field_history logged the change.
+--
+-- WHAT IT COSTS, until the constraint is restored:
+--   1. referential integrity on therapist_id - a row could in principle hold
+--      a staff id that no longer exists;
+--   2. ON DELETE SET NULL - deleting a staff member no longer nulls it.
+-- Neither is serious. Deleting a staff row still cannot delete or damage an
+-- appointment (there was never a cascade), therapist_name is retained
+-- regardless, and the UI reads the name first. Staff here are deactivated,
+-- not deleted. No compensating trigger is added: a new trigger on a core
+-- shared table is a poor trade for a dangling uuid, and the real repair is
+-- below.
+--
+-- TO RESTORE, once clinic.quickapp.ai has been published with the corrected
+-- code (at which point the deployed queries name their relationships and the
+-- second key is harmless again):
+--
+--   alter table public.appointments
+--     add constraint appointments_therapist_id_fkey
+--     foreign key (therapist_id) references public.staff(id) on delete set null;
+--
+-- Do not restore it before that publish. Doing so puts the clinic straight
+-- back into the outage this migration exists to end.
