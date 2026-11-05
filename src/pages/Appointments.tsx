@@ -1752,7 +1752,9 @@ const Appointments = () => {
       if (data.wasRecurring) {
         setLastCreatedPatientId(data.capturedPatientId);
         setLastCreatedService(data.capturedServiceName);
-        setShowBillingPrompt(true);
+        // "Create Billing Plan?" leads into Billing, which a role that may not see
+        // billing amounts cannot open - so it is not offered to them.
+        if (canSeeBilling) setShowBillingPrompt(true);
       }
     },
     onError: (e: Error) => toast.error(e.message),

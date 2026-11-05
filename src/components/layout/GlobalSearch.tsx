@@ -272,13 +272,13 @@ export function GlobalSearch({ className }: { className?: string }) {
           subtitle: `${p.service_name || ""} · ${procedureDateLabel(p, "dd/MM/yyyy")}`,
           route: `/procedures?id=${p.id}`,
         })),
-        ...(((invs as any).data || []) as any[]).slice(0, 5).map((i: any) => ({
+        // A role that may not see billing is not shown invoices at all: the result
+        // would lead to the Billing screen, which that role cannot open.
+        ...(canSeeBilling ? (((invs as any).data || []) as any[]) : []).slice(0, 5).map((i: any) => ({
           id: i.id,
           kind: "invoice" as const,
           title: i.invoice_number || "Invoice",
-          subtitle: canSeeBilling
-            ? `${i.patient_name || ""} · ₹${Number(i.total_amount || 0).toLocaleString("en-IN")}${i.status ? ` · ${i.status}` : ""}`
-            : `${i.patient_name || ""}${i.status ? ` · ${i.status}` : ""}`,
+          subtitle: `${i.patient_name || ""} · ₹${Number(i.total_amount || 0).toLocaleString("en-IN")}${i.status ? ` · ${i.status}` : ""}`,
           route: `/billing?viewInvoice=${i.id}`,
         })),
         ...(((staff as any).data || []) as any[]).slice(0, 5).map((s: any) => ({

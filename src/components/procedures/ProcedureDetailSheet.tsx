@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { numVal } from "@/lib/numberInput";
 import { applyMedicineDefaults } from "@/lib/medicineDefaults";
 import { usePharmaLookup } from "@/hooks/usePharmaLookup";
@@ -122,6 +123,7 @@ interface ProcedureDetailSheetProps {
 }
 
 export function ProcedureDetailSheet({ procedureId, onClose, onSaved }: ProcedureDetailSheetProps) {
+  const canSeeBilling = useCanSeeBillingAmounts();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
@@ -1172,6 +1174,7 @@ export function ProcedureDetailSheet({ procedureId, onClose, onSaved }: Procedur
                       </TooltipTrigger>
                       <TooltipContent>Save Changes</TooltipContent>
                     </Tooltip>
+                    {canSeeBilling && (
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
@@ -1184,6 +1187,7 @@ export function ProcedureDetailSheet({ procedureId, onClose, onSaved }: Procedur
                       </TooltipTrigger>
                       <TooltipContent>Create Invoice</TooltipContent>
                     </Tooltip>
+                    )}
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
