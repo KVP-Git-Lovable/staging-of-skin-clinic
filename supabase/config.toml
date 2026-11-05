@@ -1,1 +1,98 @@
 project_id = "syhycmvvnoimfqpfouex"
+
+[functions.whatsapp-webhook]
+verify_jwt = false
+
+[functions.whatsapp-fallback]
+verify_jwt = false
+
+[functions.send-appointment-whatsapp]
+verify_jwt = false
+
+[functions.send-invoice-whatsapp]
+verify_jwt = false
+
+[functions.generate-invoice-pdf]
+verify_jwt = false
+
+[functions.send-appointment-update-whatsapp]
+verify_jwt = false
+
+[functions.send-recurring-invoice-whatsapp]
+verify_jwt = false
+
+[functions.salesforce-intake]
+verify_jwt = false
+
+[functions.bolna-book-appointment]
+verify_jwt = false
+
+[functions.sf-import-clinical]
+verify_jwt = false
+
+[functions.sf-import-pictures]
+verify_jwt = false
+
+[functions.sf-import-attachments]
+verify_jwt = false
+
+[functions.sf-import-orphan-files]
+verify_jwt = false
+
+
+[functions.fix-photo-content-types]
+verify_jwt = false
+[functions.sf-link-missing-patients]
+verify_jwt = false
+
+[functions.purge-appt-dupes]
+verify_jwt = false
+
+# Deliberately NOT verify_jwt = false, unlike the sf-* functions above. This one
+# walks every patient record in Salesforce, so it is left behind the platform's
+# JWT check rather than being publicly callable. A service-role key is a valid
+# JWT, so running it from the dashboard or a server still works.
+[functions.sf-import-all-patients]
+verify_jwt = true
+
+[functions.sf-backfill-registered-at]
+verify_jwt = true
+
+[functions.sf-refresh-patient-names]
+verify_jwt = true
+
+[functions.sf-describe-patient-fields]
+verify_jwt = true
+
+[functions.sf-import-demographics]
+verify_jwt = true
+
+[functions.impersonate]
+verify_jwt = true
+
+[functions.sf-backfill-billing-lines]
+verify_jwt = true
+
+# Communications Center. These five are called by something that cannot present a
+# Supabase JWT, so the platform check is turned off and each function authenticates
+# the caller itself.
+[functions.comms-mailchimp-webhook]
+# Mailchimp posts list events with no Authorization header; the function matches
+# ?key= against comms_mailchimp_connection.webhook_secret instead.
+verify_jwt = false
+
+[functions.comms-whatsapp-status-webhook]
+# Twilio delivery/read callbacks carry no JWT.
+verify_jwt = false
+
+[functions.meta-oauth-callback]
+# Facebook redirects the browser here; the signed state carries the trust.
+verify_jwt = false
+
+[functions.comms-process-journeys]
+# Driven by cron: the Bearer is LOVABLE_CRON_SECRET, not a JWT (see _shared/cron-auth.ts).
+verify_jwt = false
+
+[functions.meta-token-refresh]
+# Driven by cron, same cron-secret Bearer.
+verify_jwt = false
