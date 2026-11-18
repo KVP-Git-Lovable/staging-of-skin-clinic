@@ -1540,6 +1540,48 @@ export type Database = {
           },
         ]
       }
+      comms_whatsapp_opt_outs: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          patient_id: string | null
+          phone_last10: string
+          reason: string | null
+          source: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          patient_id?: string | null
+          phone_last10: string
+          reason?: string | null
+          source?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          patient_id?: string | null
+          phone_last10?: string
+          reason?: string | null
+          source?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_whatsapp_opt_outs_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "comms_whatsapp_opt_outs_patient_id_fkey"
+            columns: ["patient_id"]
+            isOneToOne: false
+            referencedRelation: "patients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       comms_whatsapp_templates: {
         Row: {
           body: string
