@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { format } from "date-fns";
-import { ArrowLeft, Check, Info, Loader2, Plus, Sparkles, TriangleAlert, X } from "lucide-react";
+import { ArrowLeft, Check, Copy, Info, ListChecks, Loader2, Plus, Sparkles, TriangleAlert, X } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -103,6 +104,68 @@ function FilterRow({ c, onChange, onRemove }: { c: FilterCondition; onChange: (n
       )}
       <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onRemove} aria-label="Remove filter"><X className="h-4 w-4" /></Button>
     </div>
+  );
+}
+
+/* ---------------------------- template picker ----------------------------- */
+
+type TemplateOption = { id: string; name: string; category: string; status: string };
+
+/** Approved WhatsApp templates whose name starts with "skin", so the exact name can be pasted into the prompt. */
+function TemplatePicker() {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["agent-skin-templates"],
+    enabled: open,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("comms_whatsapp_templates")
+        .select("id, name, category, status")
+        .eq("status", "approved")
+        .ilike("name", "skin%")
+        .order("name");
+      if (error) throw error;
+      return ((data ?? []) as TemplateOption[]).filter((t) => t.status.toLowerCase() === "approved" && t.name.toLowerCase().startsWith("skin"));
+    },
+  });
+
+  const copy = async (name: string) => {
+    try {
+      await navigator.clipboard.writeText(name);
+      toast.success(`Copied ${name}`);
+    } catch {
+      toast.error("Could not copy. Select the name and copy it by hand.");
+    }
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="outline" className="h-7 gap-1.5"><ListChecks className="h-3.5 w-3.5" /> Templates</Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[min(92vw,380px)] p-0">
+        <div className="border-b px-3 py-2">
+          <p className="text-sm font-medium">Approved templates starting with “skin”</p>
+          <p className="text-xs text-muted-foreground">Copy a name and paste it into your prompt.</p>
+        </div>
+        <div className="max-h-[60vh] overflow-y-auto p-1">
+          {isLoading ? (
+            <div className="space-y-2 p-2"><Skeleton className="h-8" /><Skeleton className="h-8" /></div>
+          ) : error ? (
+            <p className="p-3 text-sm text-destructive">Could not load templates: {(error as Error).message}</p>
+          ) : !data?.length ? (
+            <p className="p-3 text-sm text-muted-foreground">No approved templates starting with “skin” yet.</p>
+          ) : data.map((t) => (
+            <div key={t.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60">
+              <code className="min-w-0 flex-1 select-all break-all text-xs">{t.name}</code>
+              <Badge variant="outline" className="shrink-0 text-[10px] font-normal">{t.category.toLowerCase()}</Badge>
+              <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => copy(t.name)} aria-label={`Copy ${t.name}`}><Copy className="h-3.5 w-3.5" /></Button>
+            </div>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -445,7 +508,10 @@ export default function AgenticMarketing() {
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between gap-2">
                     <CardTitle className="text-base">3. Tell the agent what to do</CardTitle>
-                    <Badge variant="outline">Patients: {isLoading ? "…" : num(rows.length)} selected</Badge>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <TemplatePicker />
+                      <Badge variant="outline">Patients: {isLoading ? "…" : num(rows.length)} selected</Badge>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">

@@ -8,10 +8,22 @@ const patients = [
   { id: "2", first_name: "Rahul", last_name: "Nair", city: "Bengaluru", engagement_tier: "Silver", lifetime_value: 5000, total_visits: 1, created_at: "2025-12-01T00:00:00Z", registered_at: null, days_since_last_visit: 200 },
 ];
 
+const templates = [
+  { id: "t1", name: "skin_welcome_offer", category: "MARKETING", status: "approved" },
+  { id: "t2", name: "skin_summer_peel", category: "MARKETING", status: "pending" },
+  { id: "t3", name: "welcome_other", category: "UTILITY", status: "approved" },
+  { id: "t4", name: "skin_followup_reminder", category: "UTILITY", status: "approved" },
+];
+
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
-    from: () => {
+    from: (table: string) => {
       const q: Record<string, unknown> = {};
+      if (table === "comms_whatsapp_templates") {
+        // The page asks the database for approved skin% names; this mock returns a looser set to prove the page also filters.
+        q.select = () => q; q.eq = () => q; q.ilike = () => q; q.order = () => Promise.resolve({ data: templates, error: null });
+        return q;
+      }
       q.select = () => q;
       q.order = () => q;
       q.limit = () => q;
@@ -84,5 +96,19 @@ describe("AgenticMarketing", () => {
     fireEvent.click(screen.getByRole("button", { name: /plan with agent/i }));
     await waitFor(() => expect(screen.getByText("Which WhatsApp template should I send?")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: /create draft journey/i })).not.toBeInTheDocument();
+  });
+
+  it("lists approved skin templates and copies the exact name", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Aarti Rao")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /^templates$/i }));
+    await waitFor(() => expect(screen.getByText("skin_welcome_offer")).toBeInTheDocument());
+    expect(screen.getByText("skin_followup_reminder")).toBeInTheDocument();
+    expect(screen.queryByText("skin_summer_peel")).not.toBeInTheDocument();
+    expect(screen.queryByText("welcome_other")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy skin_welcome_offer" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("skin_welcome_offer"));
   });
 });
