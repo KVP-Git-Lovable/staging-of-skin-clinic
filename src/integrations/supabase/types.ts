@@ -14,6 +14,96 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_runs: {
+        Row: {
+          approved_by: string | null
+          campaign_id: string | null
+          created_at: string
+          created_by: string | null
+          error: string | null
+          id: string
+          journey_id: string | null
+          model: string | null
+          object: string
+          plan: Json | null
+          prompt: string
+          saved_view_id: string | null
+          status: string
+          tool_calls: Json
+          updated_at: string
+        }
+        Insert: {
+          approved_by?: string | null
+          campaign_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          error?: string | null
+          id?: string
+          journey_id?: string | null
+          model?: string | null
+          object?: string
+          plan?: Json | null
+          prompt: string
+          saved_view_id?: string | null
+          status?: string
+          tool_calls?: Json
+          updated_at?: string
+        }
+        Update: {
+          approved_by?: string | null
+          campaign_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          error?: string | null
+          id?: string
+          journey_id?: string | null
+          model?: string | null
+          object?: string
+          plan?: Json | null
+          prompt?: string
+          saved_view_id?: string | null
+          status?: string
+          tool_calls?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_runs_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_runs_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "social_campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_runs_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_runs_journey_id_fkey"
+            columns: ["journey_id"]
+            isOneToOne: false
+            referencedRelation: "comms_journeys"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_runs_saved_view_id_fkey"
+            columns: ["saved_view_id"]
+            isOneToOne: false
+            referencedRelation: "list_views"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ai_repository: {
         Row: {
           appointment_id: string | null
@@ -863,6 +953,47 @@ export type Database = {
           website?: string | null
         }
         Relationships: []
+      }
+      comms_agent_settings: {
+        Row: {
+          ad_spend_cap: number
+          audience_cap: number
+          cost_per_message: number
+          id: boolean
+          send_window_end: number
+          send_window_start: number
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          ad_spend_cap?: number
+          audience_cap?: number
+          cost_per_message?: number
+          id?: boolean
+          send_window_end?: number
+          send_window_start?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          ad_spend_cap?: number
+          audience_cap?: number
+          cost_per_message?: number
+          id?: boolean
+          send_window_end?: number
+          send_window_start?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comms_agent_settings_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       comms_email_campaigns: {
         Row: {
