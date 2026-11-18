@@ -42,7 +42,7 @@ export function excludeOptedOut<T extends { phone_e164: string }>(rows: T[], opt
   return { kept, removed: rows.length - kept.length };
 }
 
-async function loadAllPatients(admin: SupabaseClient): Promise<PatientRow[]> {
+export async function loadAllPatients(admin: SupabaseClient): Promise<PatientRow[]> {
   const rows: PatientRow[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await admin.from("patients").select("*").order("id").range(from, from + 999);

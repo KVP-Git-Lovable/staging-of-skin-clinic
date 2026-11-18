@@ -12,7 +12,7 @@ export { corsHeaders };
 // Resolves to null when the caller is a signed-in staff member; otherwise the
 // error Response to return. Patient-portal users also hold auth sessions, so
 // a valid JWT alone is not enough.
-export async function requireStaffId(req: Request): Promise<{ staffId: string } | Response> {
+export async function requireStaffId(req: Request): Promise<{ staffId: string; userId: string } | Response> {
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.replace("Bearer ", "");
   if (!token) return json({ error: "Unauthorized" }, 401);
@@ -31,7 +31,7 @@ export async function requireStaffId(req: Request): Promise<{ staffId: string } 
     .eq("auth_user_id", data.user.id)
     .maybeSingle();
   if (!staff) return json({ error: "Forbidden" }, 403);
-  return { staffId: staff.id as string };
+  return { staffId: staff.id as string, userId: data.user.id };
 }
 
 export async function requireStaff(req: Request): Promise<Response | null> {

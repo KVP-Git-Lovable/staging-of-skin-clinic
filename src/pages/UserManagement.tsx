@@ -41,6 +41,7 @@ const ALL_MODULES = [
   { key: "communications", label: "Communications Center" },
   { key: "meta", label: "Meta" },
   { key: "meta_connection", label: "Meta Connection" },
+  { key: "agentic_marketing", label: "Agentic Marketing" },
   { key: "expenses", label: "Expenses" },
   { key: "staff", label: "Staff" },
   { key: "problem_areas", label: "Primary Concern" },

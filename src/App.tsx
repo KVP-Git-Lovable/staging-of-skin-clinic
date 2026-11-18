@@ -55,6 +55,7 @@ const WhatsAppTemplates = lazyWithReload(() => import("./pages/communications/Wh
 const WhatsAppConfig = lazyWithReload(() => import("./pages/communications/WhatsAppConfig"));
 const WhatsAppConversations = lazyWithReload(() => import("./pages/communications/WhatsAppConversations"));
 const WhatsAppOptOuts = lazyWithReload(() => import("./pages/communications/WhatsAppOptOuts"));
+const AgenticMarketing = lazyWithReload(() => import("./pages/communications/AgenticMarketing"));
 const VoiceCenter = lazyWithReload(() => import("./pages/communications/VoiceCenter"));
 const EmailCenter = lazyWithReload(() => import("./pages/communications/EmailCenter"));
 const CommunicationsCalendar = lazyWithReload(() => import("./pages/communications/CommunicationsCalendar"));
@@ -291,6 +292,7 @@ const App = () => (
                     <Route path="/communications/voice" element={<ProtectedRoute moduleKey="communications"><VoiceCenter /></ProtectedRoute>} />
                     <Route path="/communications/email" element={<ProtectedRoute moduleKey="communications"><EmailCenter /></ProtectedRoute>} />
                     <Route path="/communications/calendar" element={<ProtectedRoute moduleKey="communications"><CommunicationsCalendar /></ProtectedRoute>} />
+                    <Route path="/communications/agentic-marketing" element={<ProtectedRoute moduleKey="agentic_marketing"><AgenticMarketing /></ProtectedRoute>} />
                     <Route path="/communications/journeys" element={<ProtectedRoute moduleKey="communications"><JourneyBuilder /></ProtectedRoute>} />
                     <Route path="/communications/journeys/:id/analytics" element={<ProtectedRoute moduleKey="communications"><JourneyAnalytics /></ProtectedRoute>} />
                     <Route path="/communications/journeys/:id/failures" element={<ProtectedRoute moduleKey="communications"><JourneyFailures /></ProtectedRoute>} />

@@ -14,6 +14,101 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_runs: {
+        Row: {
+          approved_by: string | null
+          campaign_id: string | null
+          created_at: string
+          created_by: string | null
+          error: string | null
+          id: string
+          journey_id: string | null
+          model: string | null
+          object: string
+          plan: Json | null
+          prompt: string
+          saved_view_id: string | null
+          status: string
+          tool_calls: Json
+          updated_at: string
+        }
+        Insert: {
+          approved_by?: string | null
+          campaign_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          error?: string | null
+          id?: string
+          journey_id?: string | null
+          model?: string | null
+          object?: string
+          plan?: Json | null
+          prompt: string
+          saved_view_id?: string | null
+          status?: string
+          tool_calls?: Json
+          updated_at?: string
+        }
+        Update: {
+          approved_by?: string | null
+          campaign_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          error?: string | null
+          id?: string
+          journey_id?: string | null
+          model?: string | null
+          object?: string
+          plan?: Json | null
+          prompt?: string
+          saved_view_id?: string | null
+          status?: string
+          tool_calls?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_runs_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "staff"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      comms_agent_settings: {
+        Row: {
+          ad_spend_cap: number
+          audience_cap: number
+          cost_per_message: number
+          id: boolean
+          send_window_end: number
+          send_window_start: number
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          ad_spend_cap?: number
+          audience_cap?: number
+          cost_per_message?: number
+          id?: boolean
+          send_window_end?: number
+          send_window_start?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          ad_spend_cap?: number
+          audience_cap?: number
+          cost_per_message?: number
+          id?: boolean
+          send_window_end?: number
+          send_window_start?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
       ai_repository: {
         Row: {
           appointment_id: string | null

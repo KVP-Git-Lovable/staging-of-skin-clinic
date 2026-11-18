@@ -37,6 +37,7 @@ import {
   Workflow,
   Share2,
   Link2,
+  Sparkles,
   BookOpen,
   CalendarCheck,
 } from "lucide-react";
@@ -97,6 +98,7 @@ const communicationsItems = [
   { title: "Calendar", url: "/communications/calendar", icon: CalendarDays },
   { title: "Meta", url: "/communications/meta", icon: Share2 },
   { title: "Meta Connection", url: "/communications/meta/connection", icon: Link2 },
+  { title: "Agentic Marketing", url: "/communications/agentic-marketing", icon: Sparkles },
 ];
 
 const employeesSubItems = [

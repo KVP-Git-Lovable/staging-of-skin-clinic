@@ -96,3 +96,7 @@ verify_jwt = false
 [functions.meta-token-refresh]
 # Driven by cron, same cron-secret Bearer.
 verify_jwt = false
+
+[functions.comms-agent]
+# Staff JWT and admin/manager role are checked in code (see _shared/comms-auth.ts, meta-access.ts).
+verify_jwt = false
