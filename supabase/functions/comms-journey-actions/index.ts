@@ -28,7 +28,7 @@ Deno.serve(async (req) => {
   try {
     if (action === "audience-preview") {
       const r = await resolveAudience(admin, body.audience_config);
-      const result: Record<string, unknown> = { per_segment: r.perSegment, total: r.total, without_phone: r.withoutPhone };
+      const result: Record<string, unknown> = { per_segment: r.perSegment, total: r.total, without_phone: r.withoutPhone, opted_out: r.optedOut };
       if (body.include_rows === true) {
         // Staff whose role is limited to their own records see counts only, never other patients' details.
         const { data: roleRow } = await admin.from("staff").select("user_roles_config(data_scope)").eq("id", me).maybeSingle();

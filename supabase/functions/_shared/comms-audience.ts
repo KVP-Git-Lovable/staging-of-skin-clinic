@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { applyFilters, type FilterCondition } from "./list-view-engine.ts";
 import { PATIENT_FIELDS, rawValue } from "./patient-view-fields.ts";
-import { toE164IN } from "./comms-phone.ts";
+import { phoneLast10, toE164IN } from "./comms-phone.ts";
 
 export type Combinator = "union" | "intersection" | "difference";
 export type Segment = { key: "A" | "B"; label: string; list_view_id: string; entity_type: "patients" };
@@ -15,7 +15,32 @@ export type ResolvedAudience = {
   perSegment: Record<string, number>;
   total: number;
   withoutPhone: number;
+  /** People who were left out because they replied STOP or were added to the WhatsApp opt-out list. */
+  optedOut: number;
 };
+
+/** Every phone (last 10 digits) on the WhatsApp opt-out list. */
+export async function loadOptOutKeys(admin: SupabaseClient): Promise<Set<string>> {
+  const keys = new Set<string>();
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await admin.from("comms_whatsapp_opt_outs").select("phone_last10").order("phone_last10").range(from, from + 999);
+    if (error) {
+      // Before the opt-out migration is applied there is nothing to exclude; any other failure stops the run.
+      if (error.code === "42P01" || error.code === "PGRST205") return keys;
+      throw new Error(`opt-out list load failed: ${error.message}`);
+    }
+    for (const r of data ?? []) keys.add(String(r.phone_last10));
+    if (!data || data.length < 1000) break;
+  }
+  return keys;
+}
+
+/** Splits recipients into those who may be messaged and those who opted out. */
+export function excludeOptedOut<T extends { phone_e164: string }>(rows: T[], optedOut: Set<string>): { kept: T[]; removed: number } {
+  if (optedOut.size === 0) return { kept: rows, removed: 0 };
+  const kept = rows.filter((r) => !optedOut.has(phoneLast10(r.phone_e164) ?? ""));
+  return { kept, removed: rows.length - kept.length };
+}
 
 async function loadAllPatients(admin: SupabaseClient): Promise<PatientRow[]> {
   const rows: PatientRow[] = [];
@@ -89,5 +114,6 @@ export async function resolveAudience(admin: SupabaseClient, rawConfig: unknown)
     const phone = toE164IN(p.phone);
     if (phone) reachable.push({ ...p, phone_e164: phone });
   }
-  return { patients: reachable, perSegment, total: reachable.length, withoutPhone: picked.length - reachable.length };
+  const { kept, removed } = excludeOptedOut(reachable, await loadOptOutKeys(admin));
+  return { patients: kept, perSegment, total: kept.length, withoutPhone: picked.length - reachable.length, optedOut: removed };
 }

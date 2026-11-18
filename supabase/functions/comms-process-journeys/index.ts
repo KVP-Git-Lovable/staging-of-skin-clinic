@@ -11,7 +11,7 @@ import { authenticateCronRequest } from "../_shared/cron-auth.ts";
 import { resolveAudience } from "../_shared/comms-audience.ts";
 import { computeNextRun } from "../_shared/comms-schedule.ts";
 import { sendWhatsAppTemplate, resolveTemplateVariables } from "../_shared/comms-whatsapp-send.ts";
-import { toE164IN } from "../_shared/comms-phone.ts";
+import { phoneLast10, toE164IN } from "../_shared/comms-phone.ts";
 import {
   parseCanvas,
   nodeById,
@@ -90,6 +90,24 @@ async function processMessageNode(admin: SupabaseClient, journeyId: string, node
 
   if (!phone) return fail("No usable phone number for this patient");
   if (!templateId) return fail("Message step has no template selected");
+
+  // Last guard: someone may have opted out after they were enrolled. Nothing is sent to them.
+  const key = phoneLast10(phone);
+  if (key) {
+    const { data: optedOut } = await admin.from("comms_whatsapp_opt_outs").select("phone_last10").eq("phone_last10", key).maybeSingle();
+    if (optedOut) {
+      await admin.from("comms_journey_message_log").upsert(
+        {
+          journey_id: journeyId, enrollment_id: enrollment.id, patient_id: enrollment.patient_id,
+          node_id: node.id, channel: "whatsapp", template_id: templateId,
+          status: "skipped", error_message: "Opted out of WhatsApp messages", sent_at: new Date().toISOString(),
+        },
+        { onConflict: "enrollment_id,node_id,channel" },
+      );
+      await admin.from("comms_journey_enrollments").update({ status: "completed", next_action_at: null }).eq("id", enrollment.id);
+      return;
+    }
+  }
 
   const { data: tpl } = await admin.from("comms_whatsapp_templates").select("twilio_content_sid").eq("id", templateId).maybeSingle();
   if (!tpl?.twilio_content_sid) return fail("Template is not synced with Twilio yet");

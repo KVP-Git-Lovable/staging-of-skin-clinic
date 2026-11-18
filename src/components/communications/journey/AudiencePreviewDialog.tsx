@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { invokeJourneyActions, type AudienceConfig } from "@/lib/comms/journeys";
 
 type PreviewRow = { id: string; name: string; phone: string | null; email: string | null; date_of_birth: string | null; city: string | null };
-type PreviewResponse = { total: number; without_phone: number; can_view_rows?: boolean; rows?: PreviewRow[] };
+type PreviewResponse = { total: number; without_phone: number; opted_out?: number; can_view_rows?: boolean; rows?: PreviewRow[] };
 
 export function AudiencePreviewDialog({
   open,
@@ -78,7 +78,8 @@ export function AudiencePreviewDialog({
         {data && data.can_view_rows !== false && (
           <p className="text-xs text-muted-foreground">
             Showing first {Math.min(50, data.total)} of {data.total} combined patients
-            {data.without_phone > 0 ? ` (${data.without_phone} more skipped, no usable phone)` : ""}.
+            {data.without_phone > 0 ? ` (${data.without_phone} more skipped, no usable phone)` : ""}
+            {data.opted_out ? ` (${data.opted_out} skipped: opted out of WhatsApp)` : ""}.
           </p>
         )}
       </DialogContent>

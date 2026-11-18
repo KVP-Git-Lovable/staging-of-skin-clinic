@@ -201,6 +201,9 @@ function detectButtonIntent(text: string): "modify" | "cancel" | "confirm" | nul
   return null;
 }
 
+// A customer asking to stop promotional messages.
+const OPT_OUT_RE = /^\s*(stop|unsubscribe|opt[\s-]?out|stop (all )?messages?)\s*[.!]*\s*$/i;
+
 // ---------- Background processor ----------
 async function processMessage(opts: { fromRaw: string; userBody: string; messageSid: string; t0: number; buttonText?: string }) {
   const { fromRaw, userBody, messageSid, t0, buttonText } = opts;
@@ -235,7 +238,21 @@ async function processMessage(opts: { fromRaw: string; userBody: string; message
     // button or free-text message receives only the clinic call instruction.
     {
       const buttonIntent = detectButtonIntent(buttonText || "") || detectButtonIntent(userBody);
-      const reply = buttonIntent === "confirm"
+      // STOP / UNSUBSCRIBE: record the opt-out so journeys never message this number again.
+      const wantsOptOut = OPT_OUT_RE.test(userBody || "") || OPT_OUT_RE.test(buttonText || "");
+      if (wantsOptOut) {
+        const digits = phone.replace(/\D/g, "");
+        if (digits.length >= 10) {
+          const { error: optErr } = await sb.from("comms_whatsapp_opt_outs").upsert(
+            { phone_last10: digits.slice(-10), patient_id: patient?.id ?? null, source: "inbound_stop", reason: "Replied STOP on WhatsApp" },
+            { onConflict: "phone_last10", ignoreDuplicates: true },
+          );
+          if (optErr) console.error("[whatsapp-webhook] opt-out save failed:", optErr.message);
+        }
+      }
+      const reply = wantsOptOut
+        ? "You have been unsubscribed from promotional WhatsApp messages from The Skin Clinic. You may still receive appointment and billing updates. To receive offers again, please contact the clinic."
+        : buttonIntent === "confirm"
         ? patient
           ? `Thanks for confirming, ${patient.first_name}! 😊 See you soon.\nThe Skin Clinic, Mangalore`
           : "Thanks for confirming! 😊 See you soon.\nThe Skin Clinic, Mangalore"

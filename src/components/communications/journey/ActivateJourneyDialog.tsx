@@ -9,7 +9,7 @@ import { audienceSummary, invokeJourneyActions, type Journey } from "@/lib/comms
 import { summarizeSchedule } from "@/lib/comms/schedule";
 import { JOURNEY_SCHEDULER_ENABLED, JOURNEY_SCHEDULER_OFF_NOTICE } from "@/lib/comms/journeyScheduler";
 
-type Preview = { total: number; without_phone: number };
+type Preview = { total: number; without_phone: number; opted_out?: number };
 
 export function ActivateJourneyDialog({
   journey,
@@ -61,7 +61,7 @@ export function ActivateJourneyDialog({
               </p>
               <p>Audience: {audienceSummary(journey?.audience_config ?? null)}</p>
               <p className="font-medium text-foreground">
-                {previewError ? previewError : preview ? `${preview.total} patient${preview.total === 1 ? "" : "s"} will be enrolled` : "Counting audience…"}
+                {previewError ? previewError : preview ? `${preview.total} patient${preview.total === 1 ? "" : "s"} will be enrolled${preview.opted_out ? ` (${preview.opted_out} skipped: opted out)` : ""}` : "Counting audience…"}
               </p>
               <p>{messages.length} WhatsApp template step{messages.length === 1 ? "" : "s"}.</p>
               {!JOURNEY_SCHEDULER_ENABLED && (

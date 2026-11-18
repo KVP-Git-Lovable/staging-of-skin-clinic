@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { FileText, MessageCircle, MessagesSquare, Settings2 } from "lucide-react";
+import { BellOff, FileText, MessageCircle, MessagesSquare, Settings2 } from "lucide-react";
 import { WalletBalanceCard } from "@/components/communications/WalletBalanceCard";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -21,6 +21,12 @@ const cards = [
     description: "Check the sender number, connection status, credentials and webhook.",
     icon: Settings2,
     to: "/communications/whatsapp/config",
+  },
+  {
+    title: "Opt-outs",
+    description: "People who asked not to receive promotional WhatsApp messages. Journeys skip them.",
+    icon: BellOff,
+    to: "/communications/whatsapp/opt-outs",
   },
 ];
 

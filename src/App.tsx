@@ -54,6 +54,7 @@ const WhatsAppCenter = lazyWithReload(() => import("./pages/communications/Whats
 const WhatsAppTemplates = lazyWithReload(() => import("./pages/communications/WhatsAppTemplates"));
 const WhatsAppConfig = lazyWithReload(() => import("./pages/communications/WhatsAppConfig"));
 const WhatsAppConversations = lazyWithReload(() => import("./pages/communications/WhatsAppConversations"));
+const WhatsAppOptOuts = lazyWithReload(() => import("./pages/communications/WhatsAppOptOuts"));
 const VoiceCenter = lazyWithReload(() => import("./pages/communications/VoiceCenter"));
 const EmailCenter = lazyWithReload(() => import("./pages/communications/EmailCenter"));
 const CommunicationsCalendar = lazyWithReload(() => import("./pages/communications/CommunicationsCalendar"));
@@ -286,6 +287,7 @@ const App = () => (
                     <Route path="/communications/whatsapp/templates" element={<ProtectedRoute moduleKey="communications"><WhatsAppTemplates /></ProtectedRoute>} />
                     <Route path="/communications/whatsapp/config" element={<ProtectedRoute moduleKey="communications"><WhatsAppConfig /></ProtectedRoute>} />
                     <Route path="/communications/whatsapp/conversations" element={<ProtectedRoute moduleKey="communications"><WhatsAppConversations /></ProtectedRoute>} />
+                    <Route path="/communications/whatsapp/opt-outs" element={<ProtectedRoute moduleKey="communications"><WhatsAppOptOuts /></ProtectedRoute>} />
                     <Route path="/communications/voice" element={<ProtectedRoute moduleKey="communications"><VoiceCenter /></ProtectedRoute>} />
                     <Route path="/communications/email" element={<ProtectedRoute moduleKey="communications"><EmailCenter /></ProtectedRoute>} />
                     <Route path="/communications/calendar" element={<ProtectedRoute moduleKey="communications"><CommunicationsCalendar /></ProtectedRoute>} />
