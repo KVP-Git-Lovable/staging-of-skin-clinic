@@ -19,6 +19,6 @@
 - [x] Verify saved attachment/link, vote/comment readback, before/after history, inactive clone, Trash deletion and phone layout; nine rule tests passed. Real appointment checked excludes unrelated service articles; no existing appointment matches the currently published article for a positive appointment-feedback check.
 ## Expenses → Zoho Books
 - [x] "Send to Zoho Books" button + zoho_expense_id / zoho_synced_at columns
-- [ ] Remove my ₹1 test expense from Zoho Books and the two test rows
-- [ ] Auto-push a new expense to Zoho right after it saves; Zoho failure = warning, save never rolls back
-- [ ] Button only on unsynced rows (retry); synced rows show "In Zoho Books" + date; no re-push on edit
+- [x] Remove my ₹1 test expense from Zoho Books and the two test rows
+- [x] Auto-push a new expense to Zoho right after it saves; Zoho failure = warning, save never rolls back
+- [x] Button only on unsynced rows (retry); synced rows show "In Zoho Books" + date; no re-push on edit
