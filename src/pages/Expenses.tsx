@@ -214,7 +214,8 @@ const Expenses = () => {
           : rows,
       );
       qc.invalidateQueries({ queryKey: ["expenses"] });
-      toast.success("Sent to Zoho Books");
+      if (data.already_synced) toast.info("Already in Zoho Books");
+      else toast.success("Sent to Zoho Books");
     },
     onError: (e: any, { auto }) => {
       qc.invalidateQueries({ queryKey: ["expenses"] });

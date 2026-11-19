@@ -14,7 +14,7 @@ import { invoiceLineChanges } from "@/lib/invoiceLineChanges";
 import { pickAppointmentForInvoice, doctorForInvoice, type LinkableAppointment } from "@/lib/appointmentForInvoice";
 import { resolveInvoiceAppointmentId } from "@/lib/invoiceAppointmentLink";
 import { paymentModeLabel } from "@/lib/paymentModes";
-import { canSendInvoiceToZoho, invokeZohoPush } from "@/lib/zohoPush";
+import { canSendInvoiceToZoho, invokeZohoPush, useZohoPushInFlight } from "@/lib/zohoPush";
 import { renderPdfToImages } from "@/lib/renderPdf";
 import { PdfPreviewDialog } from "@/components/shared/PdfPreviewDialog";
 import { useAuth } from "@/hooks/useAuth";
@@ -1902,6 +1902,9 @@ const Billing = () => {
   // ---- Zoho Books ----------------------------------------------------------
   type ZohoInvoicePush = { zoho_invoice_id: string; zoho_invoice_synced_at: string; warning?: string };
   const pushInvoiceToZoho = (id: string) => invokeZohoPush<ZohoInvoicePush>("zoho-push-invoice", { invoiceId: id });
+  // True while an invoice is on its way to Zoho (automatic or by hand), so the
+  // row shows "Sending…" instead of a button that would send it a second time.
+  const isInvoiceSendingToZoho = useZohoPushInFlight("zoho-push-invoice");
 
   // Swap the button for "In Zoho Books" straight away, before the refetch.
   const markInvoiceInZoho = (id: string, data: ZohoInvoicePush) => {
@@ -1967,7 +1970,8 @@ const Billing = () => {
     onSuccess: (data, id) => {
       markInvoiceInZoho(id, data);
       invalidateInvoices();
-      if (data.warning) toast.warning(`In Zoho Books, but: ${data.warning}`, { duration: 10000 });
+      if (data.already_synced) toast.info("Already in Zoho Books");
+      else if (data.warning) toast.warning(`In Zoho Books, but: ${data.warning}`, { duration: 10000 });
       else toast.success("Sent to Zoho Books");
     },
     onError: (e: any) => {
@@ -3902,13 +3906,13 @@ const Billing = () => {
                             variant="outline"
                             size="sm"
                             className="h-7 whitespace-nowrap px-2 text-xs"
-                            disabled={sendInvoiceToZoho.isPending}
-                            onClick={() => { if (canSendInvoiceToZoho(inv)) sendInvoiceToZoho.mutate(inv.id); }}
+                            disabled={sendInvoiceToZoho.isPending || isInvoiceSendingToZoho(inv.id)}
+                            onClick={() => { if (canSendInvoiceToZoho(inv) && !isInvoiceSendingToZoho(inv.id)) sendInvoiceToZoho.mutate(inv.id); }}
                           >
-                            {sendInvoiceToZoho.isPending && sendInvoiceToZoho.variables === inv.id
+                            {isInvoiceSendingToZoho(inv.id)
                               ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
                               : <Send className="h-3.5 w-3.5 mr-1" />}
-                            Send to Zoho Books
+                            {isInvoiceSendingToZoho(inv.id) ? "Sending to Zoho Books…" : "Send to Zoho Books"}
                           </Button>
                         ) : null}
                         {inv.status !== "Paid" && inv.status !== "Cancelled" && (
