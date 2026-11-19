@@ -232,6 +232,13 @@
       "when": 1795082739684,
       "tag": "0032_expenses_zoho_sync_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1795087211593,
+      "tag": "0033_invoices_zoho_sync_columns",
+      "breakpoints": true
     }
   ]
 }

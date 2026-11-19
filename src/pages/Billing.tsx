@@ -14,6 +14,7 @@ import { invoiceLineChanges } from "@/lib/invoiceLineChanges";
 import { pickAppointmentForInvoice, doctorForInvoice, type LinkableAppointment } from "@/lib/appointmentForInvoice";
 import { resolveInvoiceAppointmentId } from "@/lib/invoiceAppointmentLink";
 import { paymentModeLabel } from "@/lib/paymentModes";
+import { canSendInvoiceToZoho, invokeZohoPush } from "@/lib/zohoPush";
 import { renderPdfToImages } from "@/lib/renderPdf";
 import { PdfPreviewDialog } from "@/components/shared/PdfPreviewDialog";
 import { useAuth } from "@/hooks/useAuth";
@@ -25,7 +26,7 @@ import { useState, useMemo, useRef, useEffect, useCallback, lazy, Suspense } fro
 import { useSearchParams } from "react-router-dom";
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval, addMonths, isSameDay } from "date-fns";
 import SearchableSelect from "@/components/shared/SearchableSelect";
-import { Search, Filter, Download, IndianRupee, Plus, FileText, CreditCard, Pill, Trash2, CalendarClock, Eye, Pencil, X, ChevronDown, Check, ChevronsUpDown, Stethoscope, MessageCircle } from "lucide-react";
+import { Search, Filter, Download, IndianRupee, Plus, FileText, CreditCard, Pill, Trash2, CalendarClock, Eye, Pencil, X, ChevronDown, Check, ChevronsUpDown, Stethoscope, MessageCircle, Send, CheckCircle2, Loader2 } from "lucide-react";
 import { useModuleListViews } from "@/hooks/useModuleListViews";
 import ViewBar from "@/components/listViews/ViewBar";
 import ViewEditorDialog, { type PickOption } from "@/components/listViews/ViewEditorDialog";
@@ -1878,7 +1879,7 @@ const Billing = () => {
         patientPhone = (pdata as any)?.phone ?? null;
       }
 
-      return { summary, patientPhone, patientName };
+      return { summary, patientPhone, patientName, invoiceNumbers };
     },
     onSuccess: async (result: any) => {
       invalidateInvoices();
@@ -1891,8 +1892,88 @@ const Billing = () => {
       // review it first and press "Send via WhatsApp" on the invoice.
       resetForm();
       setOpen(false);
+      // Only after the save has committed: send the new invoice(s) to Zoho
+      // Books. A Zoho failure leaves them saved and shows as a warning.
+      void autoPushInvoicesToZoho(result?.invoiceNumbers ?? []);
     },
     onError: (e: Error) => toast.error(e.message),
+  });
+
+  // ---- Zoho Books ----------------------------------------------------------
+  type ZohoInvoicePush = { zoho_invoice_id: string; zoho_invoice_synced_at: string; warning?: string };
+  const pushInvoiceToZoho = (id: string) => invokeZohoPush<ZohoInvoicePush>("zoho-push-invoice", { invoiceId: id });
+
+  // Swap the button for "In Zoho Books" straight away, before the refetch.
+  const markInvoiceInZoho = (id: string, data: ZohoInvoicePush) => {
+    const patch = (rows: any[]) =>
+      rows.map((r) => (r?.id === id ? { ...r, zoho_invoice_id: data.zoho_invoice_id, zoho_invoice_synced_at: data.zoho_invoice_synced_at } : r));
+    for (const key of ["invoices-page", "invoices-bounded", "invoices-search"]) {
+      queryClient.setQueriesData({ queryKey: [key] }, (old: any) =>
+        Array.isArray(old) ? patch(old) : old && Array.isArray(old.rows) ? { ...old, rows: patch(old.rows) } : old,
+      );
+    }
+  };
+
+  // New invoices only - edits are never re-pushed. Cancelled and merged
+  // invoices are skipped here and refused by the server as well.
+  const autoPushInvoicesToZoho = async (invoiceNumbers: string[]) => {
+    if (!invoiceNumbers.length) return;
+    const { data: created, error } = await supabase
+      .from("invoices")
+      .select("id, invoice_number, status, cancelled_at, merged_into_invoice_id, zoho_invoice_id")
+      .in("invoice_number", invoiceNumbers);
+    if (error) {
+      toast.warning(`Invoice saved, but not sent to Zoho Books: ${error.message}`, {
+        description: "Use \"Send to Zoho Books\" on the invoice to try again.",
+        duration: 10000,
+      });
+      return;
+    }
+    const toSend = (created ?? [])
+      .filter(canSendInvoiceToZoho)
+      .sort((a, b) => invoiceNumbers.indexOf(a.invoice_number) - invoiceNumbers.indexOf(b.invoice_number));
+    let sent = 0;
+    const failures: string[] = [];
+    const warnings: string[] = [];
+    for (const inv of toSend) {
+      try {
+        const data = await pushInvoiceToZoho(inv.id);
+        sent++;
+        markInvoiceInZoho(inv.id, data);
+        if (data.warning) warnings.push(`${inv.invoice_number}: ${data.warning}`);
+      } catch (e: any) {
+        failures.push(e?.message || "Zoho Books did not accept this invoice");
+      }
+    }
+    invalidateInvoices();
+    if (failures.length) {
+      const what = toSend.length > 1 ? `${failures.length} of ${toSend.length} invoices were saved but not sent` : "Invoice saved, but not sent";
+      toast.warning(`${what} to Zoho Books: ${Array.from(new Set(failures)).join("; ")}`, {
+        description: "Use \"Send to Zoho Books\" on the invoice to try again.",
+        duration: 10000,
+      });
+    }
+    if (warnings.length) {
+      toast.warning(`In Zoho Books, but: ${warnings.join(" ")}`, { duration: 10000 });
+    }
+    if (sent && !failures.length && !warnings.length) {
+      toast.success(sent > 1 ? `${sent} invoices sent to Zoho Books` : "Sent to Zoho Books");
+    }
+  };
+
+  // The manual retry on an unsynced invoice. Refusals show Zoho's own message.
+  const sendInvoiceToZoho = useMutation({
+    mutationFn: (id: string) => pushInvoiceToZoho(id),
+    onSuccess: (data, id) => {
+      markInvoiceInZoho(id, data);
+      invalidateInvoices();
+      if (data.warning) toast.warning(`In Zoho Books, but: ${data.warning}`, { duration: 10000 });
+      else toast.success("Sent to Zoho Books");
+    },
+    onError: (e: any) => {
+      invalidateInvoices();
+      toast.error(e?.message || "Zoho Books did not accept this invoice");
+    },
   });
 
   // Background: generate PDF and send WhatsApp without blocking the UI.
@@ -3810,7 +3891,26 @@ const Billing = () => {
                       )}
                     </td>
                     <td className="p-4" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex justify-end gap-1">
+                      <div className="flex items-center justify-end gap-1">
+                        {inv.zoho_invoice_id ? (
+                          <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground" title={`Zoho invoice ${inv.zoho_invoice_id}`}>
+                            <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+                            In Zoho Books{inv.zoho_invoice_synced_at ? ` · ${format(new Date(inv.zoho_invoice_synced_at), "dd MMM yyyy")}` : ""}
+                          </span>
+                        ) : canSendInvoiceToZoho(inv) ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 whitespace-nowrap px-2 text-xs"
+                            disabled={sendInvoiceToZoho.isPending}
+                            onClick={() => { if (canSendInvoiceToZoho(inv)) sendInvoiceToZoho.mutate(inv.id); }}
+                          >
+                            {sendInvoiceToZoho.isPending && sendInvoiceToZoho.variables === inv.id
+                              ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                              : <Send className="h-3.5 w-3.5 mr-1" />}
+                            Send to Zoho Books
+                          </Button>
+                        ) : null}
                         {inv.status !== "Paid" && inv.status !== "Cancelled" && (
                           <Button variant="ghost" size="icon" className="h-8 w-8" title="Add Payment" onClick={() => { setPaymentInv(inv); setAddPaymentAmount(0); setAddPaymentMode("Cash"); }}>
                             <CreditCard className="h-4 w-4" />

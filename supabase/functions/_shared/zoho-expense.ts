@@ -1,6 +1,9 @@
 // Pure helpers for pushing a clinic expense to Zoho Books. Kept free of I/O so
 // the rules (exact-name account matching, no fallback, Zoho's own error text)
 // can be unit-tested.
+import { findContactId, zohoFailure } from "./zoho-books.ts";
+
+export { zohoFailure };
 
 export interface ZohoAccount {
   account_id: string;
@@ -26,9 +29,7 @@ export function findVendorId(
   contacts: { contact_id: string; contact_name: string; contact_type?: string }[] | null | undefined,
   vendorName: string,
 ): string | null {
-  const wanted = norm(vendorName);
-  const hit = (contacts ?? []).find((c) => norm(c.contact_name) === wanted && (!c.contact_type || c.contact_type === "vendor"));
-  return hit?.contact_id ?? null;
+  return findContactId(contacts, vendorName, "vendor");
 }
 
 export function zohoDescription(title: string, description: string | null | undefined): string {
@@ -67,14 +68,4 @@ export function buildZohoExpenseBody(
   if (paidThroughId) body.paid_through_account_id = paidThroughId;
   if (vendorId) body.vendor_id = vendorId;
   return body;
-}
-
-// Zoho answers { code, message }; code 0 is success. Returns Zoho's own message
-// for anything else, or null when the call succeeded.
-export function zohoFailure(status: number, payload: unknown, rawText: string): string | null {
-  const p = (payload ?? {}) as { code?: number; message?: string };
-  const ok = status >= 200 && status < 300 && (p.code === undefined || p.code === 0);
-  if (ok) return null;
-  if (typeof p.message === "string" && p.message.trim()) return p.message;
-  return rawText?.trim() || `Zoho Books returned HTTP ${status}`;
 }

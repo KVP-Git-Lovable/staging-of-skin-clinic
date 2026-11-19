@@ -2569,6 +2569,8 @@ export type Database = {
           total_amount: number
           updated_at: string
           updated_by: string | null
+          zoho_invoice_id: string | null
+          zoho_invoice_synced_at: string | null
         }
         Insert: {
           appointment_id?: string | null
@@ -2608,6 +2610,8 @@ export type Database = {
           total_amount?: number
           updated_at?: string
           updated_by?: string | null
+          zoho_invoice_id?: string | null
+          zoho_invoice_synced_at?: string | null
         }
         Update: {
           appointment_id?: string | null
@@ -2647,6 +2651,8 @@ export type Database = {
           total_amount?: number
           updated_at?: string
           updated_by?: string | null
+          zoho_invoice_id?: string | null
+          zoho_invoice_synced_at?: string | null
         }
         Relationships: [
           {

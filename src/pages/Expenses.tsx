@@ -13,7 +13,7 @@ import {
   Plus, Search, Upload, Loader2, Trash2, Edit, Eye, Receipt,
   FileText, IndianRupee, Filter, X, Sparkles, Download, Send, CheckCircle2,
 } from "lucide-react";
-import { FunctionsHttpError } from "@supabase/supabase-js";
+import { invokeZohoPush } from "@/lib/zohoPush";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -204,15 +204,7 @@ const Expenses = () => {
   // auto = fired right after a new expense was saved; failures are warnings.
   const sendToZoho = useMutation({
     mutationFn: async ({ id }: { id: string; auto?: boolean }) => {
-      const { data, error } = await supabase.functions.invoke("zoho-push-expense", { body: { expenseId: id } });
-      if (error) {
-        let message = error.message;
-        if (error instanceof FunctionsHttpError) {
-          try { message = (await error.context.json())?.error || message; } catch { /* keep generic */ }
-        }
-        throw new Error(message);
-      }
-      return data as { zoho_expense_id: string; zoho_synced_at: string };
+      return invokeZohoPush<{ zoho_expense_id: string; zoho_synced_at: string }>("zoho-push-expense", { expenseId: id });
     },
     onSuccess: (data, { id }) => {
       // Swap the button for "In Zoho Books" immediately, before the refetch.
