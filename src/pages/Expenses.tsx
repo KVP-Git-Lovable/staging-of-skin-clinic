@@ -10,8 +10,9 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import {
   Plus, Search, Upload, Loader2, Trash2, Edit, Eye, Receipt,
-  FileText, IndianRupee, Filter, X, Sparkles, Download,
+  FileText, IndianRupee, Filter, X, Sparkles, Download, Send, CheckCircle2,
 } from "lucide-react";
+import { FunctionsHttpError } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -58,6 +59,8 @@ interface Expense {
   notes: string | null;
   created_at: string;
   updated_at: string;
+  zoho_expense_id?: string | null;
+  zoho_synced_at?: string | null;
   expense_categories?: ExpenseCategory | null;
 }
 
@@ -178,6 +181,29 @@ const Expenses = () => {
       qc.invalidateQueries({ queryKey: ["expenses"] });
       toast.success("Expense deleted");
       setShowDetailSheet(false);
+    },
+  });
+
+  // Send to Zoho Books. On refusal the message shown is Zoho's own.
+  const sendToZoho = useMutation({
+    mutationFn: async (id: string) => {
+      const { data, error } = await supabase.functions.invoke("zoho-push-expense", { body: { expenseId: id } });
+      if (error) {
+        let message = error.message;
+        if (error instanceof FunctionsHttpError) {
+          try { message = (await error.context.json())?.error || message; } catch { /* keep generic */ }
+        }
+        throw new Error(message);
+      }
+      return data as { zoho_expense_id: string; zoho_synced_at: string };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["expenses"] });
+      toast.success("Sent to Zoho Books");
+    },
+    onError: (e: any) => {
+      qc.invalidateQueries({ queryKey: ["expenses"] });
+      toast.error(e.message || "Zoho Books did not accept this expense");
     },
   });
 
@@ -413,9 +439,30 @@ const Expenses = () => {
                     <TableCell className="text-right font-semibold">{formatMoney(Number(exp.amount))}</TableCell>
                     <TableCell><Badge variant="outline" className="text-xs">{exp.payment_mode || "Cash"}</Badge></TableCell>
                     <TableCell>
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); openEditExpense(exp); }}>
-                        <Edit className="h-3.5 w-3.5" />
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        {exp.zoho_expense_id ? (
+                          <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground" title={`Zoho expense ${exp.zoho_expense_id}`}>
+                            <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+                            In Zoho Books{exp.zoho_synced_at ? ` · ${format(new Date(exp.zoho_synced_at), "dd MMM yyyy")}` : ""}
+                          </span>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 whitespace-nowrap px-2 text-xs"
+                            disabled={sendToZoho.isPending}
+                            onClick={(e) => { e.stopPropagation(); sendToZoho.mutate(exp.id); }}
+                          >
+                            {sendToZoho.isPending && sendToZoho.variables === exp.id
+                              ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                              : <Send className="h-3.5 w-3.5 mr-1" />}
+                            Send to Zoho Books
+                          </Button>
+                        )}
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); openEditExpense(exp); }}>
+                          <Edit className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))

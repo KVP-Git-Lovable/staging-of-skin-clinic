@@ -225,6 +225,13 @@
       "when": 1795004844863,
       "tag": "0031_agentic_marketing",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1795082739684,
+      "tag": "0032_expenses_zoho_sync_columns",
+      "breakpoints": true
     }
   ]
 }

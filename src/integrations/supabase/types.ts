@@ -2230,6 +2230,8 @@ export type Database = {
           updated_at: string
           updated_by: string | null
           vendor_name: string | null
+          zoho_expense_id: string | null
+          zoho_synced_at: string | null
         }
         Insert: {
           amount?: number
@@ -2248,6 +2250,8 @@ export type Database = {
           updated_at?: string
           updated_by?: string | null
           vendor_name?: string | null
+          zoho_expense_id?: string | null
+          zoho_synced_at?: string | null
         }
         Update: {
           amount?: number
@@ -2266,6 +2270,8 @@ export type Database = {
           updated_at?: string
           updated_by?: string | null
           vendor_name?: string | null
+          zoho_expense_id?: string | null
+          zoho_synced_at?: string | null
         }
         Relationships: [
           {
