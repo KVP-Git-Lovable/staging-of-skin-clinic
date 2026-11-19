@@ -52,6 +52,13 @@ export async function invokeZohoPush<T>(fn: ZohoPushFn, body: Record<string, unk
   if (pending) return pending as Promise<T & { already_synced?: boolean }>;
 
   const run = (async () => {
+    // The list on screen can be out of date (sent from another tab or by the
+    // automatic push). If the record is already in Zoho, say so without
+    // asking the server to send it again.
+    if (recordId) {
+      const existing = await readZohoState(fn, recordId);
+      if (existing) return { ...existing, already_synced: true } as T & { already_synced?: boolean };
+    }
     const { data, error } = await supabase.functions.invoke(fn, { body });
     if (error) {
       let message = error.message;
@@ -79,6 +86,17 @@ export async function invokeZohoPush<T>(fn: ZohoPushFn, body: Record<string, unk
     inFlight.delete(key);
     publish();
   }
+}
+
+/** The Zoho id and synced date already stored on the record, if any. */
+async function readZohoState(fn: ZohoPushFn, id: string): Promise<Record<string, string> | null> {
+  const query = fn === "zoho-push-invoice"
+    ? supabase.from("invoices").select("zoho_invoice_id, zoho_invoice_synced_at").eq("id", id).maybeSingle()
+    : supabase.from("expenses").select("zoho_expense_id, zoho_synced_at").eq("id", id).maybeSingle();
+  const { data, error } = await query;
+  if (error || !data) return null; // let the server decide
+  const row = data as Record<string, string | null>;
+  return (row.zoho_invoice_id || row.zoho_expense_id) ? (row as Record<string, string>) : null;
 }
 
 export interface InvoiceZohoState {

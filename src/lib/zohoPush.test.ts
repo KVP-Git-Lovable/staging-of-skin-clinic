@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FunctionsHttpError } from "@supabase/supabase-js";
 
 const invoke = vi.fn();
-vi.mock("@/integrations/supabase/client", () => ({ supabase: { functions: { invoke: (...a: unknown[]) => invoke(...a) } } }));
+let stored: Record<string, string | null> | null = null;
+const from = vi.fn(() => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: stored, error: null }) }) }) }));
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: { functions: { invoke: (...a: unknown[]) => invoke(...a) }, from: (...a: unknown[]) => (from as any)(...a) },
+}));
 
 import { canSendInvoiceToZoho, invokeZohoPush, isZohoPushInFlight } from "./zohoPush";
 
@@ -23,7 +27,16 @@ describe("canSendInvoiceToZoho", () => {
 });
 
 describe("invokeZohoPush", () => {
-  beforeEach(() => invoke.mockReset());
+  beforeEach(() => { invoke.mockReset(); stored = null; });
+
+  it("does not ask the server again when the invoice is already in Zoho, even if the list is out of date", async () => {
+    stored = { zoho_invoice_id: "4277102000000044022", zoho_invoice_synced_at: "2026-11-19T11:36:15.69+00:00" };
+    await expect(invokeZohoPush("zoho-push-invoice", { invoiceId: "inv-3" })).resolves.toMatchObject({
+      zoho_invoice_id: "4277102000000044022",
+      already_synced: true,
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
 
   it("sends an invoice only once when the automatic push and a button click overlap", async () => {
     let finish!: (v: unknown) => void;
@@ -31,6 +44,7 @@ describe("invokeZohoPush", () => {
     const auto = invokeZohoPush("zoho-push-invoice", { invoiceId: "inv-1" });
     expect(isZohoPushInFlight("zoho-push-invoice", "inv-1")).toBe(true);
     const click = invokeZohoPush("zoho-push-invoice", { invoiceId: "inv-1" });
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
     finish({ data: { zoho_invoice_id: "Z1", zoho_invoice_synced_at: "2026-11-19T11:36:15Z" }, error: null });
     await expect(auto).resolves.toMatchObject({ zoho_invoice_id: "Z1" });
     await expect(click).resolves.toMatchObject({ zoho_invoice_id: "Z1" });
