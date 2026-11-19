@@ -3,6 +3,7 @@ import { DateInput } from "@/components/shared/DateInput";
 import { numVal } from "@/lib/numberInput";
 import { useState, useEffect, useCallback } from "react";
 import { VendorCombobox } from "@/components/shared/VendorCombobox";
+import { resolveVendorName } from "@/lib/expenseVendor";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { moveToTrash } from "@/lib/trash";
@@ -95,6 +96,16 @@ const Expenses = () => {
     },
   });
 
+  // Same cache as the vendor picker; used to show names for rows that hold a vendor id.
+  const { data: vendors = [] } = useQuery({
+    queryKey: ["vendors-list"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("vendors").select("id, name").order("name");
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
   const { data: expenses = [], isLoading } = useQuery({
     queryKey: ["expenses", filterMonth, filterCategory, search],
     queryFn: async () => {
@@ -146,7 +157,7 @@ const Expenses = () => {
         amount: Number(exp.amount),
         expense_date: exp.expense_date,
         payment_mode: exp.payment_mode || "Cash",
-        vendor_name: exp.vendor_name || null,
+        vendor_name: resolveVendorName(exp.vendor_name, vendors) || null,
         reference_number: exp.reference_number || null,
         notes: exp.notes || null,
         category_id: exp.category_id || null,
@@ -316,7 +327,7 @@ const Expenses = () => {
       amount: exp.amount,
       expense_date: exp.expense_date,
       payment_mode: exp.payment_mode || "Cash",
-      vendor_name: exp.vendor_name || "",
+      vendor_name: resolveVendorName(exp.vendor_name, vendors),
       reference_number: exp.reference_number || "",
       notes: exp.notes || "",
       category_id: exp.category_id || "",
@@ -455,7 +466,7 @@ const Expenses = () => {
                         <span className="text-muted-foreground text-xs">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-sm">{exp.vendor_name || "—"}</TableCell>
+                    <TableCell className="text-sm">{resolveVendorName(exp.vendor_name, vendors) || "—"}</TableCell>
                     <TableCell className="text-right font-semibold">{formatMoney(Number(exp.amount))}</TableCell>
                     <TableCell><Badge variant="outline" className="text-xs">{exp.payment_mode || "Cash"}</Badge></TableCell>
                     <TableCell>
@@ -545,7 +556,7 @@ const Expenses = () => {
                 {selectedExpense.vendor_name && (
                   <div>
                     <p className="text-xs text-muted-foreground">Vendor</p>
-                    <p className="font-medium">{selectedExpense.vendor_name}</p>
+                    <p className="font-medium">{resolveVendorName(selectedExpense.vendor_name, vendors)}</p>
                   </div>
                 )}
                 {selectedExpense.reference_number && (
@@ -689,7 +700,7 @@ const Expenses = () => {
               </div>
               <div>
                 <Label>Vendor</Label>
-                <VendorCombobox value={editingExpense.vendor_name || ""} onChange={v => setEditingExpense((p: any) => ({ ...p, vendor_name: v }))} placeholder="Select vendor..." />
+                <VendorCombobox valueKey="name" value={editingExpense.vendor_name || ""} onChange={v => setEditingExpense((p: any) => ({ ...p, vendor_name: v }))} placeholder="Select vendor..." />
               </div>
               <div>
                 <Label>Reference #</Label>

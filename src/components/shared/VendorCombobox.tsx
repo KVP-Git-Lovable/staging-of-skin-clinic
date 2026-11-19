@@ -11,9 +11,11 @@ interface VendorComboboxProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  /** What `value`/`onChange` carry. Defaults to the vendor id; "name" stores the vendor's name. */
+  valueKey?: "id" | "name";
 }
 
-export function VendorCombobox({ value, onChange, placeholder = "Select vendor..." }: VendorComboboxProps) {
+export function VendorCombobox({ value, onChange, placeholder = "Select vendor...", valueKey = "id" }: VendorComboboxProps) {
   const [open, setOpen] = useState(false);
 
   const { data: vendors = [] } = useQuery({
@@ -34,7 +36,7 @@ export function VendorCombobox({ value, onChange, placeholder = "Select vendor..
     <Popover modal open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" role="combobox" aria-expanded={open} className="w-full justify-between font-normal">
-          {vendors.find((v) => v.id === value)?.name || <span className="text-muted-foreground">{placeholder}</span>}
+          {vendors.find((v) => v[valueKey] === value)?.name || (valueKey === "name" && value) || <span className="text-muted-foreground">{placeholder}</span>}
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
@@ -50,8 +52,8 @@ export function VendorCombobox({ value, onChange, placeholder = "Select vendor..
                 </CommandItem>
               )}
               {vendors.map((v) => (
-                <CommandItem key={v.id} value={v.name} onSelect={() => { onChange(v.id); setOpen(false); }}>
-                  <Check className={cn("mr-2 h-4 w-4", value === v.id ? "opacity-100" : "opacity-0")} />
+                <CommandItem key={v.id} value={v.name} onSelect={() => { onChange(v[valueKey]); setOpen(false); }}>
+                  <Check className={cn("mr-2 h-4 w-4", value === v[valueKey] ? "opacity-100" : "opacity-0")} />
                   {v.name}
                 </CommandItem>
               ))}
