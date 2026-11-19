@@ -163,11 +163,16 @@ const Expenses = () => {
         return data;
       }
     },
-    onSuccess: () => {
+    onSuccess: (data: any, exp: any) => {
       qc.invalidateQueries({ queryKey: ["expenses"] });
       toast.success(isEditing ? "Expense updated" : "Expense added");
       setShowExpenseDialog(false);
       setAttachmentFile(null);
+      // New expenses only: push to Zoho Books after the save has committed.
+      // Edits are never re-pushed. A Zoho failure leaves the expense saved.
+      if (!exp?.id && data?.id && !data.zoho_expense_id) {
+        sendToZoho.mutate({ id: data.id, auto: true });
+      }
     },
     onError: (e: any) => toast.error(e.message || "Failed to save expense"),
   });
@@ -185,8 +190,9 @@ const Expenses = () => {
   });
 
   // Send to Zoho Books. On refusal the message shown is Zoho's own.
+  // auto = fired right after a new expense was saved; failures are warnings.
   const sendToZoho = useMutation({
-    mutationFn: async (id: string) => {
+    mutationFn: async ({ id }: { id: string; auto?: boolean }) => {
       const { data, error } = await supabase.functions.invoke("zoho-push-expense", { body: { expenseId: id } });
       if (error) {
         let message = error.message;
@@ -197,13 +203,27 @@ const Expenses = () => {
       }
       return data as { zoho_expense_id: string; zoho_synced_at: string };
     },
-    onSuccess: () => {
+    onSuccess: (data, { id }) => {
+      // Swap the button for "In Zoho Books" immediately, before the refetch.
+      qc.setQueriesData<Expense[]>({ queryKey: ["expenses"] }, (rows) =>
+        Array.isArray(rows)
+          ? rows.map((r) => (r.id === id ? { ...r, zoho_expense_id: data.zoho_expense_id, zoho_synced_at: data.zoho_synced_at } : r))
+          : rows,
+      );
       qc.invalidateQueries({ queryKey: ["expenses"] });
       toast.success("Sent to Zoho Books");
     },
-    onError: (e: any) => {
+    onError: (e: any, { auto }) => {
       qc.invalidateQueries({ queryKey: ["expenses"] });
-      toast.error(e.message || "Zoho Books did not accept this expense");
+      const msg = e.message || "Zoho Books did not accept this expense";
+      if (auto) {
+        toast.warning(`Expense saved, but not sent to Zoho Books: ${msg}`, {
+          description: "Fix it and use \"Send to Zoho Books\" on the row to try again.",
+          duration: 10000,
+        });
+      } else {
+        toast.error(msg);
+      }
     },
   });
 
@@ -451,9 +471,9 @@ const Expenses = () => {
                             size="sm"
                             className="h-7 whitespace-nowrap px-2 text-xs"
                             disabled={sendToZoho.isPending}
-                            onClick={(e) => { e.stopPropagation(); sendToZoho.mutate(exp.id); }}
+                            onClick={(e) => { e.stopPropagation(); if (!exp.zoho_expense_id) sendToZoho.mutate({ id: exp.id }); }}
                           >
-                            {sendToZoho.isPending && sendToZoho.variables === exp.id
+                            {sendToZoho.isPending && sendToZoho.variables?.id === exp.id
                               ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
                               : <Send className="h-3.5 w-3.5 mr-1" />}
                             Send to Zoho Books
