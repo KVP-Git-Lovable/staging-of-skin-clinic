@@ -22,3 +22,9 @@
 - [x] Remove my ₹1 test expense from Zoho Books and the two test rows
 - [x] Auto-push a new expense to Zoho right after it saves; Zoho failure = warning, save never rolls back
 - [x] Button only on unsynced rows (retry); synced rows show "In Zoho Books" + date; no re-push on edit
+
+## Invoices → Zoho Books
+- [x] zoho_invoice_id / zoho_invoice_synced_at columns
+- [x] Auto-push new invoices after save (customer, lines, total, reference, due date, payment); cancelled/merged never sent
+- [x] "Send to Zoho Books" retry on unsynced invoices; synced ones show "In Zoho Books" + date; no re-push on edit
+- [x] Reuse one shared Zoho client for expenses and invoices
