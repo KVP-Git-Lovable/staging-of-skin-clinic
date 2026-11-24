@@ -5,7 +5,6 @@ import { withDrPrefix } from "@/lib/staffName";
 import { MANUAL_APPOINTMENT_STATUSES, appointmentStatusLabel, showsAsBilled, BILLED_BADGE_CLASSES } from "@/lib/appointmentStatus";
 import { invoiceMapByAppointment, type VisitBill } from "@/lib/invoicesForAppointments";
 import { APPOINTMENT_CONFIRMATION_WHATSAPP_ENABLED } from "@/lib/whatsappNotifications";
-import { confirmationSendPlan } from "@/lib/confirmationSend";
 import { useLiveAppointments } from "@/hooks/useLiveAppointments";
 import { GOOGLE_REVIEW_MESSAGE, isReviewRequestMessage, reviewContactNotice, reviewRequestState } from "@/lib/googleReview";
 import { openAppointmentNotice, type AppointmentChange } from "@/lib/liveAppointments";
@@ -25,6 +24,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PatientAttachments } from "@/components/patients/PatientAttachments";
+import { FollowupButtons } from "@/components/appointments/FollowupButtons";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet";
@@ -52,11 +52,22 @@ import { assertWrote } from "@/lib/rowAccess";
 import { forgetOpenAppointment, rememberOpenAppointment } from "@/lib/openAppointment";
 import { StickyNotes } from "@/components/shared/StickyNotes";
 import { StaffCombobox } from "@/components/shared/StaffCombobox";
-import { THERAPIST_ROLES, therapistDisplayName, therapistNoteTitle } from "@/lib/appointmentTherapist";
+import { StaffMultiCombobox } from "@/components/shared/StaffMultiCombobox";
+import {
+  THERAPIST_ROLES,
+  THERAPIST_FIELD_LABEL,
+  therapistDisplayName,
+  therapistIdsOf,
+  therapistNamesOf,
+  therapistNoteTitle,
+} from "@/lib/appointmentTherapist";
+import { useStaffNames } from "@/lib/staffNames";
 import { CameraCapture } from "@/components/shared/CameraCapture";
 import { SkinTracker } from "@/components/shared/SkinTracker";
 import { ProcedureFormDialog } from "@/components/procedures/ProcedureFormDialog";
 import { ProcedureDetailSheet } from "@/components/procedures/ProcedureDetailSheet";
+import { PastVisitSheet } from "@/components/appointments/PastVisitSheet";
+import { canOpenVisit, showsBilledState, visitRows, visitStaffName, type VisitRow } from "@/lib/patientVisitHistory";
 import { ScanProcedureDialog } from "@/components/procedures/ScanProcedureDialog";
 import { CaseAnalysis } from "@/components/shared/CaseAnalysis";
 
@@ -69,21 +80,7 @@ import { CaseAnalysis } from "@/components/shared/CaseAnalysis";
  * works: the staff member switches to the WhatsApp Web tab they already have
  * open, picks the patient, and pastes.
  */
-function offerReviewFallback() {
-  toast.message("Your browser blocked the WhatsApp tab", {
-    description: "Copy the message, then paste it into the patient's WhatsApp chat.",
-    action: {
-      label: "Copy message",
-      onClick: () => {
-        navigator.clipboard.writeText(GOOGLE_REVIEW_MESSAGE).then(
-          () => toast.success("Message copied"),
-          () => toast.error("Could not copy - your browser blocked the clipboard."),
-        );
-      },
-    },
-    duration: 20000,
-  });
-}
+import { openWhatsApp } from "@/lib/whatsappOpen";
 import { AiRepository } from "@/components/shared/AiRepository";
 import { SurveyFill } from "@/components/surveys/SurveyFill";
 import { SurveyRecommendations } from "@/components/surveys/SurveyRecommendations";
@@ -94,6 +91,10 @@ import { appointmentDeleteNote } from "@/lib/appointmentDeleteNote";
 // Shared with the Patient Feedback report, so a visit cannot read "Passive"
 // on one screen and "Promoter" on the other.
 import { npsCategory, ratingLabel } from "@/lib/feedbackScores";
+import { AnswerControl, AnswerReadout } from "@/components/feedback/AnswerControl";
+import { useFeedbackQuestions } from "@/hooks/useFeedbackQuestions";
+import { answersFromRow, askable, BUILTIN_COMMENTS, BUILTIN_NPS, BUILTIN_RATING, feedbackRowFrom, validateAnswers, type AnswerMap, type AnswerValue } from "@/lib/feedbackQuestions";
+import { FeedbackRcaPanel } from "@/components/feedback/FeedbackRcaPanel";
 import { AttachPhotosButton } from "@/components/photos/AttachPhotosButton";
 import { PhotoViewer } from "@/components/patients/PhotoViewer";
 import { orderAppointmentPhotos, photoPositionIn } from "@/lib/appointmentPhotos";
@@ -150,22 +151,27 @@ function FeedbackTabContent({
     enabled: !!appointmentId,
   });
 
-  const [comments, setComments] = useState("");
+  const { questions, isLoading: questionsLoading } = useFeedbackQuestions();
+  const [answers, setAnswers] = useState<AnswerMap>({});
+  const setAnswer = (id: string, value: AnswerValue) => setAnswers((a) => ({ ...a, [id]: value }));
+  // Required questions, answered in range. The two scores are required rows
+  // out of the box, so this is the same gate as the old "both questions" one.
+  const complaints = validateAnswers(questions, answers);
 
   const handleSubmitFeedback = async () => {
-    if (npsScore === null || serviceRating === null) {
-      toast.error("Please answer both questions");
+    if (complaints.length) {
+      toast.error(complaints[0]);
       return;
     }
     setFeedbackSubmitting(true);
     try {
+      // The three built-ins still land in their own columns; everything else
+      // goes into answers. See feedbackRowFrom.
       const { error } = await supabase.from("patient_feedback").insert({
         appointment_id: appointmentId,
         patient_id: patientId || "00000000-0000-0000-0000-000000000000",
         patient_name: patientName,
-        nps_score: npsScore,
-        service_rating: serviceRating,
-        comments: comments.trim() || null,
+        ...feedbackRowFrom(questions, answers),
       } as any);
       if (error) throw error;
       queryClient.invalidateQueries({ queryKey: ["patient-feedback", appointmentId] });
@@ -279,51 +285,20 @@ function FeedbackTabContent({
   };
 
   /**
-   * Open WhatsApp in a new tab.
+   * Open WhatsApp with the review message ready.
    *
-   * A plain <a target="_blank"> was tried first and gave staff
-   * "api.whatsapp.com is blocked / ERR_BLOCKED_BY_RESPONSE" - Chrome's
-   * wording for a page refusing to be framed, which means the link loaded
-   * INSIDE the frame rather than in a tab. window.open gives a genuine
-   * top-level tab, and X-Frame-Options cannot apply to a top-level document.
+   * How the tab is opened, and why neither wa.me nor a dialog may come near
+   * this path, now lives in src/lib/whatsappOpen.ts, shared with the two
+   * follow-up buttons. It also refuses outright inside the Lovable editor's
+   * preview frame, where a popup inherits the frame's sandbox and WhatsApp
+   * answers with ERR_BLOCKED_BY_RESPONSE.
    *
-   * It also tells us when the browser refused outright, which an anchor
-   * cannot, so that case gets a usable fallback instead of a dead page.
-   *
-   * NEVER put a confirm(), alert() or prompt() in this function, and never
-   * call one between the click and this. window.open focuses the new tab,
-   * which leaves this page in the background, and Chrome ignores a dialog
-   * asked for by a background tab - it shows nothing and returns false. That
-   * is exactly how "Ask again" came to open a tab and instantly close it
-   * again: the screen jolted and nothing happened. Anything that needs
-   * asking is asked before this runs, by askAgainOpen below.
+   * The open is recorded only when a tab really opened: a row written for a
+   * blocked page would later tell the clinic this patient had been asked.
    */
   const openWhatsAppNow = () => {
     if (!review.enabled || !review.url) return;
-    // One window.open carrying the real URL, exactly as PhotoViewer,
-    // PdfPreviewDialog and the report drill-downs do it.
-    //
-    // This used to go through reserveTab().navigate(), which opens about:blank
-    // and navigates it afterwards, and the tab sat on the placeholder for
-    // ever: navigate() disowns the window (opener = null) before assigning
-    // location, and a disowned popup is no longer the opener's to steer, with
-    // the failure swallowed by a catch. reserveTab earns that two-step dance
-    // when a tab must be claimed BEFORE an await - a PDF being built, an edge
-    // function being called. Nothing is awaited here; the URL is already
-    // known, so there was never anything to reserve.
-    // Do NOT pass "noopener" in the features string: the HTML spec makes
-    // window.open return null whenever noopener is set, even when the tab
-    // opened fine, so the null check below would fire the fallback on every
-    // successful click and recordReviewOpen would never run. Open without it
-    // and disown the opener manually instead - same protection, truthful
-    // return value.
-    const win = window.open(review.url, "_blank");
-    if (!win) {
-      offerReviewFallback();
-      return;
-    }
-    win.opener = null;
-    recordReviewOpen();
+    if (openWhatsApp(review.url, GOOGLE_REVIEW_MESSAGE)) recordReviewOpen();
   };
 
   /**
@@ -433,8 +408,24 @@ function FeedbackTabContent({
               <p className="text-sm whitespace-pre-wrap">{(existingFeedback as any).comments}</p>
             </div>
           )}
+          {/* Anything the clinic added beyond the three built-ins. Read from
+              the same config that asked it, so a question switched off later
+              still shows the answer it collected. */}
+          {askable(questions).filter((q) => !q.builtin).map((q) => {
+            const recorded = answersFromRow(questions, existingFeedback);
+            if (!(q.id in recorded)) return null;
+            return (
+              <div key={q.id}>
+                <p className="text-xs text-muted-foreground mb-1">{q.question_text}</p>
+                <AnswerReadout question={q} value={recorded[q.id]} />
+              </div>
+            );
+          })}
           <p className="text-[10px] text-muted-foreground">Submitted {format(new Date(existingFeedback.created_at), "MMM d, yyyy · h:mm a")}</p>
         </div>
+        {/* Renders nothing unless this score opened a case, which 24 of 979
+            did. Also nothing for staff who may not read cases. */}
+        <FeedbackRcaPanel feedbackId={existingFeedback.id} />
         {reviewRequestButton}
       </TabsContent>
     );
@@ -447,74 +438,53 @@ function FeedbackTabContent({
       </h3>
       {reviewRequestButton}
 
-      {/* NPS Question */}
-      <div className="space-y-2">
-        <Label className="text-xs font-medium">How likely are you to recommend us to a friend or colleague?</Label>
-        <div className="flex gap-1 flex-wrap">
-          {NPS_LABELS.map((label, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => setNpsScore(i)}
-              className={`h-8 w-8 rounded-md text-xs font-semibold border transition-all ${
-                npsScore === i
-                  ? getNpsColor(i)
-                  : "bg-background hover:bg-accent text-foreground border-border"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="flex justify-between text-[10px] text-muted-foreground px-0.5">
-          <span>Not at all likely</span>
-          <span>Extremely likely</span>
-        </div>
-        {npsScore !== null && (
-          <Badge variant="outline" className="text-xs">{npsCategory(npsScore)}</Badge>
-        )}
-      </div>
-
-      {/* Service Quality */}
-      <div className="space-y-2">
-        <Label className="text-xs font-medium">How would you rate the overall quality of service?</Label>
-        <div className="flex gap-1">
-          {[1, 2, 3, 4, 5].map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => setServiceRating(s)}
-              className="p-1 transition-transform hover:scale-110"
-            >
-              <Star className={`h-7 w-7 ${serviceRating !== null && s <= serviceRating ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground/30 hover:text-yellow-300"}`} />
-            </button>
-          ))}
-        </div>
-        {serviceRating !== null && (
-          <p className="text-xs text-muted-foreground">
-            {ratingLabel(serviceRating)}
-          </p>
-        )}
-      </div>
-
-      {/* Written / dictated feedback */}
-      <div className="space-y-2">
-        <Label className="text-xs font-medium">Any comments or suggestions?</Label>
-        <div className="flex items-start gap-2">
-          <Textarea
-            value={comments}
-            onChange={(e) => setComments(e.target.value)}
-            placeholder="Type the patient's feedback, or use the mic to dictate…"
-            rows={3}
-            className="flex-1 text-sm"
-          />
-          <MicButton value={comments} onChange={setComments} size="md" title="Dictate feedback" />
-        </div>
-      </div>
+      {/* Every question, as configured at Admin > Feedback. The three the
+          clinic started with are rows like any other, so rewording or
+          restyling them here needs no code change - and the comments one keeps
+          its dictation button, which is the one thing a configured control
+          cannot know about. */}
+      {questionsLoading ? (
+        <p className="text-sm text-muted-foreground">Loading questions…</p>
+      ) : (
+        askable(questions).map((q) => (
+          <div key={q.id} className="space-y-2">
+            <Label className="text-xs font-medium">
+              {q.question_text}
+              {q.is_required && <span className="text-destructive"> *</span>}
+            </Label>
+            {q.help_text && <p className="text-[11px] text-muted-foreground">{q.help_text}</p>}
+            {q.builtin === BUILTIN_COMMENTS ? (
+              <div className="flex items-start gap-2">
+                <Textarea
+                  value={typeof answers[q.id] === "string" ? (answers[q.id] as string) : ""}
+                  onChange={(e) => setAnswer(q.id, e.target.value)}
+                  placeholder="Type the patient's feedback, or use the mic to dictate…"
+                  rows={3}
+                  className="flex-1 text-sm"
+                />
+                <MicButton
+                  value={typeof answers[q.id] === "string" ? (answers[q.id] as string) : ""}
+                  onChange={(v) => setAnswer(q.id, v)}
+                  size="md"
+                  title="Dictate feedback"
+                />
+              </div>
+            ) : (
+              <AnswerControl question={q} value={answers[q.id] ?? null} onChange={(v) => setAnswer(q.id, v)} />
+            )}
+            {q.builtin === BUILTIN_NPS && typeof answers[q.id] === "number" && (
+              <Badge variant="outline" className="text-xs">{npsCategory(answers[q.id] as number)}</Badge>
+            )}
+            {q.builtin === BUILTIN_RATING && typeof answers[q.id] === "number" && (
+              <p className="text-xs text-muted-foreground">{ratingLabel(answers[q.id] as number)}</p>
+            )}
+          </div>
+        ))
+      )}
 
       <Button
         onClick={handleSubmitFeedback}
-        disabled={feedbackSubmitting || npsScore === null || serviceRating === null}
+        disabled={feedbackSubmitting || complaints.length > 0 || questionsLoading}
         className="w-full gap-2"
       >
         <Check className="h-4 w-4" /> Submit Feedback
@@ -541,6 +511,7 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
   const [procFormOpen, setProcFormOpen] = useState(false);
   const [scanProcOpen, setScanProcOpen] = useState(false);
   const [selectedProcId, setSelectedProcId] = useState<string | null>(null);
+  const [pastVisit, setPastVisit] = useState<VisitRow | null>(null);
   // An index into the photos as the tab lays them out, not the photo itself:
   // that is what lets the viewer step to the next one. Mirrors PatientDetail.
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
@@ -626,7 +597,7 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
   const [editStaffId, setEditStaffId] = useState("");
   // Who actually carries out the treatment. Separate from the doctor: the
   // clinic needs both, and a therapist is routinely swapped at short notice.
-  const [editTherapistId, setEditTherapistId] = useState("");
+  const [editTherapistIds, setEditTherapistIds] = useState<string[]>([]);
   const [editProblemAreas, setEditProblemAreas] = useState<string[]>([]);
   const [editAppointmentId, setEditAppointmentId] = useState<string | null>(null);
 
@@ -641,6 +612,21 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
   });
 
   const doctorsList = (staffList as any[]).filter((s: any) => s.role === "Doctor");
+
+  // Everyone recorded on this appointment, and their names.
+  //
+  // Looked up by id rather than read out of staffList above: that list is
+  // active staff only, so somebody deactivated since the visit would silently
+  // drop off an appointment they really worked. therapistDisplayName is the
+  // last resort - it reads the stored therapist_name, which survives the
+  // staff record being deleted altogether.
+  const assignedTherapistIds = therapistIdsOf(appointment as never);
+  const { data: therapistNameMap = {} } = useStaffNames(assignedTherapistIds);
+  const assignedTherapistNames = therapistNamesOf(
+    assignedTherapistIds,
+    therapistNameMap,
+    therapistDisplayName(appointment as never),
+  );
 
   const { data: servicesList = [] } = useQuery({
     queryKey: ["services-list"],
@@ -693,7 +679,7 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
     setEditStartTime(appointment.start_time ? format(new Date(appointment.start_time), "yyyy-MM-dd'T'HH:mm") : "");
     setEditEndTime(appointment.end_time ? format(new Date(appointment.end_time), "yyyy-MM-dd'T'HH:mm") : "");
     setEditStaffId(appointment.staff_id || "");
-    setEditTherapistId(appointment.therapist_id || "");
+    setEditTherapistIds(therapistIdsOf(appointment as never));
     setEditProblemAreas(((appointment as any).problem_area_ids as string[]) || []);
     setEditAppointmentId(appointment.id);
   }, [appointment, appointmentId]);
@@ -733,17 +719,28 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
   const hasCompletedProcedure = procedures.some((p: any) => p.status === "Completed");
 
   // All previous appointments for this patient (excluding the current one)
+  /**
+   * The patient's earlier visits.
+   *
+   * Through patient_visit_history() rather than the table, because
+   * 20261113210000 scopes `appointments` to the visits a therapist or nurse
+   * was put on: reading the table directly returned only the visit they are
+   * already looking at, and this tab read "No other appointments for this
+   * patient." for every patient they ever opened.
+   *
+   * The function answers the narrower question - you can open this visit, so
+   * what else has this patient had - and excludes the current appointment
+   * itself, so no filtering is needed here.
+   */
   const { data: previousAppointments = [] } = useQuery({
     queryKey: ["patient-previous-appointments", appointment?.patient_id, appointmentId],
-    enabled: !!appointment?.patient_id,
+    enabled: !!appointment?.patient_id && !!appointmentId,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("appointments")
-        .select("*, staff:staff!appointments_staff_id_fkey(first_name, last_name)")
-        .eq("patient_id", appointment!.patient_id!)
-        .order("start_time", { ascending: false });
+      const { data, error } = await supabase.rpc("patient_visit_history", {
+        p_appointment_id: appointmentId!,
+      });
       if (error) throw error;
-      return (data || []).filter((a: any) => a.id !== appointmentId);
+      return visitRows(data);
     },
   });
 
@@ -953,7 +950,11 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
       const { data, error } = await supabase
         .from("prescriptions")
         .select("medicine_name, quantity, product_id")
-        .in("procedure_id", procedureIds);
+        .in("procedure_id", procedureIds)
+        // The order the clinician typed them - see lib/prescriptionOrder.ts.
+        .order("sort_order", { nullsFirst: false })
+        .order("created_at")
+        .order("id");
       if (error) throw error;
       return data || [];
     },
@@ -1062,7 +1063,8 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
           start_time: new Date(editStartTime).toISOString(),
           end_time: new Date(editEndTime).toISOString(),
           staff_id: newStaffId,
-          therapist_id: editTherapistId || null,
+          therapist_id: editTherapistIds[0] || null,
+          therapist_ids: editTherapistIds,
           problem_area_ids: editProblemAreas,
         } as any)
         .eq("id", appointmentId!)
@@ -1187,7 +1189,8 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
         patient_id: appointment.patient_id,
         patient_name: appointment.patient_name ?? null,
         staff_id: editStaffId || appointment.staff_id || null,
-        therapist_id: editTherapistId || appointment.therapist_id || null,
+        therapist_id: editTherapistIds[0] || appointment.therapist_id || null,
+        therapist_ids: editTherapistIds.length ? editTherapistIds : therapistIdsOf(appointment as never),
         service: editService || appointment.service || null,
         reason_for_consultation: editInvestigation.trim() || null,
         start_time: new Date(editStartTime).toISOString(),
@@ -1341,49 +1344,6 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
     },
   });
 
-  const [resendingConfirmation, setResendingConfirmation] = useState(false);
-  const resendConfirmation = async () => {
-    const plan = confirmationSendPlan({ status: "Confirmed", phone: patientPhone, patientName });
-    if (!plan.send) {
-      toast.warning(plan.skippedBecause ?? "This appointment cannot be confirmed by WhatsApp.");
-      return;
-    }
-    if (!window.confirm(`Send the appointment confirmation to ${patientName} on ${patientPhone}?`)) return;
-    setResendingConfirmation(true);
-    try {
-      const start = new Date(appointment!.start_time);
-      const { error } = await supabase.functions.invoke("send-appointment-whatsapp", {
-        body: {
-          phone: patientPhone,
-          patientName,
-          appointmentDate: format(start, "dd MMM yyyy"),
-          appointmentTime: format(start, "hh:mm a"),
-          serviceName: appointment!.service || "-",
-          patientGender: (appointment as any)?.patients?.gender || null,
-        },
-      });
-      if (error) throw new Error(await edgeFunctionErrorMessage(error, "The WhatsApp confirmation could not be sent."));
-      toast.success("WhatsApp confirmation sent");
-    } catch (e: any) {
-      toast.error(e?.message || "The WhatsApp confirmation could not be sent.");
-    } finally {
-      setResendingConfirmation(false);
-    }
-  };
-
-  const sendConfirmationButton = patientPhone ? (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="mt-2 h-7 gap-1.5 text-xs"
-      disabled={resendingConfirmation}
-      onClick={resendConfirmation}
-    >
-      <MessageSquare className="h-3 w-3" />
-      {resendingConfirmation ? "Sending…" : "Send confirmation"}
-    </Button>
-  ) : null;
   const patientId = appointment?.patients?.id || appointment?.patient_id;
 
   // While this appointment is open, every other page offers one tap back to it.
@@ -1473,7 +1433,6 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
                         <Phone className="h-3 w-3" /> {patientPhone}
                       </p>
                     )}
-                    {sendConfirmationButton}
                   </div>
                   <div className="flex flex-col items-end gap-2">
                     {(() => {
@@ -1535,7 +1494,16 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
                         <Phone className="h-3 w-3" /> {patientPhone}
                       </p>
                     )}
-                    {sendConfirmationButton}
+                    {/* The two post-treatment follow-ups. Details tab only: the
+                        header above shares this block but is already crowded,
+                        and these are an after-the-visit action, not a booking
+                        one. */}
+                    <FollowupButtons
+                      patientId={patientId}
+                      appointmentId={appointment.id}
+                      patientPhone={patientPhone}
+                      patient={appointment.patients}
+                    />
                   </div>
                   <div>
                     <Label>Investigation</Label>
@@ -1674,15 +1642,17 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
                       "who saw them, then who treated them", and on a phone the
                       two stack anyway. Swapping one costs two taps. */}
                   <div>
-                    <Label>Therapist</Label>
-                    <StaffCombobox
+                    <Label>{THERAPIST_FIELD_LABEL}</Label>
+                    {/* More than one person assists a procedure, so this is
+                        the same multi-select Procedures already uses for
+                        "Assisted By". Removing every badge clears the field;
+                        there is no "none" row to pick. */}
+                    <StaffMultiCombobox
                       className="mt-1.5"
-                      value={editTherapistId}
-                      onValueChange={setEditTherapistId}
+                      value={editTherapistIds}
+                      onValueChange={setEditTherapistIds}
                       roleFilter={[...THERAPIST_ROLES]}
-                      allowNone
-                      noneLabel="No therapist assigned"
-                      placeholder="Select therapist"
+                      placeholder="Select therapist or nurse"
                     />
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -1853,11 +1823,17 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
                         <p className="text-sm text-muted-foreground text-center py-8">No other appointments for this patient.</p>
                       ) : (
                         <div className="space-y-2">
-                          {(previousAppointments as any[]).map((apt: any) => (
+                          {previousAppointments.map((apt) => (
                             <div
                               key={apt.id}
                               className="border rounded-lg p-3 bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors"
-                              onClick={() => { navigate(`/appointments/${apt.id}`); }}
+                              // A visit this user may not open loads nothing in the
+                              // full sheet - maybeSingle() returns null for a row the
+                              // policy hides - so it opens the read-only one instead.
+                              onClick={() => {
+                                if (canOpenVisit(apt)) navigate(`/appointments/${apt.id}`);
+                                else setPastVisit(apt);
+                              }}
                             >
                               {/* What was actually done leads the card. The
                                   service is "Consultation" on most of these and
@@ -1866,13 +1842,13 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
                                   service when there is no text. */}
                               <div className="flex items-start justify-between gap-2">
                                 <p className="font-medium text-sm">{investigationText(apt, apt.service || "Consultation")}</p>
-                                <Badge variant="outline" className={`text-xs shrink-0 ${showsAsBilled(apt.status, billsByAppointment.has(apt.id)) ? BILLED_BADGE_CLASSES : STATUS_BADGE_CLASSES[apt.status] || ""}`}>{appointmentStatusLabel(apt.status, billsByAppointment.has(apt.id))}</Badge>
+                                <Badge variant="outline" className={`text-xs shrink-0 ${showsAsBilled(apt.status || "", showsBilledState({ canSeeBilling, billed: billsByAppointment.has(apt.id) })) ? BILLED_BADGE_CLASSES : STATUS_BADGE_CLASSES[apt.status || ""] || ""}`}>{appointmentStatusLabel(apt.status || "", showsBilledState({ canSeeBilling, billed: billsByAppointment.has(apt.id) }))}</Badge>
                               </div>
                               <p className="text-xs mt-1">
                                 <span className="font-medium text-foreground">{displayDate(apt.start_time)}</span>
                                 <span className="text-muted-foreground">
                                   {` · ${format(new Date(apt.start_time), "h:mm a")}`}
-                                  {apt.staff && ` · ${withDrPrefix(`${apt.staff.first_name} ${apt.staff.last_name}`)}`}
+                                  {visitStaffName(apt) && ` · ${withDrPrefix(visitStaffName(apt))}`}
                                 </span>
                               </p>
                             </div>
@@ -2334,9 +2310,9 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
                         it. Read from the appointment, so a swap is reflected
                         here the moment it is saved. */}
                     <p className="text-xs text-muted-foreground">
-                      {therapistDisplayName(appointment as never)
-                        ? <>Therapist: <span className="font-medium text-foreground">{therapistDisplayName(appointment as never)}</span></>
-                        : "No therapist assigned"}
+                      {assignedTherapistNames
+                        ? <>{THERAPIST_FIELD_LABEL}: <span className="font-medium text-foreground">{assignedTherapistNames}</span></>
+                        : "No therapist or nurse assigned"}
                     </p>
                   </div>
                   {/* No draft mode here, unlike the New Procedure form: the
@@ -2344,7 +2320,7 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
                       so notes save straight away. */}
                   <StickyNotes
                     appointmentId={appointmentId}
-                    composerDefaults={{ title: therapistNoteTitle(therapistDisplayName(appointment as never)) }}
+                    composerDefaults={{ title: therapistNoteTitle(assignedTherapistNames) }}
                   />
                 </TabsContent>
                 <TabsContent value="ai-repo" className="p-6 mt-0">
@@ -2417,6 +2393,11 @@ export function AppointmentDetailSheet({ appointmentId, onClose, variant = "shee
       )}
 
       <ProcedureDetailSheet procedureId={selectedProcId} onClose={() => setSelectedProcId(null)} />
+      <PastVisitSheet
+        visit={pastVisit}
+        anchorAppointmentId={appointmentId || ""}
+        onClose={() => setPastVisit(null)}
+      />
 
       {surveyFillOpen && appointment?.patient_id && selectedSurveyTemplateId && (
         <SurveyFill

@@ -31,6 +31,26 @@ describe("edgeFunctionErrorMessage", () => {
     await expect(edgeFunctionErrorMessage(err)).resolves.toBe(EDGE_FUNCTION_UNREACHABLE);
   });
 
+  it("explains a function that could not be reached at all", async () => {
+    // A FunctionsFetchError: the request never arrived, because the function
+    // is not deployed or is down. "Failed to send a request to the Edge
+    // Function" is not something a clinic manager can act on either, and it
+    // carries no body to recover - so the caller's own wording is all there is.
+    await expect(edgeFunctionErrorMessage({ message: "Failed to send a request to the Edge Function" }))
+      .resolves.toBe(EDGE_FUNCTION_UNREACHABLE);
+    await expect(edgeFunctionErrorMessage({ message: "Failed to send a request to the Edge Function" }, "Try again later"))
+      .resolves.toBe("Try again later");
+  });
+
+  it("still prefers the function's own refusal over any fallback", async () => {
+    // The regression that matters most: widening the generic pattern must not
+    // start swallowing bodies. A function that ran and said why still wins.
+    await expect(edgeFunctionErrorMessage(
+      httpError({ error: "Only doctors and admins can configure root-cause questions" }, "Edge Function returned a non-2xx status code"),
+      "a fallback nobody should see",
+    )).resolves.toBe("Only doctors and admins can configure root-cause questions");
+  });
+
   it("passes a real error through untouched", async () => {
     await expect(edgeFunctionErrorMessage(new Error("Failed to fetch"))).resolves.toBe("Failed to fetch");
     await expect(edgeFunctionErrorMessage({ message: "Name and email are required" }))

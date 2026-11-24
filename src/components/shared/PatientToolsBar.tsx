@@ -29,7 +29,7 @@ export function PatientToolsBar({
   const [skinTrackerOpen, setSkinTrackerOpen] = useState(false);
 
   const { data: photos = [] } = useQuery({
-    queryKey: ["patient-tools-photos", patientId],
+    queryKey: ["patient-photos", "tools", patientId],
     enabled: !!patientId && skinTrackerOpen,
     queryFn: async () => {
       const { data, error } = await supabase

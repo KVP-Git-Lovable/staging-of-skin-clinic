@@ -158,7 +158,9 @@ describe("side by side", () => {
     renderCompared();
     fireEvent.click(screen.getByLabelText("Zoom photo 1 in"));
     fireEvent.click(screen.getByLabelText("Tilt photo 1 right"));
-    fireEvent.click(screen.getByRole("tab", { name: /side by side/i }));
+    const tab = screen.getByRole("tab", { name: /side by side/i });
+    fireEvent.mouseDown(tab, { button: 0 });
+    expect(tab).toHaveAttribute("aria-selected", "true");
 
     // Whichever layout is showing, the same view settings apply - switching
     // between them must not quietly reset or double-apply anything.

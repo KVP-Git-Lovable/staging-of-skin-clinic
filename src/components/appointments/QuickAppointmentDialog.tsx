@@ -13,9 +13,10 @@ import { cn } from "@/lib/utils";
 import { Phone, Loader2, User as UserIcon, IdCard } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { StaffCombobox } from "@/components/shared/StaffCombobox";
-import { THERAPIST_ROLES } from "@/lib/appointmentTherapist";
+import { StaffMultiCombobox } from "@/components/shared/StaffMultiCombobox";
+import { THERAPIST_ROLES, THERAPIST_FIELD_LABEL } from "@/lib/appointmentTherapist";
 import { toast } from "sonner";
+import { edgeFunctionErrorMessage } from "@/lib/edgeFunctionError";
 import { format } from "date-fns";
 import { shortPatientId } from "@/lib/utils";
 import { MANUAL_APPOINTMENT_STATUSES } from "@/lib/appointmentStatus";
@@ -39,7 +40,7 @@ const STATUS_OPTIONS = [...MANUAL_APPOINTMENT_STATUSES];
 export function QuickAppointmentDialog({ open, onOpenChange, patient }: QuickAppointmentDialogProps) {
   const queryClient = useQueryClient();
   const [staffId, setStaffId] = useState("");
-  const [therapistId, setTherapistId] = useState("");
+  const [therapistIds, setTherapistIds] = useState<string[]>([]);
   const [serviceId, setServiceId] = useState("");
   const [appointmentType, setAppointmentType] = useState<"Walk-in" | "Online">("Walk-in");
   const [appointmentStatus, setAppointmentStatus] = useState("Reserved");
@@ -53,7 +54,7 @@ export function QuickAppointmentDialog({ open, onOpenChange, patient }: QuickApp
 
   useEffect(() => {
     if (!open) {
-      setStaffId(""); setServiceId("");
+      setStaffId(""); setServiceId(""); setTherapistIds([]);
       setInvestigation("");
       setAppointmentStatus("Reserved"); setAppointmentType("Walk-in");
       setDate(format(new Date(), "yyyy-MM-dd"));
@@ -143,7 +144,8 @@ export function QuickAppointmentDialog({ open, onOpenChange, patient }: QuickApp
         patient_id: patient.id,
         patient_name: `${patient.first_name} ${patient.last_name}`.trim(),
         staff_id: staffId || null,
-        therapist_id: therapistId || null,
+        therapist_id: therapistIds[0] || null,
+        therapist_ids: therapistIds,
         service: serviceName,
         status: appointmentStatus,
         start_time: start.toISOString(),
@@ -176,9 +178,15 @@ export function QuickAppointmentDialog({ open, onOpenChange, patient }: QuickApp
             serviceName: data.serviceName,
             patientGender: patient.gender,
           },
-        }).then(({ error }) => {
-          if (error) console.error("WhatsApp send failed:", error);
-          else toast.success("WhatsApp confirmation sent");
+        }).then(async ({ error }) => {
+          if (error) {
+            // Told to the front desk, as on the Appointments page - a silent
+            // failure is a confirmation nobody knows to re-send.
+            console.error("WhatsApp send failed:", error);
+            toast.error(await edgeFunctionErrorMessage(error, "The WhatsApp confirmation could not be sent."));
+          } else {
+            toast.success("WhatsApp confirmation sent");
+          }
         });
       }
       onOpenChange(false);
@@ -220,15 +228,13 @@ export function QuickAppointmentDialog({ open, onOpenChange, patient }: QuickApp
               </Select>
             </div>
             <div>
-              <Label>Therapist</Label>
-              <StaffCombobox
+              <Label>{THERAPIST_FIELD_LABEL}</Label>
+              <StaffMultiCombobox
                 className="mt-1.5"
-                value={therapistId}
-                onValueChange={setTherapistId}
+                value={therapistIds}
+                onValueChange={setTherapistIds}
                 roleFilter={[...THERAPIST_ROLES]}
-                allowNone
-                noneLabel="No therapist assigned"
-                placeholder="Select"
+                placeholder="Select therapist or nurse"
               />
             </div>
             <div>

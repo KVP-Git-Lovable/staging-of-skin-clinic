@@ -18,6 +18,18 @@ export interface FieldDef {
   optionsSource?: string;
   /** Recurring yearly date (birthday/anniversary) - matched on day+month, ignoring year. */
   anniversary?: boolean;
+  /**
+   * For a field that holds one value for display but several underneath: the
+   * row key carrying the full list, used for FILTERING only.
+   *
+   * An appointment's `therapist` column shows the first person, sorts by them
+   * and charts by them, which is what the clinic asked for. But a filter has
+   * to ask about everyone - "therapist is Reena" must find the visit she
+   * assisted on second, not only the ones she led. Naming a separate key
+   * rather than turning `key` into an array keeps formatCell, sortRows and
+   * computeChartData reading exactly what they read before.
+   */
+  multiKey?: string;
 }
 
 export function fieldDefIn(fields: FieldDef[], key: string): FieldDef | undefined {
@@ -208,6 +220,20 @@ function matchOne(row: any, c: FilterCondition, fields: FieldDef[], rawValue: Ra
   if (!def) return true;
   const val = rawValue(row, c.field);
 
+  if (def.multiKey) {
+    const raw = rawValue(row, def.multiKey);
+    const items = (Array.isArray(raw) ? raw : String(raw ?? "").split(","))
+      .map((v) => String(v ?? "").trim())
+      .filter(Boolean);
+    if (c.operator === "is_empty") return items.length === 0;
+    if (c.operator === "is_not_empty") return items.length > 0;
+    // A negative has to hold for every one of them. "Therapist is not Reena"
+    // must not return a visit she worked on merely because a second person
+    // was on it too - that is the whole failure this exists to prevent.
+    const negative = c.operator === "not_equals" || c.operator === "not_contains";
+    return negative ? items.every((i) => matchText(i, c)) : items.some((i) => matchText(i, c));
+  }
+
   if (c.operator === "is_empty") {
     return val === null || val === undefined || String(val).trim() === "";
   }
@@ -252,6 +278,11 @@ function matchOne(row: any, c: FilterCondition, fields: FieldDef[], rawValue: Ra
     return dayValue >= range.from.getTime() && dayValue <= range.to.getTime();
   }
 
+  return matchText(val, c);
+}
+
+/** One value against one text/picklist condition. */
+function matchText(val: unknown, c: FilterCondition): boolean {
   const s = String(val ?? "").toLowerCase();
   const q = String(c.value ?? "").toLowerCase();
   switch (c.operator) {

@@ -78,18 +78,14 @@ Deno.serve(async (req) => {
       }, 400);
     }
 
-    // The patient this number belongs to, matched on the last ten digits as
-    // the webhook matches, so the reply is filed against the same record.
-    const last10 = phone.replace(/\D/g, "").slice(-10);
-    let patientId: string | null = null;
-    if (last10.length === 10) {
-      const { data: patient } = await admin
-        .from("patients")
-        .select("id")
-        .or(`phone.eq.${phone},phone.ilike.%${last10}`)
-        .limit(1);
-      patientId = patient?.[0]?.id ?? null;
-    }
+    // The patient this number belongs to, decided the same way the webhook
+    // decides it, so a staff reply is filed against the same record the
+    // patient's own messages are.
+    //
+    // This used to take the first row back from an unordered LIMIT 1, which
+    // on the 2,587 numbers here that carry more than one patient answered
+    // arbitrarily - the bug that thanked Vihaan for Pooja's confirmation.
+    const { data: patientId } = await admin.rpc("whatsapp_patient_for_phone", { p_phone: phone });
 
     // Recorded as outbound, which is all the thread reads. `role` is one of
     // user/assistant/system/tool by the table's own rule, so a person's reply

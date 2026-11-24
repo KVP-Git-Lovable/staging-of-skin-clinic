@@ -16,6 +16,7 @@ import { DateInput } from "@/components/shared/DateInput";
 import { TimePicker12h } from "@/components/shared/TimePicker12h";
 import { PdfPreviewDialog } from "@/components/shared/PdfPreviewDialog";
 import { usePrescriptionPreview } from "@/hooks/usePrescriptionPreview";
+import { withSortOrder } from "@/lib/prescriptionOrder";
 import { MAX_DATETIME, MIN_DATETIME, isPlausibleIso } from "@/lib/dateInput";
 
 import { useNavigate } from "react-router-dom";
@@ -293,7 +294,16 @@ export function ProcedureDetailSheet({ procedureId, onClose, onSaved }: Procedur
     queryKey: ["procedure-prescriptions", procedureId],
     queryFn: async () => {
       if (!procedureId) return [];
-      const { data, error } = await supabase.from("prescriptions").select("*").eq("procedure_id", procedureId);
+      // In the order the clinician typed them. See lib/prescriptionOrder.ts:
+      // every product of one save shares a created_at, so without sort_order
+      // the database returns them however it likes.
+      const { data, error } = await supabase
+        .from("prescriptions")
+        .select("*")
+        .eq("procedure_id", procedureId)
+        .order("sort_order", { nullsFirst: false })
+        .order("created_at")
+        .order("id");
       if (error) throw error;
       return data;
     },
@@ -773,15 +783,25 @@ export function ProcedureDetailSheet({ procedureId, onClose, onSaved }: Procedur
       const droppedMedicines = editPrescriptions
         .filter(rx => !rx._deleted && losesCatalogueLink(rx.product_id, catalogue))
         .map(rx => rx.medicine_name);
-      const existing = editPrescriptions.filter(rx => rx.id && !rx._deleted);
       const deleted = editPrescriptions.filter(rx => rx.id && rx._deleted);
-      const newRx = editPrescriptions.filter(rx => !rx.id && !rx._deleted && (rx.medicine_name || (rx.product_id && rx.product_id !== OTHERS_VALUE)));
+      // Numbered across the doctor's whole visible list, not within each of
+      // the two groups below - otherwise a row moved above an existing one
+      // would be written with an index from its own group and the move would
+      // not stick. Deleted rows are dropped BEFORE numbering so the gap they
+      // leave does not shift everything under them.
+      const visible = withSortOrder(
+        editPrescriptions.filter(rx =>
+          !rx._deleted && (rx.id || rx.medicine_name || (rx.product_id && rx.product_id !== OTHERS_VALUE))),
+      );
+      const existing = visible.filter(rx => rx.id);
+      const newRx = visible.filter(rx => !rx.id);
 
       for (const rx of deleted) {
         await supabase.from("prescriptions").delete().eq("id", rx.id!);
       }
       for (const rx of existing) {
         await supabase.from("prescriptions").update({
+          sort_order: rx.sort_order,
           product_id: productIdForSave(rx.product_id, catalogue),
           medicine_name: rx.medicine_name,
           dosage: rx.dosage,
@@ -794,6 +814,7 @@ export function ProcedureDetailSheet({ procedureId, onClose, onSaved }: Procedur
       if (newRx.length > 0) {
         await supabase.from("prescriptions").insert(newRx.map(rx => ({
           procedure_id: procedureId!,
+          sort_order: rx.sort_order,
           product_id: productIdForSave(rx.product_id, catalogue),
           medicine_name: rx.medicine_name,
           dosage: rx.dosage,

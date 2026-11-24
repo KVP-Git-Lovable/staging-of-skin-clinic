@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Plus, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NumberField } from "@/components/shared/NumberField";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -124,7 +125,7 @@ export default function KnowledgeCategories() {
           <div className="space-y-3">
             <div><Label>Name *</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
             <div><Label>Description</Label><Textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
-            <div><Label>Sort order</Label><Input type="number" value={form.sort_order} onChange={(e) => setForm({ ...form, sort_order: Number(e.target.value) || 0 })} /></div>
+            <div><Label>Sort order</Label><NumberField min={0} max={9999} emptyValue={0} data-testid="category-sort-order" value={form.sort_order} onChange={(sort_order) => setForm({ ...form, sort_order })} /></div>
             <div className="flex items-center gap-2"><Switch checked={form.is_active} onCheckedChange={(v) => setForm({ ...form, is_active: v })} /><Label>Active</Label></div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={close}>Cancel</Button>

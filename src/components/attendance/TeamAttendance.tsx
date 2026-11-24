@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { format, subDays } from "date-fns";
+import { format } from "date-fns";
 import { MapPin, Users } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
@@ -11,8 +11,20 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { hoursWorked, type AttendanceRecord } from "@/lib/attendance";
 import { formatFix, mapsLink, type Fix } from "@/lib/geo";
 import { nonWorkingReason } from "@/lib/workingDays";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { StaffCombobox } from "@/components/shared/StaffCombobox";
 import { useAttendanceSettings } from "@/hooks/useAttendanceSettings";
 import { FaceBadge } from "@/pages/Attendance";
+import {
+  ATTENDANCE_PERIODS, DEFAULT_ATTENDANCE_PERIOD, periodRange, type AttendancePeriod,
+} from "@/lib/attendancePeriod";
+
+/**
+ * Enough rows that nobody scrolls to the end, few enough that "All time"
+ * cannot one day fetch every attendance record the clinic has ever written.
+ * There was no bound at all before.
+ */
+const ROW_LIMIT = 500;
 
 /**
  * Everyone's attendance, with the photos.
@@ -34,18 +46,32 @@ import { FaceBadge } from "@/pages/Attendance";
  */
 export function TeamAttendance() {
   const { weekOffs, holidays } = useAttendanceSettings();
-  const [from, setFrom] = useState(format(subDays(new Date(), 6), "yyyy-MM-dd"));
-  const [to, setTo] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [period, setPeriod] = useState<AttendancePeriod>(DEFAULT_ATTENDANCE_PERIOD);
+  // Kept for the custom range, which is the only thing that still shows them.
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  /** "" is everybody - the value StaffCombobox's own "none" option sends. */
+  const [staffId, setStaffId] = useState("");
   const [photo, setPhoto] = useState<{ url: string; who: string; when: string } | null>(null);
 
+  const range = periodRange(period, new Date(), { from, to });
+
   const { data: rows = [], isLoading, error } = useQuery({
-    queryKey: ["attendance", "admin", from, to],
+    queryKey: ["attendance", "admin", period, range?.from ?? "", range?.to ?? "", staffId],
     queryFn: async () => {
-      const { data, error } = await supabase
+      let q = supabase
         .from("attendance_records")
-        .select("*, staff(first_name, last_name, role)")
-        .gte("date", from).lte("date", to)
-        .order("date", { ascending: false });
+        .select("*, staff(first_name, last_name, role)");
+      // No range at all for "All time", rather than a date picked to be
+      // safely far in the past and compared against every row.
+      if (range) q = q.gte("date", range.from).lte("date", range.to);
+      if (staffId) q = q.eq("staff_id", staffId);
+      const { data, error } = await q
+        .order("date", { ascending: false })
+        // Without the second sort, everybody who clocked in on one day came
+        // back in whatever order the database felt like.
+        .order("check_in_time", { ascending: false })
+        .limit(ROW_LIMIT);
       if (error) throw error;
       return (data || []) as unknown as (AttendanceRecord & { staff: unknown })[];
     },
@@ -57,18 +83,50 @@ export function TeamAttendance() {
         <Users className="h-5 w-5 text-primary" />All staff
       </h2>
 
-      {/* Share the row rather than two fixed 160px boxes: at 375px those
-          came to 332px against ~343px of usable width, and iOS renders a
-          date input wider than that again. */}
+      {/* Share the row rather than fixed-width boxes: at 375px two 160px
+          date inputs came to 332px against ~343px of usable width, and iOS
+          renders a date input wider than that again. */}
       <div className="flex flex-wrap gap-3 items-end">
         <div className="min-w-0 flex-1 sm:flex-none">
-          <Label htmlFor="from" className="text-xs">From</Label>
-          <Input id="from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-full sm:w-40" />
+          <Label htmlFor="period" className="text-xs">Period</Label>
+          <Select value={period} onValueChange={(v) => setPeriod(v as AttendancePeriod)}>
+            <SelectTrigger id="period" className="w-full sm:w-44" data-testid="attendance-period">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ATTENDANCE_PERIODS.map((p) => (
+                <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
+
         <div className="min-w-0 flex-1 sm:flex-none">
-          <Label htmlFor="to" className="text-xs">To</Label>
-          <Input id="to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-full sm:w-40" />
+          <Label className="text-xs">Staff</Label>
+          <StaffCombobox
+            value={staffId}
+            onValueChange={setStaffId}
+            allowNone
+            noneLabel="All staff"
+            placeholder="All staff"
+            className="w-full sm:w-56"
+          />
         </div>
+
+        {/* Only under Custom range, so the two boxes are still reachable
+            without sitting on the screen for everybody who wanted "today". */}
+        {period === "custom" && (
+          <>
+            <div className="min-w-0 flex-1 sm:flex-none">
+              <Label htmlFor="from" className="text-xs">From</Label>
+              <Input id="from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-full sm:w-40" />
+            </div>
+            <div className="min-w-0 flex-1 sm:flex-none">
+              <Label htmlFor="to" className="text-xs">To</Label>
+              <Input id="to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-full sm:w-40" />
+            </div>
+          </>
+        )}
       </div>
 
       {error ? (
@@ -121,6 +179,13 @@ export function TeamAttendance() {
               </Card>
             );
           })}
+          {rows.length >= ROW_LIMIT && (
+            // Said out loud rather than quietly truncated: a list that stops
+            // without explanation reads as "nobody else clocked in".
+            <p className="text-xs text-muted-foreground text-center pt-2" data-testid="row-limit-notice">
+              Showing the most recent {ROW_LIMIT}. Narrow the period or pick one person to see further back.
+            </p>
+          )}
         </div>
       )}
 

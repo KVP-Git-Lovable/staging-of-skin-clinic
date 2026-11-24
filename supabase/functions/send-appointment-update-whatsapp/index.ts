@@ -1,3 +1,4 @@
+import { titleFromGender } from "../_shared/patient-greeting.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 const corsHeaders = {
@@ -17,14 +18,6 @@ function normalizePhone(phone: string): string | null {
   if (cleaned.length === 10) return `+91${cleaned}`;
   if (cleaned.length === 12 && cleaned.startsWith("91")) return `+${cleaned}`;
   return `+${cleaned}`;
-}
-
-function titleFromGender(gender?: string | null): string {
-  if (!gender) return "";
-  const g = gender.toLowerCase();
-  if (g.startsWith("m")) return "Mr.";
-  if (g.startsWith("f")) return "Ms.";
-  return "";
 }
 
 // If an ISO timestamp is passed instead of a pre-formatted string, render it

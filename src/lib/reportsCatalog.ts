@@ -1,3 +1,7 @@
+import { createElement } from "react";
+import { RcaDecisionCell } from "@/components/feedback/RcaDecisionCell";
+import { decisionSummary, matchesDecisionFilter, RCA_FILTER_OPTIONS } from "@/lib/feedbackCaseDecision";
+import { rcaStatusLabel } from "@/lib/feedbackRca";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchAll } from "@/lib/supabasePaginate";
 import { ALL_APPOINTMENT_STATUSES } from "@/lib/appointmentStatus";
@@ -86,6 +90,13 @@ export interface ReportConfig {
   title: string;
   description: string;
   category: "Patients" | "Operations" | "Finance" | "Marketing";
+  /**
+   * Keep it off the /reports catalogue page. For a report that is reached
+   * from its own place in the menu - All Feedbacks lives under Feedback,
+   * beside the cases it opens - so the catalogue is not given a second tile
+   * for the same thing.
+   */
+  hidden?: boolean;
   columns: ReportColumn[];
   filters: ReportFilterDef[];
   searchFields?: string[];
@@ -226,7 +237,7 @@ export const INVOICE_MONEY_COLUMNS: ReportColumn[] = [
   { key: "total_amount", label: "Total", sortable: true, type: "currency" },
 ];
 
-export const REPORTS: ReportConfig[] = [
+const BASE_REPORTS: ReportConfig[] = [
   {
     key: "patients",
     title: "Patients",
@@ -1140,6 +1151,92 @@ export const REPORTS: ReportConfig[] = [
     },
   },
 ];
+
+/**
+ * All Feedbacks - the patient feedback report, plus the decision it leads to.
+ *
+ * Same columns, same filters, same cards and chart as the report on /reports:
+ * derived from it rather than copied, so a column added there appears here
+ * too and the two cannot drift into disagreeing about the clinic's numbers.
+ *
+ * What it adds is the last column. A score below the clinic's limits opens a
+ * case by itself; this is where somebody says whether that case is worth
+ * working, without having to go and find it first.
+ */
+const feedbackReport = BASE_REPORTS.find((r) => r.key === "patient_feedback");
+if (!feedbackReport) throw new Error("All Feedbacks is derived from the patient_feedback report, which is missing.");
+
+export const ALL_FEEDBACKS_KEY = "all_feedbacks";
+
+const allFeedbacks: ReportConfig = {
+  ...feedbackReport,
+  key: ALL_FEEDBACKS_KEY,
+  title: "All Feedbacks",
+  description:
+    "Every NPS score and star rating patients have left, with the visit it was about. "
+    + "A score below the clinic's limits opens a case; the last column is where you say whether it is worth working.",
+  // Reached from Feedback in the menu, so the catalogue does not need a tile.
+  hidden: true,
+  /**
+   * The existing five, plus one for the decision. A new array, so the report
+   * on /reports keeps exactly the filters it has today.
+   */
+  filters: [
+    ...feedbackReport.filters,
+    {
+      key: "rca",
+      label: "RCA",
+      type: "select",
+      options: RCA_FILTER_OPTIONS,
+      matches: matchesDecisionFilter,
+    },
+  ],
+  columns: [
+    ...feedbackReport.columns,
+    {
+      key: "rca_decision",
+      label: "RCA",
+      sortable: true,
+      // accessor as well as render: the CSV and the PDF cannot call render,
+      // and "which of these still needs deciding" is the first thing anybody
+      // would want out of an exported sheet.
+      accessor: (r) => decisionSummary(r, rcaStatusLabel),
+      // createElement, not JSX: this catalogue is a .ts file.
+      render: (r) => createElement(RcaDecisionCell, { row: r }),
+    },
+  ],
+  /**
+   * The feedback rows, then their cases.
+   *
+   * A second query rather than an embed: feedback_rca.feedback_id does have a
+   * foreign key, but the report's own fetcher is reused wholesale here and
+   * flattening the case on afterwards keeps that reuse intact.
+   */
+  fetcher: async (params) => {
+    const rows = await feedbackReport.fetcher(params);
+    const ids = rows.map((r: { id?: string }) => r.id).filter((id): id is string => !!id);
+    if (!ids.length) return rows;
+
+    const cases: { id: string; feedback_id: string; status: string | null }[] = [];
+    // Chunked: the clinic has 1,224 feedback rows and a URL has a limit.
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data, error } = await supabase
+        .from("feedback_rca")
+        .select("id, feedback_id, status")
+        .in("feedback_id", ids.slice(i, i + 200));
+      if (error) throw error;
+      cases.push(...((data || []) as typeof cases));
+    }
+    const byFeedback = new Map(cases.map((c) => [c.feedback_id, c]));
+
+    return rows.map((r: { id?: string }) => {
+      const c = r.id ? byFeedback.get(r.id) : undefined;
+      return { ...r, rca_case_id: c?.id ?? null, rca_status: c?.status ?? null };
+    });
+  },
+};
+
+export const REPORTS: ReportConfig[] = [...BASE_REPORTS, allFeedbacks];
 
 export function getReport(key: string) {
   return REPORTS.find((r) => r.key === key);

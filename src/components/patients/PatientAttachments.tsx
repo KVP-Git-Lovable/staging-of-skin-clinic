@@ -1,7 +1,9 @@
-import { useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Camera, FileText, Loader2, Paperclip, Trash2, Upload } from "lucide-react";
+import {
+  Camera, FileText, Loader2, Minus, Paperclip, Plus, RotateCcw, Trash2, Upload,
+} from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +16,11 @@ import { displayDate } from "@/lib/dateInput";
 import { attachmentStoragePath } from "@/lib/attachmentPath";
 import { attachmentKind } from "@/lib/attachmentPreview";
 import { uploadFailureMessage, uploadSuccessMessage, type FailedUpload } from "@/lib/uploadSummary";
+import { useCanEdit } from "@/hooks/useCanEdit";
+import {
+  NO_OFFSET, ZOOM_MAX, ZOOM_MIN, canPan, clampPan, nextZoom, toggleZoom,
+  zoomLabel, zoomTransform, type Offset,
+} from "@/lib/imageZoom";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
@@ -67,6 +74,11 @@ export function PatientAttachments({
   defaultProcedureId = null,
   title,
 }: PatientAttachmentsProps) {
+  const queryClient = useQueryClient();
+  // Reclassifying somebody's consent form as a prescription is an edit to the
+  // patient record, so it needs the same right. A nurse or therapist reaching
+  // this list from the appointment sheet keeps the read-only badge.
+  const canEdit = useCanEdit("patients");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [filter, setFilter] = useState<string>("all");
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -81,6 +93,29 @@ export function PatientAttachments({
   // A file that has moved in storage must show its icon rather than a broken
   // image, the same way the photo grid handles one.
   const [failedThumbnails, setFailedThumbnails] = useState<Set<string>>(new Set());
+  // Zoom, for reading a dose written in biro. These are the whole of it: a
+  // scale and a translation, both fed to one transform.
+  const [zoom, setZoom] = useState(ZOOM_MIN);
+  const [pan, setPan] = useState<Offset>(NO_OFFSET);
+  const panStart = useRef<{ x: number; y: number; from: Offset } | null>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+
+  // A fresh document opens at the fit. Carrying the last one's 400% over is
+  // disorienting, and on a different page shape it lands nowhere useful.
+  useEffect(() => {
+    setZoom(ZOOM_MIN);
+    setPan(NO_OFFSET);
+  }, [viewing?.id]);
+
+  const frameSize = () => {
+    const box = frameRef.current?.getBoundingClientRect();
+    return { width: box?.width ?? 0, height: box?.height ?? 0 };
+  };
+
+  const applyZoom = (next: number) => {
+    setZoom(next);
+    setPan((p) => clampPan(p, next, frameSize()));
+  };
 
   const { data: attachments = [], refetch } = useQuery({
     queryKey: ["patient-attachments", patientId],
@@ -95,6 +130,43 @@ export function PatientAttachments({
       return (data ?? []) as unknown as PatientAttachment[];
     },
     enabled: !!patientId,
+  });
+
+  /**
+   * Put a mis-filed document in the right box.
+   *
+   * The type was settled once, in the dialog at upload, and applied to the
+   * whole batch - so one wrong pick on a batch of seven scans left seven
+   * consent forms filed as prescriptions with no way back but delete and
+   * re-upload. Nothing in the app had ever issued an update to this table.
+   *
+   * The database has allowed it all along: the UPDATE policy added with the
+   * table takes any active staff member. This only stops being theoretical.
+   */
+  const setDocumentType = useMutation({
+    mutationFn: async ({ id, type }: { id: string; type: string }) => {
+      // .select() matters. A row-level-security refusal on an UPDATE is not
+      // an error - Postgres matches no rows - so without asking for the row
+      // back we would report a change that never happened.
+      const { data, error } = await supabase
+        .from("procedure_attachments")
+        .update({ document_type: type })
+        .eq("id", id)
+        .select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error("Nothing was changed. Check you still have access to this patient.");
+      }
+      return { type };
+    },
+    onSuccess: ({ type }) => {
+      // The patient page's own count query shares this key, and the procedure
+      // sheet keeps its own list of the same rows.
+      queryClient.invalidateQueries({ queryKey: ["patient-attachments", patientId] });
+      queryClient.invalidateQueries({ queryKey: ["patient-attachments-for-procedure"] });
+      toast.success(`Filed as ${type}`);
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -274,9 +346,38 @@ export function PatientAttachments({
                   <div className="min-w-0">
                       <p className="font-medium text-sm truncate">{att.file_name}</p>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        {att.document_type && (
+                        {canEdit ? (
+                          /* The badge became a picker rather than growing an
+                             Edit button beside it: the type is one of five
+                             words and changing it is one click, so a dialog
+                             to do it would be three. Untyped rows - the ones
+                             the procedure sheet uploads without a type - get
+                             a placeholder here, which is the only place in
+                             the app they can be classified at all. */
+                          <Select
+                            value={att.document_type ?? ""}
+                            disabled={setDocumentType.isPending}
+                            onValueChange={(type) => {
+                              if (type !== att.document_type) setDocumentType.mutate({ id: att.id, type });
+                            }}
+                          >
+                            <SelectTrigger
+                              className="h-6 w-auto gap-1 border-0 bg-primary/10 px-2 py-0 text-[10px] font-medium text-primary hover:bg-primary/15 focus:ring-1"
+                              aria-label={`Document type for ${att.file_name || "attachment"}`}
+                              data-testid={`doc-type-${att.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <SelectValue placeholder="Set type" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {DOCUMENT_TYPES.map((t) => (
+                                <SelectItem key={t} value={t}>{t}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : att.document_type ? (
                           <Badge variant="default" className="text-[10px]">{att.document_type}</Badge>
-                        )}
+                        ) : null}
                         {/* No visit label here. This used to show the service
                             of the prescription the file is filed against, with
                             the bare word "Consultation" filtered out. That
@@ -385,9 +486,47 @@ export function PatientAttachments({
             const isPdf = kind === "pdf";
             return (
               <div className="space-y-3">
-                <div className="bg-muted/40 rounded-lg overflow-hidden flex items-center justify-center" style={{ minHeight: 400 }}>
+                <div
+                  ref={frameRef}
+                  className="bg-muted/40 rounded-lg overflow-hidden flex items-center justify-center touch-none"
+                  style={{ minHeight: 400 }}
+                  onWheel={(e) => {
+                    // Ctrl/Cmd + wheel only, which is also what a trackpad
+                    // pinch sends - the same rule the skin tracker uses. A
+                    // bare wheel still scrolls the dialog, as it should.
+                    if (!isImage || !(e.ctrlKey || e.metaKey)) return;
+                    e.preventDefault();
+                    applyZoom(nextZoom(zoom, e.deltaY < 0 ? 1 : -1));
+                  }}
+                  onPointerDown={(e) => {
+                    if (!isImage || !canPan(zoom)) return;
+                    panStart.current = { x: e.clientX, y: e.clientY, from: pan };
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  }}
+                  onPointerMove={(e) => {
+                    const start = panStart.current;
+                    if (!start) return;
+                    setPan(clampPan(
+                      { x: start.from.x + (e.clientX - start.x), y: start.from.y + (e.clientY - start.y) },
+                      zoom,
+                      frameSize(),
+                    ));
+                  }}
+                  onPointerUp={() => { panStart.current = null; }}
+                  onPointerCancel={() => { panStart.current = null; }}
+                >
                   {isImage ? (
-                    <img src={url} alt={name} className="max-h-[70vh] w-auto object-contain" />
+                    <img
+                      src={url}
+                      alt={name}
+                      draggable={false}
+                      onDoubleClick={() => applyZoom(toggleZoom(zoom))}
+                      className="max-h-[70vh] w-auto object-contain select-none transition-transform duration-150 motion-reduce:transition-none"
+                      style={{
+                        transform: zoomTransform(zoom, pan),
+                        cursor: canPan(zoom) ? (panStart.current ? "grabbing" : "grab") : "zoom-in",
+                      }}
+                    />
                   ) : isPdf ? (
                     <iframe src={url} title={name} className="w-full h-[70vh]" />
                   ) : (
@@ -397,7 +536,44 @@ export function PatientAttachments({
                     </div>
                   )}
                 </div>
-                <div className="flex justify-end gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {isImage && (
+                    /* Left of the existing buttons, so Download stays where
+                       it has always been. A PDF keeps the browser's own
+                       viewer, which already zooms. */
+                    <div className="mr-auto flex items-center gap-1" data-testid="zoom-controls">
+                      <Button
+                        variant="outline" size="icon" className="h-8 w-8"
+                        aria-label="Zoom out" data-testid="zoom-out"
+                        disabled={zoom <= ZOOM_MIN}
+                        onClick={() => applyZoom(nextZoom(zoom, -1))}
+                      >
+                        <Minus className="h-3.5 w-3.5" />
+                      </Button>
+                      <span className="min-w-[3.5rem] text-center text-xs tabular-nums text-muted-foreground" data-testid="zoom-level">
+                        {zoomLabel(zoom)}
+                      </span>
+                      <Button
+                        variant="outline" size="icon" className="h-8 w-8"
+                        aria-label="Zoom in" data-testid="zoom-in"
+                        disabled={zoom >= ZOOM_MAX}
+                        onClick={() => applyZoom(nextZoom(zoom, 1))}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost" size="icon" className="h-8 w-8"
+                        aria-label="Reset zoom" data-testid="zoom-reset"
+                        disabled={zoom === ZOOM_MIN && pan.x === 0 && pan.y === 0}
+                        onClick={() => { setZoom(ZOOM_MIN); setPan(NO_OFFSET); }}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                      </Button>
+                      <span className="ml-1 hidden text-[11px] text-muted-foreground sm:inline">
+                        Double-click to zoom, drag to move
+                      </span>
+                    </div>
+                  )}
                   <Button variant="outline" size="sm" asChild>
                     <a href={url} target="_blank" rel="noopener noreferrer">Open in new tab</a>
                   </Button>

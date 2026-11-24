@@ -1,25 +1,36 @@
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { format } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import {
-  attendancePhotoPath,
-  dayButtons,
-  dayPhase,
-  elapsedLabel,
-  faceVerdict,
-  hoursWorked,
-  type AttendanceRecord,
-  type FaceResult,
+  attendancePhotoPath, faceFailureReason, faceVerdict,
+  type FaceFailureReason, type FaceResult,
 } from "@/lib/attendance";
 import { stampPhotoOrOriginal } from "@/lib/stampPhoto";
 import { ATTENDANCE_PHOTO_MAX_EDGE } from "@/lib/attendance";
 import { currentPosition, reverseGeocode, type Fix } from "@/lib/geo";
-import { nonWorkingReason } from "@/lib/workingDays";
-import { useAttendanceSettings } from "@/hooks/useAttendanceSettings";
+import { useMyAttendanceToday, attendanceToday } from "@/hooks/useMyAttendanceToday";
 import { uploadStaffPhoto } from "@/lib/staffPhoto";
+
+/**
+ * What the edge function said, when it said no.
+ *
+ * supabase-js hands back a FunctionsHttpError whose `context` is the raw
+ * Response; the message it puts on the Error object is only the status line,
+ * so the reason has to be read out of the body. Anything unreadable returns
+ * null and the caller falls back to the service-fault path it always had.
+ */
+async function refusalReason(error: unknown): Promise<FaceFailureReason | null> {
+  const response = (error as { context?: Response })?.context;
+  if (!response || typeof response.json !== "function") return null;
+  try {
+    const body = await response.clone().json();
+    return faceFailureReason((body as { error?: string } | null)?.error);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * One person's working day: the state of it, and the two acts that change it.
@@ -41,7 +52,7 @@ import { uploadStaffPhoto } from "@/lib/staffPhoto";
  * dashboard updates the attendance page without either knowing about the
  * other.
  */
-const today = () => format(new Date(), "yyyy-MM-dd");
+const today = attendanceToday;
 
 export type DayStep = "idle" | "registering" | "locating" | "photo" | "verifying" | "saving";
 export type DayKind = "check_in" | "check_out";
@@ -91,8 +102,9 @@ export function useMyAttendanceDay() {
     })();
   };
 
-  const { config, weekOffs, holidays } = useAttendanceSettings();
-  const closedToday = nonWorkingReason(new Date(), weekOffs, holidays);
+  // The reading half, shared with the dashboard card so there is one query
+  // and one idea of "today". Everything below this line is the acting half.
+  const { record, phase, buttons, config, closedToday, hours, elapsed, refetch } = useMyAttendanceToday();
 
   const { data: staff, refetch: refetchStaff } = useQuery({
     queryKey: ["staff", "photo", staffId],
@@ -104,20 +116,6 @@ export function useMyAttendanceDay() {
     },
   });
 
-  const { data: record, refetch } = useQuery({
-    queryKey: ["attendance", "today", staffId],
-    enabled: !!staffId,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("attendance_records").select("*")
-        .eq("staff_id", staffId!).eq("date", today()).maybeSingle();
-      if (error) throw error;
-      return (data as unknown as AttendanceRecord) ?? null;
-    },
-  });
-
-  const buttons = dayButtons(record);
-  const phase = dayPhase(record);
   const hasPhoto = !!String(staff?.photo_url ?? "").trim();
   const busy = step !== "idle";
 
@@ -231,6 +229,12 @@ export function useMyAttendanceDay() {
             status: (data.status as FaceResult["status"]) ?? "bypassed",
             confidence: Number(data.confidence) || 0,
           };
+        } else if (error) {
+          // The function refused and said why. Every non-2xx used to land in
+          // the same bucket as an unreachable service, so somebody with no
+          // profile photo - 17 of the 18 active staff - was told three times
+          // that the service was broken. Read the body and say the real thing.
+          result = { status: "bypassed", confidence: 0, reason: await refusalReason(error) };
         }
       } catch {
         // Unreachable function is a service fault, not a mismatch.
@@ -239,6 +243,9 @@ export function useMyAttendanceDay() {
 
       const verdict = faceVerdict(result, thisAttempt, config.face_max_attempts);
       if (!verdict.proceed) {
+        // A refusal the person cannot retry their way out of does not spend
+        // one of their goes: add the photo, come back, and all three are there.
+        if (result.reason) setAttempt(attempt);
         setStep("idle");
         toast.error(verdict.message, { duration: 8000 });
         if (verdict.retry) { setMode(kind); setCameraOpen(true); }
@@ -331,8 +338,8 @@ export function useMyAttendanceDay() {
     press,
     cameraProps,
     /** Two decimals, for totals. */
-    hours: hoursWorked(record?.check_in_time, record?.check_out_time),
+    hours,
     /** "3h 42m", for reading at a glance. */
-    elapsed: (now?: Date) => elapsedLabel(record?.check_in_time, record?.check_out_time, now),
+    elapsed,
   };
 }

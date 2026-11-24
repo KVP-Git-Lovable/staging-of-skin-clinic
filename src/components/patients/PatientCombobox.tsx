@@ -10,7 +10,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { buildFuzzyOrFilter, buildTokenFilters, fuzzyRank, normalize, fuzzyScore } from "@/lib/fuzzySearch";
+import { buildFuzzyOrFilter, fuzzyRank, normalize, fuzzyScore } from "@/lib/fuzzySearch";
+import { isPhoneSearch, patientSearchFilters } from "@/lib/patientSearch";
 import { hasRealName, isPhoneLikeName, rawPatientName } from "@/lib/patientName";
 import {
   PATIENT_PICKER_PAGE_SIZE,
@@ -128,6 +129,18 @@ export function PatientCombobox({
         if (prefixMatch && prefixMatch.length > 0) {
           return ((prefixMatch ?? []) as unknown) as PatientLite[];
         }
+      } else if (isPhoneSearch(q)) {
+        // A number is not a name, and must not go through the name ladder:
+        // those ilike the raw token, so "+91 96634 38657" is three tokens that
+        // match nobody. One filter over the normalised digits, covering the
+        // alternate number - which this picker never searched, so booking an
+        // appointment for a caller using their second number found no one.
+        let phoneQuery = supabase.from("patients").select(columns);
+        for (const f of patientSearchFilters(q)) phoneQuery = phoneQuery.or(f);
+        const { data: byPhone } = await phoneQuery.order("first_name").limit(PAGE_SIZE);
+        if (byPhone && byPhone.length > 0) {
+          return ((byPhone ?? []) as unknown) as PatientLite[];
+        }
       } else if (tokens.length === 1) {
         // Single word: try exact match first
         const token = tokens[0];
@@ -160,7 +173,7 @@ export function PatientCombobox({
       // Every word must match somewhere - see buildTokenFilters. The fuzzy
       // fallback below still covers a strict miss.
       let orQuery = supabase.from("patients").select(columns);
-      for (const f of buildTokenFilters(q, ["first_name", "last_name", "phone"])) {
+      for (const f of patientSearchFilters(q)) {
         orQuery = orQuery.or(f);
       }
       const { data: orResults, error } = await orQuery

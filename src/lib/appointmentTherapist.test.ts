@@ -13,11 +13,11 @@ import {
  * the decisions behind the therapist field.
  */
 describe("THERAPIST_ROLES", () => {
-  it("lists therapists and nobody else", () => {
-    // The clinic was asked and chose therapists only - Reena, Rita and
-    // Suchitra - rather than also offering the three nurses. One shared
-    // constant so the four pickers cannot drift.
-    expect([...THERAPIST_ROLES]).toEqual(["Therapist"]);
+  it("lists therapists AND nurses, and nobody else", () => {
+    // The clinic was asked once and chose therapists only; they came back
+    // because nurses assist just as often. Order matters only in that the
+    // four pickers share this one constant and so cannot drift apart.
+    expect([...THERAPIST_ROLES]).toEqual(["Therapist", "Nurse"]);
   });
 
   it("matches the exact spelling staff.role uses", () => {
@@ -32,8 +32,9 @@ describe("THERAPIST_ROLES", () => {
 });
 
 describe("isTherapistRole", () => {
-  it("accepts the role as Staff Management spells it", () => {
+  it("accepts both roles as Staff Management spells them", () => {
     expect(isTherapistRole("Therapist")).toBe(true);
+    expect(isTherapistRole("Nurse")).toBe(true);
   });
 
   it("is case- and whitespace-insensitive", () => {
@@ -45,9 +46,10 @@ describe("isTherapistRole", () => {
   });
 
   it("REFUSES every other role in this clinic", () => {
-    // The clinic chose therapists only. Nurses, doctors and the rest must not
-    // appear in the lookup, however plausible.
-    for (const role of ["Doctor", "Nurse", "Receptionist", "Lab Technician", "Admin", "Pharmacist", "Staff"]) {
+    // Widened to nurses, not thrown open. A doctor is recorded in the Doctor
+    // field and must not also be offered here, and "Staff" - the role an
+    // account gets by default - must never be assignable to a treatment.
+    for (const role of ["Doctor", "Receptionist", "Lab Technician", "Admin", "Pharmacist", "Staff"]) {
       expect(isTherapistRole(role), role).toBe(false);
     }
   });
@@ -59,6 +61,8 @@ describe("isTherapistRole", () => {
     expect(isTherapistRole(undefined)).toBe(false);
     expect(isTherapistRole("Therapists")).toBe(false);
     expect(isTherapistRole("Senior Therapist")).toBe(false);
+    expect(isTherapistRole("Nurses")).toBe(false);
+    expect(isTherapistRole("Head Nurse")).toBe(false);
   });
 });
 

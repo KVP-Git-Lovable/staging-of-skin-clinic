@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, BookOpen, Copy } from "lucide-react";
+import { AlertTriangle, BookOpen, Copy, Printer, Users } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { ageInYears, matchesDemographics, targetLabel } from "@/lib/knowledge";
@@ -9,11 +9,18 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ArticleContent } from "./ArticleContent";
 import { ArticleEngagement, EngagementMeter } from "./ArticleEngagement";
+import { PatientSummary } from "./PatientSummary";
+import { patientSummaryIsPublic } from "@/lib/patientSummary";
+import { printPatientHandout } from "@/lib/patientHandout";
+import { reserveTab } from "@/lib/newTab";
 import { Link } from "react-router-dom";
 
 interface Props { patientId: string; serviceIds?: (string | null)[]; serviceNames?: string[]; onCopyCare?: (text: string, serviceId: string) => void; }
 export function ClinicalGuidelines({ patientId, serviceIds = [], serviceNames = [], onCopyCare }: Props) {
   const [opened, setOpened] = useState<Set<string>>(new Set());
+  /** Per article, so one open guideline can be shown to the patient while
+   *  the others stay clinical. Resets on close, like `opened`. */
+  const [patientView, setPatientView] = useState<Set<string>>(new Set());
   const ids = [...new Set(serviceIds.filter((id): id is string => !!id))].sort();
   const names = [...new Set(serviceNames.filter(Boolean).map((s) => s.trim()))].sort();
   const { data: categories = [] } = useKnowledgeCategories();
@@ -50,7 +57,21 @@ export function ClinicalGuidelines({ patientId, serviceIds = [], serviceNames = 
             <div className="mt-2"><EngagementMeter stats={stats.find((s) => s.article_id === a.id)} /></div>
             {opened.has(a.id) && <div className="space-y-4 mt-3">
               <Button asChild size="sm" variant="link" className="p-0 h-auto"><Link to={`/knowledge/${a.id}`}>Open in Knowledge Master</Link></Button>
-              <ArticleContent article={a} />
+              {/* The patient's own words, for turning the screen round mid-consult.
+                  Only offered where there is one: every article here is already
+                  published and active, which patientSummaryIsPublic re-checks
+                  rather than assuming from this panel's query. */}
+              {patientSummaryIsPublic(a) && <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant={patientView.has(a.id) ? "default" : "outline"} data-testid="patient-view-toggle" onClick={() => setPatientView((previous) => { const next = new Set(previous); if (next.has(a.id)) next.delete(a.id); else next.add(a.id); return next; })}>
+                  <Users className="h-3.5 w-3.5 mr-2" />{patientView.has(a.id) ? "Show clinical view" : "Show patient view"}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => {
+                  // reserveTab FIRST, in the click itself - see src/lib/newTab.ts.
+                  const tab = reserveTab();
+                  void printPatientHandout(a, { serviceName: a.title }, tab).catch((e) => toast.error((e as Error).message));
+                }}><Printer className="h-3.5 w-3.5 mr-2" />Print handout</Button>
+              </div>}
+              {patientView.has(a.id) ? <PatientSummary article={a} /> : <ArticleContent article={a} />}
               {a.pre_post_care && <Button size="sm" variant="outline" onClick={async () => {
                 try { if (addCare) { addCare(a.pre_post_care, a.service_id); toast.success("Care added to prescription notes. Review before saving."); } else { await navigator.clipboard.writeText(a.pre_post_care); toast.success("Care instructions copied"); } } catch { toast.error("Could not copy care instructions"); }
               }}><Copy className="h-3.5 w-3.5 mr-2" />{addCare ? "Add care to prescription notes" : "Copy care instructions"}</Button>}

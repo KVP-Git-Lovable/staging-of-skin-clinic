@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { decisionRowClass } from "@/lib/feedbackCaseDecision";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { ArrowLeft, Download, FileText, Loader2 } from "lucide-react";
@@ -24,8 +25,14 @@ function startOfToday(): Date {
   return d;
 }
 
-const ReportView = () => {
-  const { key } = useParams<{ key: string }>();
+/**
+ * `reportKey` is for a report with its own place in the menu - All Feedbacks
+ * sits under Feedback - which therefore has no :key in its path. Everything
+ * else still reads the key off the route exactly as before.
+ */
+const ReportView = ({ reportKey }: { reportKey?: string } = {}) => {
+  const { key: routeKey } = useParams<{ key: string }>();
+  const key = reportKey ?? routeKey;
   const report = key ? getReport(key) : undefined;
 
   // Billing is the one thing still scoped per doctor - every other clinical
@@ -279,9 +286,11 @@ const ReportView = () => {
     <div>
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <div>
-          <Link to="/reports" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground mb-1">
-            <ArrowLeft className="h-3 w-3 mr-1" /> Back to Reports
-          </Link>
+          {!report.hidden && (
+            <Link to="/reports" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground mb-1">
+              <ArrowLeft className="h-3 w-3 mr-1" /> Back to Reports
+            </Link>
+          )}
           <h1 className="page-title">{report.title}</h1>
           <p className="page-subtitle">{report.description}</p>
         </div>
@@ -383,6 +392,9 @@ const ReportView = () => {
           rows={filteredRows}
           rowHref={report.rowHref}
           defaultSort={report.defaultSort}
+          // A red line down the rows still waiting on a decision. Returns ""
+          // for every other report, so nothing else changes colour.
+          rowClassName={decisionRowClass}
         />
       )}
     </div>

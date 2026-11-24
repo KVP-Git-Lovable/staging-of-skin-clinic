@@ -1,0 +1,77 @@
+-- The content of this migration cannot be applied: column patient_summary of public.knowledge_articles already exists (this change, including the knowledge_article_guard update, was applied to the live database directly before the file was renumbered to 0033).
+-- -- A patient's version of a knowledge article.
+-- --
+-- -- The articles are written for clinicians and read like it - "barrier-first
+-- -- preparation", "tyrosinase-inhibitor priming", Fitzpatrick phototypes, 12,500
+-- -- characters on average with bracketed citations. There was nothing to show a
+-- -- patient, so the clinic was explaining every treatment from scratch, verbally.
+-- --
+-- -- patient_summary is the same knowledge in plain words. patient_facts is the
+-- -- handful of short answers the app draws as at-a-glance cards - how many
+-- -- sessions, how long each takes, what the downtime is - plus the do/don't lists
+-- -- and a simple before/during/after timeline. Structured rather than prose
+-- -- because the app draws them; a paragraph cannot be rendered as a card.
+-- --
+-- -- Both are columns on the article, deliberately, rather than a table of their
+-- -- own: that is what puts them under knowledge_article_guard's review gate and
+-- -- knowledge_article_snapshot's revision history with no further work. A patient
+-- -- summary is clinical content, and it must not be able to reach a patient
+-- -- without the same doctor approval as the article it came from.
+-- --
+-- -- Additive with defaults, so the build the clinic is running right now keeps
+-- -- working the moment this is applied: it selects * and ignores the extra keys,
+-- -- and its saves omit these columns, which leaves them untouched.
+-- 
+-- ALTER TABLE public.knowledge_articles
+--   ADD COLUMN patient_summary text NOT NULL DEFAULT '',
+--   ADD COLUMN patient_facts jsonb NOT NULL DEFAULT '{}'::jsonb;
+-- 
+-- -- The guard, with patient_facts validated the way resources already are.
+-- --
+-- -- Everything above the patient_facts block is unchanged from 0027. The shape is
+-- -- checked here rather than only in the client because the client is not the
+-- -- only way in, and a malformed card would otherwise be discovered by a patient
+-- -- looking at a screen.
+-- --
+-- -- Deliberately NOT required for review or publication: the six articles that
+-- -- exist must keep saving, and a doctor may reasonably publish clinical guidance
+-- -- before anyone has written the patient's version of it.
+-- CREATE OR REPLACE FUNCTION public.knowledge_article_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+-- DECLARE r jsonb; actor text; fact record;
+-- BEGIN
+--  IF NOT public.can_manage_knowledge() THEN RAISE EXCEPTION 'Only active doctors and admins can manage knowledge articles' USING ERRCODE='42501'; END IF;
+--  IF btrim(NEW.title)='' THEN RAISE EXCEPTION 'Article title is required'; END IF;
+--  IF NOT EXISTS (SELECT 1 FROM public.knowledge_article_categories WHERE id=NEW.category_id AND is_active) AND (TG_OP='INSERT' OR NEW.category_id IS DISTINCT FROM OLD.category_id) THEN RAISE EXCEPTION 'Choose an active category'; END IF;
+--  IF jsonb_typeof(NEW.resources)<>'array' OR jsonb_array_length(NEW.resources)>50 THEN RAISE EXCEPTION 'Invalid article resources'; END IF;
+--  FOR r IN SELECT * FROM jsonb_array_elements(NEW.resources) LOOP
+--   IF coalesce(r->>'kind','') NOT IN ('file','image','link','video','article') OR coalesce(btrim(r->>'title'),'')='' THEN RAISE EXCEPTION 'Resource title and type are required'; END IF;
+--   IF r->>'path' IS NOT NULL THEN
+--    IF r->>'path' !~ '^[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9a-f-]{36}\.[a-z0-9]{1,8}$' THEN RAISE EXCEPTION 'Invalid attachment path'; END IF;
+--   ELSIF r->>'kind'='article' THEN
+--    IF NOT EXISTS(SELECT 1 FROM public.knowledge_articles WHERE id::text=r->>'article_id' AND deleted_at IS NULL) THEN RAISE EXCEPTION 'Related article not found'; END IF;
+--   ELSIF coalesce(r->>'url','') !~ '^https?://[^[:space:]]+$' THEN RAISE EXCEPTION 'Resource links must use http or https'; END IF;
+--  END LOOP;
+--  IF length(NEW.patient_summary)>6000 THEN RAISE EXCEPTION 'The patient summary is too long'; END IF;
+--  IF jsonb_typeof(NEW.patient_facts)<>'object' THEN RAISE EXCEPTION 'Invalid patient summary details'; END IF;
+--  FOR fact IN SELECT key, value FROM jsonb_each(NEW.patient_facts) LOOP
+--   IF fact.key IN ('sessions','each_visit','downtime','comfort','results_when') THEN
+--    IF jsonb_typeof(fact.value)<>'string' OR length(fact.value #>> '{}')>120 THEN RAISE EXCEPTION 'Patient summary "%" must be one short line', fact.key; END IF;
+--   ELSIF fact.key IN ('dos','donts') THEN
+--    IF jsonb_typeof(fact.value)<>'array' OR jsonb_array_length(fact.value)>8 THEN RAISE EXCEPTION 'Patient summary "%" takes up to 8 points', fact.key; END IF;
+--    IF EXISTS(SELECT 1 FROM jsonb_array_elements(fact.value) v WHERE jsonb_typeof(v)<>'string' OR btrim(v #>> '{}')='' OR length(v #>> '{}')>200) THEN RAISE EXCEPTION 'Each patient summary point must be one short line'; END IF;
+--   ELSIF fact.key='timeline' THEN
+--    IF jsonb_typeof(fact.value)<>'array' OR jsonb_array_length(fact.value)>6 THEN RAISE EXCEPTION 'The patient summary timeline takes up to 6 steps'; END IF;
+--    IF EXISTS(SELECT 1 FROM jsonb_array_elements(fact.value) v WHERE jsonb_typeof(v)<>'object' OR coalesce(btrim(v->>'when'),'')='' OR coalesce(btrim(v->>'what'),'')='' OR length(v->>'when')>60 OR length(v->>'what')>300) THEN RAISE EXCEPTION 'Each timeline step needs a short when and what'; END IF;
+--   ELSE RAISE EXCEPTION 'Unknown patient summary field "%"', fact.key;
+--   END IF;
+--  END LOOP;
+--  SELECT coalesce(nullif(btrim(concat_ws(' ',first_name,last_name)),''),'Staff member') INTO actor FROM public.staff WHERE auth_user_id=auth.uid() LIMIT 1;
+--  NEW.updated_at=clock_timestamp(); NEW.updated_by=auth.uid(); NEW.updated_by_name=actor;
+--  IF TG_OP='INSERT' THEN NEW.created_by=auth.uid(); NEW.created_at=clock_timestamp(); NEW.created_by_name=actor; NEW.revision=1;
+--  ELSE NEW.created_by=OLD.created_by; NEW.created_at=OLD.created_at; NEW.created_by_name=OLD.created_by_name; NEW.revision=OLD.revision+1; END IF;
+--  IF NEW.status IN ('reviewed','published') THEN
+--   IF btrim(NEW.summary)='' OR btrim(NEW.clinical_protocol)='' THEN RAISE EXCEPTION 'Summary and clinical protocol are required before review or publication'; END IF;
+--   NEW.reviewed_by=auth.uid(); NEW.reviewed_at=clock_timestamp();
+--  ELSE NEW.reviewed_by=NULL; NEW.reviewed_at=NULL; END IF;
+--  RETURN NEW;
+-- END $$;

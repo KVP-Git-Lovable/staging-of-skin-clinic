@@ -142,7 +142,7 @@ const StaffManagement = () => {
     mutationFn: async () => {
       const payload: any = {
         first_name: form.first_name,
-        last_name: form.last_name,
+        last_name: form.last_name.trim() || "-",
         role: form.role,
         phone: form.phone || null,
         email: form.email || null,
@@ -253,7 +253,7 @@ const StaffManagement = () => {
                   <Input className="mt-1" value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} />
                 </div>
                 <div>
-                  <Label>Last Name *</Label>
+                  <Label>Last Name</Label>
                   <Input className="mt-1" value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} />
                 </div>
               </div>
@@ -342,7 +342,7 @@ const StaffManagement = () => {
 
             <DialogFooter className="pt-4">
               <Button variant="outline" onClick={closeForm}>Cancel</Button>
-              <Button onClick={() => saveMutation.mutate()} disabled={!form.first_name || !form.last_name || saveMutation.isPending}>
+              <Button onClick={() => saveMutation.mutate()} disabled={!form.first_name || saveMutation.isPending}>
                 {saveMutation.isPending ? "Saving..." : editId ? "Update" : "Create"}
               </Button>
             </DialogFooter>

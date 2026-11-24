@@ -13,13 +13,24 @@
  * Whose names fill the therapist lookup.
  *
  * Matched against `staff.role`, which is free text with no constraint behind
- * it - the values come from FALLBACK_ROLES in StaffManagement. Exactly one
- * role for now; the clinic was asked and chose therapists only, not nurses.
- * Widening the lookup is a matter of adding to this array, and every picker
- * follows, which is the entire reason it is a shared constant and not four
- * copies of `["Therapist"]`.
+ * it - the values come from FALLBACK_ROLES in StaffManagement. Therapists and
+ * nurses: the clinic was asked once before and chose therapists only, then
+ * found that nurses assist just as often, so both are offered now. Widening
+ * the lookup further is a matter of adding to this array, and all four
+ * pickers follow, which is the entire reason it is a shared constant and not
+ * four copies of the same list.
  */
-export const THERAPIST_ROLES = ["Therapist"] as const;
+export const THERAPIST_ROLES = ["Therapist", "Nurse"] as const;
+
+/**
+ * What the appointment screens call the field.
+ *
+ * Only the appointment screens. The Appointments list column, the report
+ * fields and every saved list view still say "Therapist", because renaming a
+ * column renames it inside views the clinic has already built and saved, and
+ * they asked for the picker to change, not their reports.
+ */
+export const THERAPIST_FIELD_LABEL = "Therapist / Nurse";
 
 /** The staff columns a therapist picker needs, and nothing more. */
 export interface TherapistCandidate {
@@ -44,8 +55,50 @@ export function isTherapistRole(role: string | null | undefined): boolean {
 /** The shape the name helpers need - anything appointment-like will do. */
 export interface TherapistBearing {
   therapist_name?: string | null;
+  therapist_id?: string | null;
+  /** Everyone assigned, newest column. Empty on a row the published build wrote. */
+  therapist_ids?: string[] | null;
   /** The embedded staff row, when a query joined one. */
   therapist?: { first_name?: string | null; last_name?: string | null } | null;
+}
+
+/**
+ * Everyone assigned to an appointment, in the order they were chosen.
+ *
+ * The same fallback ProcedureDetailSheet uses for assisted_by_ids: the array
+ * when it has anything in it, otherwise the single column. Both halves are
+ * needed and neither is redundant - an appointment saved on clinic.quickapp.ai
+ * sets therapist_id alone and leaves the array at its '{}' default, and that
+ * appointment has to open here showing the person it was given.
+ */
+export function therapistIdsOf(
+  appointment: TherapistBearing | null | undefined,
+): string[] {
+  if (!appointment) return [];
+  const many = (appointment.therapist_ids ?? []).filter(Boolean) as string[];
+  if (many.length > 0) return many;
+  const one = String(appointment.therapist_id ?? "").trim();
+  return one ? [one] : [];
+}
+
+/**
+ * The names of everyone assigned, as one string - "Reena ., Rita .".
+ *
+ * Takes the ids and a lookup rather than fetching: the screens that show this
+ * already have the staff loaded, and a helper that queried would be untestable
+ * without mocking. `fallback` is the stored therapist_name, used when the
+ * lookup has nothing for an id - a staff record that has since been deleted
+ * still has its name kept on the appointment, and losing it on screen would
+ * undo the whole point of keeping it.
+ */
+export function therapistNamesOf(
+  ids: string[],
+  names: Record<string, string>,
+  fallback?: string | null,
+): string {
+  const resolved = ids.map((id) => String(names[id] ?? "").trim()).filter(Boolean);
+  if (resolved.length > 0) return resolved.join(", ");
+  return String(fallback ?? "").trim();
 }
 
 /**

@@ -49,6 +49,7 @@ const AMBIGUOUS_EMBEDS: Record<string, string[]> = {
   appointments: ["staff"],
   assets: ["vendors"],               // vendor_id, amc_vendor_id
   comms_journeys: ["staff"],         // created_by, submitted_by, approver_id
+  feedback_rca: ["staff"],           // assigned_to, resolved_by, created_by
   leads: ["staff"],                  // created_by, owner_id
   leave_applications: ["staff"],     // staff_id, approved_by
   patient_family_members: ["patients"], // patient_id, related_patient_id

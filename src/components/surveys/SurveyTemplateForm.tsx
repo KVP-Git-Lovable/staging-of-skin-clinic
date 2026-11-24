@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef } from "react";
+import { SurveyQuestionsEditor, type EditableQuestion } from "@/components/surveys/SurveyQuestionsEditor";
+import { questionsPerPage } from "@/lib/surveyQuestionConfig";
+import { questionSyncPlan } from "@/lib/surveyQuestionSync";
 import { numVal } from "@/lib/numberInput";
 import { Plus, Trash2, GripVertical, Search, Copy, Send, Mic, MicOff, Sparkles, Loader2, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -26,6 +29,13 @@ interface Question {
   options: string[];
   ideal_answer: any;
   sort_order: number;
+  /** What the clinic has said about it. See lib/surveyQuestionConfig.ts. */
+  image_url?: string | null;
+  help_text?: string;
+  is_required?: boolean;
+  max_choices?: number | null;
+  max_length?: number | null;
+  is_active?: boolean;
 }
 
 interface TemplateProduct {
@@ -55,6 +65,7 @@ interface Props {
 export function SurveyTemplateForm({ open, onOpenChange, templateId }: Props) {
   const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
+  const [questionsPerPageValue, setQuestionsPerPageValue] = useState(1);
   const [tab, setTab] = useState("basic");
 
   // Basic fields
@@ -142,12 +153,21 @@ export function SurveyTemplateForm({ open, onOpenChange, templateId }: Props) {
     setName(t.name); setDescription(t.description || ""); setAgeMin(t.age_range_min || 0);
     setAgeMax(t.age_range_max || 120); setProblemAreaId(t.problem_area_id || "");
     setServiceId(t.service_id || ""); setIsActive(t.is_active ?? true);
+    setQuestionsPerPageValue(questionsPerPage(t.questions_per_page));
 
     const { data: qs } = await supabase.from("survey_questions").select("*").eq("template_id", templateId!).order("sort_order");
+    // The clinic's own settings come back too, or saving would write the
+    // defaults over a picture they uploaded.
     setQuestions((qs || []).map((q: any) => ({
       id: q.id, question_text: q.question_text, question_type: q.question_type,
       options: Array.isArray(q.options) ? q.options : [], ideal_answer: q.ideal_answer || {},
       sort_order: q.sort_order,
+      image_url: q.image_url ?? null,
+      help_text: q.help_text ?? "",
+      is_required: q.is_required ?? true,
+      max_choices: q.max_choices ?? null,
+      max_length: q.max_length ?? null,
+      is_active: q.is_active ?? true,
     })));
 
     const { data: prods } = await supabase.from("survey_template_products").select("*, pharma_products(name)").eq("template_id", templateId!);
@@ -160,22 +180,6 @@ export function SurveyTemplateForm({ open, onOpenChange, templateId }: Props) {
     setTemplateServices((svcs || []).map((s: any) => ({
       id: s.id, service_id: s.service_id, service_name: s.services?.name, advice_text: s.advice_text || "",
     })));
-  };
-
-  const addQuestion = () => {
-    setQuestions([...questions, {
-      question_text: "", question_type: "text", options: [], ideal_answer: {}, sort_order: questions.length,
-    }]);
-  };
-
-  const updateQuestion = (index: number, field: string, value: any) => {
-    const updated = [...questions];
-    (updated[index] as any)[field] = value;
-    setQuestions(updated);
-  };
-
-  const removeQuestion = (index: number) => {
-    setQuestions(questions.filter((_, i) => i !== index));
   };
 
   const addProduct = (productId: string) => {
@@ -198,6 +202,7 @@ export function SurveyTemplateForm({ open, onOpenChange, templateId }: Props) {
       const templateData: any = {
         name, description, age_range_min: ageMin, age_range_max: ageMax,
         problem_area_id: problemAreaId || null, service_id: serviceId || null, is_active: isActive,
+        questions_per_page: questionsPerPage(questionsPerPageValue),
       };
       if (approvalStatus) templateData.approval_status = approvalStatus;
 
@@ -211,14 +216,54 @@ export function SurveyTemplateForm({ open, onOpenChange, templateId }: Props) {
         tplId = data.id;
       }
 
-      // Sync questions
-      await supabase.from("survey_questions").delete().eq("template_id", tplId!);
-      if (questions.length > 0) {
-        const qRows = questions.map((q, i) => ({
-          template_id: tplId!, question_text: q.question_text, question_type: q.question_type,
-          options: q.options, ideal_answer: q.ideal_answer, sort_order: i,
-        }));
-        const { error } = await supabase.from("survey_questions").insert(qRows);
+      // Sync questions.
+      //
+      // Update in place, never delete-and-reinsert. A question keeps its id
+      // for life because survey_responses.answers is keyed by it: the old
+      // save gave every question a new id each time, cutting answers loose
+      // from the questions they answered. It is also what makes the clinic's
+      // own settings survive - a picture, help text, a question marked
+      // optional all live on this row.
+      const { data: existing, error: existingError } = await supabase
+        .from("survey_questions")
+        .select("id")
+        .eq("template_id", tplId!);
+      if (existingError) throw existingError;
+
+      const fields = (q: Question) => ({
+        question_text: q.question_text,
+        question_type: q.question_type,
+        options: q.options,
+        ideal_answer: q.ideal_answer,
+        image_url: q.image_url ?? null,
+        help_text: q.help_text ?? "",
+        is_required: q.is_required ?? true,
+        max_choices: q.max_choices ?? null,
+        max_length: q.max_length ?? null,
+        is_active: q.is_active ?? true,
+      });
+
+      const plan = questionSyncPlan((existing || []).map((r) => r.id), questions);
+
+      for (const q of plan.update) {
+        const { error } = await supabase
+          .from("survey_questions")
+          .update({ ...fields(q as unknown as Question), sort_order: q.sort_order })
+          .eq("id", q.id);
+        if (error) throw error;
+      }
+      if (plan.insert.length > 0) {
+        const { error } = await supabase.from("survey_questions").insert(
+          plan.insert.map((q) => ({
+            ...fields(q as unknown as Question),
+            sort_order: q.sort_order,
+            template_id: tplId!,
+          })),
+        );
+        if (error) throw error;
+      }
+      if (plan.deleteIds.length > 0) {
+        const { error } = await supabase.from("survey_questions").delete().in("id", plan.deleteIds);
         if (error) throw error;
       }
 
@@ -601,82 +646,12 @@ export function SurveyTemplateForm({ open, onOpenChange, templateId }: Props) {
               </div>
             )}
 
-            {questions.map((q, i) => (
-              <div key={i} className="border rounded-lg p-4 space-y-3 bg-muted/20">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <GripVertical className="h-4 w-4" />
-                    <span>Q{i + 1}</span>
-                  </div>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => removeQuestion(i)}>
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
-                </div>
-                <Input
-                  value={q.question_text}
-                  onChange={(e) => updateQuestion(i, "question_text", e.target.value)}
-                  placeholder="Enter your question..."
-                />
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label className="text-xs">Type</Label>
-                    <Select value={q.question_type} onValueChange={(v) => updateQuestion(i, "question_type", v)}>
-                      <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="text">Text</SelectItem>
-                        <SelectItem value="single_choice">Single Choice</SelectItem>
-                        <SelectItem value="multi_choice">Multi Choice</SelectItem>
-                        <SelectItem value="scale">Scale (1-10)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {q.question_type === "scale" && (
-                    <div>
-                      <Label className="text-xs">Ideal Score (1-10)</Label>
-                      <Input
-                        type="number" min={1} max={10}
-                        value={q.ideal_answer?.value || ""}
-                        onChange={(e) => updateQuestion(i, "ideal_answer", { value: Number(e.target.value) })}
-                        className="mt-1"
-                      />
-                    </div>
-                  )}
-                </div>
-                {(q.question_type === "single_choice" || q.question_type === "multi_choice") && (
-                  <div className="space-y-2">
-                    <Label className="text-xs">Options (comma-separated)</Label>
-                    <Input
-                      value={q.options.join(", ")}
-                      onChange={(e) => updateQuestion(i, "options", e.target.value.split(",").map(s => s.trim()).filter(Boolean))}
-                      placeholder="Option 1, Option 2, Option 3"
-                    />
-                    <div>
-                      <Label className="text-xs">Ideal Answer</Label>
-                      <Input
-                        value={q.ideal_answer?.value || ""}
-                        onChange={(e) => updateQuestion(i, "ideal_answer", { value: e.target.value })}
-                        placeholder="The ideal/expected answer"
-                        className="mt-1"
-                      />
-                    </div>
-                  </div>
-                )}
-                {q.question_type === "text" && (
-                  <div>
-                    <Label className="text-xs">Ideal Answer (keywords or expected response)</Label>
-                    <Input
-                      value={q.ideal_answer?.value || ""}
-                      onChange={(e) => updateQuestion(i, "ideal_answer", { value: e.target.value })}
-                      placeholder="Expected keywords or answer"
-                      className="mt-1"
-                    />
-                  </div>
-                )}
-              </div>
-            ))}
-            <Button variant="outline" className="w-full gap-2" onClick={addQuestion}>
-              <Plus className="h-4 w-4" /> Add Question
-            </Button>
+            <SurveyQuestionsEditor
+              questions={questions as EditableQuestion[]}
+              onChange={(next) => setQuestions(next as Question[])}
+              perPage={questionsPerPageValue}
+              onPerPageChange={setQuestionsPerPageValue}
+            />
           </TabsContent>
 
           <TabsContent value="products" className="space-y-4 mt-4">

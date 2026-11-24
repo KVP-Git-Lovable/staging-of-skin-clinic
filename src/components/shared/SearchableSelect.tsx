@@ -48,7 +48,18 @@ export function SearchableSelect({
           aria-expanded={open}
           className={cn("w-full justify-between font-normal", className)}
         >
-          {options.find((o) => o.id === value)?.name || <span className="text-muted-foreground">{placeholder}</span>}
+          {/* The name has to be able to shrink and be cut.
+              The button carries `whitespace-nowrap` and nothing that clips, so
+              as a bare text node a long option simply ran out of its box and
+              over the control beside it - "Skin Prep & Priming Formulas" sat
+              across the Status dropdown on Knowledge Articles. min-w-0 is the
+              part that fixes it: without it a flex child refuses to shrink
+              below its own content, and truncate has nothing to clip against.
+              SelectTrigger has done the same thing for ages, as
+              `[&>span]:line-clamp-1`. */}
+          <span className="min-w-0 flex-1 truncate text-left">
+            {options.find((o) => o.id === value)?.name || <span className="text-muted-foreground">{placeholder}</span>}
+          </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>

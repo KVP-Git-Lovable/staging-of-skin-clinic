@@ -20,7 +20,9 @@ const CATEGORY_ORDER = ["Patients", "Operations", "Finance", "Marketing"] as con
 const Reports = () => {
   const grouped = CATEGORY_ORDER.map((cat) => ({
     category: cat,
-    items: REPORTS.filter((r) => r.category === cat),
+    // `hidden` reports have their own place in the menu; the catalogue
+    // does not need a second tile for the same thing.
+    items: REPORTS.filter((r) => r.category === cat && !r.hidden),
   })).filter((g) => g.items.length > 0);
 
   return (

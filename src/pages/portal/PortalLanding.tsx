@@ -8,6 +8,11 @@ import {
   ChevronRight,
   Clock,
   Heart,
+  MapPin,
+  Mail,
+  Instagram,
+  Facebook,
+  Youtube,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,18 +23,36 @@ import {
 } from "@/components/ui/accordion";
 import { motion } from "framer-motion";
 import clinicLogo from "@/assets/skin-clinic-logo.png";
+import {
+  CLINIC_ADDRESS_LINES,
+  CLINIC_BLURB,
+  CLINIC_DIRECTIONS_URL,
+  CLINIC_EMAILS,
+  CLINIC_EXPLORE_LINKS,
+  CLINIC_HOURS,
+  CLINIC_PHONES,
+  CLINIC_SOCIALS,
+  CLINIC_TAGLINE,
+  CLINIC_TEL,
+  CLINIC_WHATSAPP,
+} from "@/lib/clinicContact";
 import baAcneScars from "@/assets/portal-ba-acne-scars.jpg";
 import baPigmentation from "@/assets/portal-ba-pigmentation.jpg";
 import baAcneFace from "@/assets/portal-ba-acne-face.jpg";
+/* Already in the repo, used by the clinic page - a real 300x300 JPEG. The
+   other two doctors come from the clinic's CDN; she has no CDN image. */
+import docAshwini from "@/assets/clinic/real/dr-ashwini.jpg";
 
 /* ───────── tokens ───────── */
 const heading = { fontFamily: "'Plus Jakarta Sans', sans-serif" };
 const NAVY = "#1F2A44";
 const NAVY_DARK = "#1A1F36";
 const GREEN = "#1F8A3C";
-const PHONE = "9380682287";
-const WA_URL = `https://wa.me/91${PHONE}`;
-const TEL_URL = `tel:${PHONE}`;
+/* Every number, link and address on this page comes from one module. This
+   page used to dial 9380682287, which appeared nowhere else in the app, while
+   the clinic website and both bots gave patients 96201 23030. */
+const WA_URL = CLINIC_WHATSAPP;
+const TEL_URL = CLINIC_TEL;
 
 /* ───────── CDN (real clinic images from theskinclinic.org.in) ───────── */
 const CDN_NOV = "https://theskinclinicorgin.swipepages.media/2023/11/64c3bc8f029443001063c027";
@@ -141,7 +164,7 @@ const faqs = [
   },
   {
     q: "How do I Book an Appointment?",
-    a: "Booking with us is easy. Online: open the Patient Portal, fill out the form and a specialist will contact you. Phone: call 9380682287 during working hours and our friendly staff will help you choose a time. Walk-In: visit our Kadri, Mangalore clinic and our receptionists will be happy to schedule you in.",
+    a: "Booking with us is easy. Online: open the Patient Portal, fill out the form and a specialist will contact you. Phone: call +91 96201 23030 during working hours and our friendly staff will help you choose a time. Walk-In: visit our Kadri, Mangalore clinic and our receptionists will be happy to schedule you in.",
   },
   {
     q: "Is There Any Down Time After Treatments?",
@@ -275,8 +298,17 @@ const PortalLanding = () => {
             </h2>
             <div className="mt-4 mx-auto h-px w-20 bg-gray-300" />
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12">
+          {/* Three across from md up: with three doctors the old two-column
+              grid stranded the last one alone on its own row. */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-10">
             {[
+              {
+                img: DOCTOR_1,
+                name: "Dr. Vindhya A. Pai",
+                creds: "MBBS, MD Dermatologist",
+                role: "Founder of The Skin Clinic",
+                exp: "14+ Years of Experience",
+              },
               {
                 img: DOCTOR_2,
                 name: "Dr. Punya Suvarna",
@@ -285,13 +317,16 @@ const PortalLanding = () => {
                 exp: "5+ Years of Experience",
               },
               {
-                img: DOCTOR_1,
-                name: "Dr. Vindhya A. Pai",
-                creds: "MBBS, MD Dermatologist",
-                role: "Founder of The Skin Clinic",
-                exp: "14+ Years of Experience",
+                img: docAshwini,
+                name: "Dr. Ashwini Ashokan",
+                creds: "MBBS, MD (DVL)",
+                role: "Consultant Dermatologist",
+                /* No years-of-experience line: nothing in the app or on the
+                   clinic's own page says how long she has practised, and the
+                   clinic chose to leave it out rather than have a number
+                   invented. Add one here when they have it. */
               },
-            ].map((d) => (
+            ].map((d: { img: string; name: string; creds: string; role: string; exp?: string }) => (
               <div key={d.name} className="text-center">
                 <div className="rounded-3xl overflow-hidden shadow-lg aspect-square max-w-sm mx-auto bg-gray-100">
                   <img src={d.img} alt={d.name} loading="lazy" className="w-full h-full object-cover" />
@@ -305,9 +340,11 @@ const PortalLanding = () => {
                 <p className="text-sm md:text-base" style={{ color: NAVY }}>
                   {d.role}
                 </p>
-                <p className="text-sm md:text-base" style={{ color: NAVY }}>
-                  {d.exp}
-                </p>
+                {d.exp && (
+                  <p className="text-sm md:text-base" style={{ color: NAVY }}>
+                    {d.exp}
+                  </p>
+                )}
               </div>
             ))}
           </div>
@@ -604,48 +641,131 @@ const PortalLanding = () => {
         </div>
       </section>
 
-      {/* ── Footer ── */}
-      <footer className="border-t border-gray-200 bg-gray-50">
-        <div className="mx-auto max-w-7xl px-6 py-12 grid gap-10 md:grid-cols-3">
-          <div>
-            <div className="flex items-center gap-3 mb-4">
-              <img src={clinicLogo} alt="The Skin Clinic" className="h-12 w-auto object-contain" />
-              <span className="text-base font-bold" style={{ ...heading, color: NAVY }}>
+      {/* ── Footer ──
+          Rebuilt to match the clinic's own website footer. The Explore column
+          points at real sections of the /clinic page in this app: the public
+          site also has Skin AI, Blog and Careers pages, but none exist here
+          and /portal/:tab is a catch-all, so a link to a missing page would
+          silently open the patient dashboard rather than say anything. */}
+      <footer style={{ backgroundColor: NAVY_DARK }} className="text-white/70">
+        {/* Extra bottom room on a phone: the floating call and WhatsApp
+            buttons are fixed over the bottom-left of the viewport, and
+            without this the last email address sits underneath the call
+            button when you reach the end of the page. */}
+        <div className="mx-auto max-w-7xl px-6 pt-14 pb-32 md:pb-14 grid gap-10 md:grid-cols-2 lg:grid-cols-4">
+          <div className="lg:col-span-2">
+            {/* No white version of the logo exists, so it sits on a faint
+                light chip - the same treatment the clinic page's dark footer
+                uses - rather than disappearing into the navy. */}
+            <div className="flex items-center gap-3">
+              <img
+                src={clinicLogo}
+                alt="The Skin Clinic"
+                className="h-14 w-auto object-contain bg-white/10 rounded-lg p-1.5"
+              />
+              <span className="text-lg font-bold text-white" style={heading}>
                 The Skin Clinic
               </span>
             </div>
-            <p className="text-sm italic text-gray-600">Simply . Better . Skin</p>
+            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.25em]" style={{ color: "#6EE7B7" }}>
+              {CLINIC_TAGLINE}
+            </p>
+            <p className="mt-4 max-w-md text-sm leading-relaxed text-white/60">{CLINIC_BLURB}</p>
+            <div className="mt-6 flex gap-3">
+              {[
+                { Icon: Instagram, href: CLINIC_SOCIALS.instagram, label: "Instagram" },
+                { Icon: Facebook, href: CLINIC_SOCIALS.facebook, label: "Facebook" },
+                { Icon: Youtube, href: CLINIC_SOCIALS.youtube, label: "YouTube" },
+              ].map(({ Icon, href, label }) => (
+                <a
+                  key={label}
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={label}
+                  className="flex h-11 w-11 items-center justify-center rounded-md border border-white/20 text-white/80 transition-colors hover:border-white/50 hover:text-white"
+                >
+                  <Icon className="h-4 w-4" />
+                </a>
+              ))}
+            </div>
           </div>
+
           <div>
-            <h4 className="text-sm font-bold mb-4 uppercase tracking-wide" style={{ color: NAVY }}>
-              Services
+            <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-white" style={heading}>
+              Explore
             </h4>
-            <ul className="space-y-2 text-sm text-gray-600">
-              <li className="flex items-center gap-2"><ChevronRight className="h-3 w-3" /> Skin Treatment</li>
-              <li className="flex items-center gap-2"><ChevronRight className="h-3 w-3" /> Laser Hair Reduction</li>
-              <li className="flex items-center gap-2"><ChevronRight className="h-3 w-3" /> Hair Restoration</li>
-              <li className="flex items-center gap-2"><ChevronRight className="h-3 w-3" /> Pre Wedding Skin Care</li>
-              <li className="flex items-center gap-2"><ChevronRight className="h-3 w-3" /> Fat Loss</li>
+            <ul className="mt-5 space-y-3 text-sm">
+              {CLINIC_EXPLORE_LINKS.map((l) => (
+                <li key={l.href}>
+                  <a href={l.href} className="text-white/70 transition-colors hover:text-white">
+                    {l.label}
+                  </a>
+                </li>
+              ))}
             </ul>
           </div>
+
           <div>
-            <h4 className="text-sm font-bold mb-4 uppercase tracking-wide" style={{ color: NAVY }}>
-              Get in Touch
+            <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-white" style={heading}>
+              Visit &amp; Contact
             </h4>
-            <ul className="space-y-2 text-sm text-gray-600">
-              <li className="flex items-center gap-2"><Clock className="h-4 w-4" /> Mon – Sat: 10 AM to 8 PM</li>
-              <li className="flex items-center gap-2">
-                <Phone className="h-4 w-4" />{" "}
-                <a href={TEL_URL} className="hover:underline">
-                  9380682287
-                </a>
+            <ul className="mt-5 space-y-5 text-sm">
+              <li className="flex gap-3">
+                <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-white/50" />
+                <div>
+                  {CLINIC_ADDRESS_LINES.map((line) => (
+                    <p key={line} className="text-white/70">{line}</p>
+                  ))}
+                  <a
+                    href={CLINIC_DIRECTIONS_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-block text-xs font-semibold uppercase tracking-[0.15em] transition-opacity hover:opacity-80"
+                    style={{ color: "#6EE7B7" }}
+                  >
+                    Get directions →
+                  </a>
+                </div>
               </li>
-              <li className="flex items-center gap-2"><Heart className="h-4 w-4" /> Kadri, Mangalore</li>
+              <li className="flex gap-3">
+                <Clock className="mt-0.5 h-4 w-4 shrink-0 text-white/50" />
+                <div>
+                  <p className="text-white/70">{CLINIC_HOURS.days}</p>
+                  <p className="text-white/70">{CLINIC_HOURS.time}</p>
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <Phone className="mt-0.5 h-4 w-4 shrink-0 text-white/50" />
+                <div>
+                  {CLINIC_PHONES.map((ph) => (
+                    <p key={ph.tel}>
+                      <a href={ph.tel} className="text-white/70 transition-colors hover:text-white">
+                        {ph.label}
+                      </a>
+                    </p>
+                  ))}
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <Mail className="mt-0.5 h-4 w-4 shrink-0 text-white/50" />
+                <div>
+                  {CLINIC_EMAILS.map((email) => (
+                    <p key={email}>
+                      <a href={`mailto:${email}`} className="break-all text-white/70 transition-colors hover:text-white">
+                        {email}
+                      </a>
+                    </p>
+                  ))}
+                </div>
+              </li>
             </ul>
           </div>
         </div>
-        <div className="border-t border-gray-200 py-5 text-center text-xs text-gray-500">
-          © {new Date().getFullYear()} The Skin Clinic. All rights reserved.
+        <div className="border-t border-white/10">
+          <div className="mx-auto max-w-7xl px-6 py-5 text-center text-xs text-white/40">
+            © {new Date().getFullYear()} The Skin Clinic. All rights reserved.
+          </div>
         </div>
       </footer>
 

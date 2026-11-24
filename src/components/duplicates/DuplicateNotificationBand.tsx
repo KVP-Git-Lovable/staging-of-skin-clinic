@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, ArrowRight, CalendarPlus, Merge, X } from "lucide-react";
+import { AlertTriangle, ArrowRight, CalendarPlus, Merge, UserCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { getObject } from "@/lib/validation/schema";
@@ -11,7 +11,26 @@ interface Props {
   className?: string;
   onIgnore?: () => void;
   onCreateAppointment?: (record: Record<string, any>) => void;
+  /**
+   * Show the match WITHOUT leaving the page.
+   *
+   * Without this the open-record button is a bare navigate, and on the Add
+   * Patient form that unmounted the route, the page, the dialog and every
+   * field the receptionist had typed - the bug this prop exists to fix. The
+   * navigate stays as the fallback so a caller that has nothing to lose keeps
+   * today's behaviour.
+   */
+  onOpenRecord?: (record: Record<string, unknown>) => void;
+  /** Merge this record with the one being edited. Edit mode only. */
   onResolve?: (record: Record<string, any>) => void;
+  /**
+   * Abandon what is being typed and use the existing record instead.
+   *
+   * The Add-mode counterpart to onResolve. Merge rendered a button there that
+   * could never open, because DuplicateResolveDialog needs a saved record to
+   * merge INTO and there isn't one yet while registering somebody.
+   */
+  onUseInstead?: (record: Record<string, unknown>) => void;
 }
 
 const routeFor = (objectKey: string, id: string) => {
@@ -39,7 +58,9 @@ export default function DuplicateNotificationBand({
   className,
   onIgnore,
   onCreateAppointment,
+  onOpenRecord,
   onResolve,
+  onUseInstead,
 }: Props) {
   const navigate = useNavigate();
   const obj = getObject(objectKey);
@@ -96,7 +117,13 @@ export default function DuplicateNotificationBand({
               {actions.map((a) => {
                 if (a.key === "open_record" && link) {
                   return (
-                    <Button key={a.key} size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(link)}>
+                    <Button
+                      key={a.key}
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => (onOpenRecord ? onOpenRecord(m.record) : navigate(link))}
+                    >
                       <ArrowRight className="h-3.5 w-3.5 mr-1" /> {a.label}
                     </Button>
                   );
@@ -122,6 +149,16 @@ export default function DuplicateNotificationBand({
                   return (
                     <Button key={a.key} size="sm" variant="outline" className="h-7 text-xs" onClick={() => onResolve(m.record)}>
                       <Merge className="h-3.5 w-3.5 mr-1" /> {a.label}
+                    </Button>
+                  );
+                }
+                // Merge cannot work while a record is still being created, so
+                // in that mode the same slot offers the thing that can: stop
+                // typing a new one and go to the person already on file.
+                if (a.key === "merge" && onUseInstead) {
+                  return (
+                    <Button key={a.key} size="sm" variant="outline" className="h-7 text-xs" onClick={() => onUseInstead(m.record)}>
+                      <UserCheck className="h-3.5 w-3.5 mr-1" /> Use this patient instead
                     </Button>
                   );
                 }

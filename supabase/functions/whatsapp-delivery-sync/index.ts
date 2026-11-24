@@ -30,6 +30,10 @@ function kindOf(body: string): string {
   if (b.includes("rescheduled") || b.includes("has been moved")) return "reschedule";
   if (b.includes("invoice") || b.includes("bill")) return "invoice";
   if (b.includes("prescription")) return "prescription";
+  // Before the survey line on purpose: the 24-hour follow-up ends "Looking
+  // forward to your feedback", which that line would otherwise claim.
+  if (b.includes("one week follow up")) return "followup_1week";
+  if (b.includes("follow-up regarding your treatment")) return "followup_24h";
   if (b.includes("survey") || b.includes("feedback")) return "survey";
   return "message";
 }

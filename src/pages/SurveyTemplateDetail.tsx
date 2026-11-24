@@ -14,6 +14,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
+import { stillAsked } from "@/lib/surveyQuestionConfig";
 
 const SurveyTemplateDetail = () => {
   const { id } = useParams<{ id: string }>();
@@ -50,6 +51,9 @@ const SurveyTemplateDetail = () => {
     },
     enabled: !!id,
   });
+  // Retired questions stay in `questions` so past responses (below) still
+  // find the question they answered.
+  const asked = stillAsked(questions);
 
   // Fetch responses with patient info
   const { data: responses = [] } = useQuery({
@@ -162,14 +166,19 @@ const SurveyTemplateDetail = () => {
       {/* Questions */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Questions ({questions.length})</CardTitle>
+          <CardTitle className="text-base">Questions ({asked.length})</CardTitle>
+          {asked.length < questions.length && (
+            <p className="text-xs text-muted-foreground">
+              {questions.length - asked.length} retired, no longer asked. Past answers to them are kept.
+            </p>
+          )}
         </CardHeader>
         <CardContent>
-          {questions.length === 0 ? (
+          {asked.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-4">No questions added yet.</p>
           ) : (
             <div className="space-y-3">
-              {questions.map((q: any, i: number) => (
+              {asked.map((q: any, i: number) => (
                 <div key={q.id} className="flex gap-3 items-start p-3 rounded-lg bg-muted/30">
                   <span className="text-xs font-medium text-muted-foreground mt-0.5 shrink-0">Q{i + 1}</span>
                   <div className="flex-1 min-w-0">

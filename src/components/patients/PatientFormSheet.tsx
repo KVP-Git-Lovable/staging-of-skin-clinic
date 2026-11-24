@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { X, Search, Check, ChevronsUpDown, Plus, Trash2, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -52,6 +53,12 @@ import { Sparkles, Loader2 } from "lucide-react";
 import type { Tables, TablesInsert } from "@/integrations/supabase/types";
 import { findDuplicates, type DuplicateMatch } from "@/lib/duplicates/engine";
 import DuplicateNotificationBand from "@/components/duplicates/DuplicateNotificationBand";
+import PatientPreviewDialog, { type PreviewPatient } from "@/components/patients/PatientPreviewDialog";
+import { patientFormDirty } from "@/lib/patientFormDirty";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import DuplicateResolveDialog from "@/components/duplicates/DuplicateResolveDialog";
 
 
@@ -121,6 +128,23 @@ const emptyForm: TablesInsert<"patients"> = {
   consultation_reasons: null,
 };
 
+/**
+ * The form plus the consultation-reason state that lives beside it, as one
+ * object for patientFormDirty. Reasons are compared against what was loaded,
+ * not against "none", so a patient's saved reasons are not counted as typed.
+ */
+const withExtras = (
+  form: Record<string, unknown>,
+  reasons: string[],
+  othersAesthetic: string,
+  othersClinical: string,
+): Record<string, unknown> => ({
+  ...form,
+  __reasons: reasons,
+  __othersAesthetic: othersAesthetic,
+  __othersClinical: othersClinical,
+});
+
 export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, onSuccess }: PatientFormSheetProps) {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<TablesInsert<"patients">>(emptyForm);
@@ -140,15 +164,32 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
   const [resolveWith, setResolveWith] = useState<Record<string, any> | null>(null);
 
   const [duplicateAck, setDuplicateAck] = useState(false);
+  /** The suspected duplicate being looked at, over the form. Never navigates. */
+  const [previewing, setPreviewing] = useState<PreviewPatient | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  /**
+   * The form as it stood when the dialog opened. patientFormDirty compares
+   * against this rather than against a blank object, because emptyForm is not
+   * blank and a lead conversion pre-fills real values.
+   */
+  const initialFormRef = useRef<Record<string, unknown> | null>(null);
+  /** Family rows as loaded for this open ([] for a new patient). */
+  const initialFamilyRef = useRef<FamilyRow[]>([]);
   const [familyExisting, setFamilyExisting] = useState<Record<string, any>>({});
   const { toast } = useToast();
   const isEditing = !!patient;
+  const navigate = useNavigate();
 
 
 
   useEffect(() => {
+    // The value the form opens with. Built here and handed to BOTH setForm and
+    // the dirty-check snapshot: reading `form` back in this commit would see
+    // the previous render's state (emptyForm or the last patient), not this.
+    let opening: TablesInsert<"patients">;
+    let openingReasons = { reasons: [] as string[], othersAestheticText: "", othersClinicalText: "" };
     if (patient) {
-      setForm({
+      opening = {
         first_name: patient.first_name,
         last_name: patient.last_name,
         date_of_birth: patient.date_of_birth,
@@ -182,34 +223,36 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
         doctor_id: (patient as any).doctor_id || null,
         consultation_type: patient.consultation_type ?? null,
         consultation_reasons: patient.consultation_reasons ?? null,
-      });
+      };
       // Unpack the stored reasons, or editing and saving a patient would drop
       // whatever was typed into "Others".
-      {
-        const parsed = parseConsultationReasonsForEdit(patient.consultation_reasons);
-        setConsultationReasons(parsed.reasons);
-        setOthersAestheticText(parsed.othersAestheticText);
-        setOthersClinicalText(parsed.othersClinicalText);
-      }
+      openingReasons = parseConsultationReasonsForEdit(patient.consultation_reasons);
     } else if (defaultValues) {
-      setForm({
+      opening = {
         ...emptyForm,
         first_name: defaultValues.first_name || "",
         last_name: defaultValues.last_name || "",
         phone: defaultValues.phone || null,
         email: defaultValues.email || null,
-      });
+      };
     } else {
-      setForm(emptyForm);
+      opening = emptyForm;
     }
-    // Reset the consultation-reason state whenever the sheet is not loading an
-    // existing patient, so tags from a previously edited patient don't bleed
-    // into a new (or default-values) patient and get saved onto their record.
-    if (!patient) {
-      setConsultationReasons([]);
-      setOthersAestheticText("");
-      setOthersClinicalText("");
-    }
+    setForm(opening);
+    // Always set (empty when not editing), so tags from a previously edited
+    // patient don't bleed into a new (or default-values) patient.
+    setConsultationReasons(openingReasons.reasons);
+    setOthersAestheticText(openingReasons.othersAestheticText);
+    setOthersClinicalText(openingReasons.othersClinicalText);
+    // The snapshot the dirty check compares against: exactly what the dialog
+    // opened with - emptyForm, the patient being edited, or a lead's pre-fill -
+    // including the saved consultation reasons, so those are not "typed".
+    initialFormRef.current = open
+      ? withExtras(opening as Record<string, unknown>, openingReasons.reasons, openingReasons.othersAestheticText, openingReasons.othersClinicalText)
+      : null;
+    // Anything the dialog was looking at belongs to the previous open.
+    setPreviewing(null);
+    setConfirmDiscard(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patient?.id, open]);
 
@@ -306,6 +349,7 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
   useEffect(() => {
     if (!open) return;
     setRemovedFamilyIds([]);
+    initialFamilyRef.current = [];
     if (!patient?.id) {
       setFamilyRows([]);
       return;
@@ -317,16 +361,17 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
         .select("id, name, relationship, phone, is_primary_contact, related_patient_id, related_patient:patients!patient_family_members_related_patient_id_fkey(first_name, last_name, phone)")
         .eq("patient_id", patient.id);
       if (cancelled) return;
-      setFamilyRows(
-        ((data as any[]) || []).map((r) => ({
-          id: r.id,
-          name: r.name || (r.related_patient ? `${r.related_patient.first_name || ""} ${r.related_patient.last_name || ""}`.trim() : ""),
-          relationship: r.relationship || "",
-          phone: r.phone || r.related_patient?.phone || "",
-          is_primary_contact: !!r.is_primary_contact,
-          linked: !!r.related_patient_id,
-        })),
-      );
+      const loaded: FamilyRow[] = ((data as any[]) || []).map((r) => ({
+        id: r.id,
+        name: r.name || (r.related_patient ? `${r.related_patient.first_name || ""} ${r.related_patient.last_name || ""}`.trim() : ""),
+        relationship: r.relationship || "",
+        phone: r.phone || r.related_patient?.phone || "",
+        is_primary_contact: !!r.is_primary_contact,
+        linked: !!r.related_patient_id,
+      }));
+      // Saved family members are not something the user typed this time.
+      initialFamilyRef.current = loaded;
+      setFamilyRows(loaded);
     })();
     return () => { cancelled = true; };
   }, [open, patient?.id]);
@@ -519,8 +564,66 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
     }
   };
 
+  /**
+   * Closing from the dialog itself - Escape, the overlay, the X.
+   *
+   * Only this path is guarded. handleSave calls the onOpenChange PROP
+   * directly, so a successful save still closes silently; the separation
+   * falls out of the wiring rather than needing a flag to suppress it.
+   */
+  const dirty = () =>
+    patientFormDirty(
+      {
+        ...withExtras(form as Record<string, unknown>, consultationReasons, othersAestheticText, othersClinicalText),
+        __family: familyRows,
+      },
+      initialFormRef.current && { ...initialFormRef.current, __family: initialFamilyRef.current },
+    );
+
+  const requestClose = (next: boolean) => {
+    if (next) return onOpenChange(true);
+    if (dirty()) {
+      setConfirmDiscard(true);
+      return;
+    }
+    onOpenChange(false);
+  };
+
+  /**
+   * The duplicate really is the person in front of us. Abandon this entry and
+   * open them - explicit intent, so it deliberately skips the discard prompt.
+   */
+  const useExistingInstead = (record: { id?: unknown }) => {
+    setPreviewing(null);
+    onOpenChange(false);
+    navigate(`/patients/${String(record.id)}`);
+  };
+
   return (
     <>
+    <PatientPreviewDialog
+      patient={previewing}
+      onClose={() => setPreviewing(null)}
+      onUseInstead={isEditing ? undefined : useExistingInstead}
+    />
+
+    <AlertDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Discard this patient's details?</AlertDialogTitle>
+          <AlertDialogDescription>
+            You have typed details that have not been saved. Closing now loses them.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep editing</AlertDialogCancel>
+          <AlertDialogAction onClick={() => { setConfirmDiscard(false); onOpenChange(false); }}>
+            Discard
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
     <DuplicateResolveDialog
       open={!!resolveWith && !!patient}
       onClose={() => setResolveWith(null)}
@@ -529,7 +632,7 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
       onResolved={() => { setResolveWith(null); setLiveMatches([]); onSuccess(); }}
     />
 
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={requestClose}>
       <DialogContent className="max-w-6xl max-h-[95vh] overflow-y-auto p-6">
         <DialogHeader>
           <DialogTitle className="font-display text-2xl">
@@ -566,7 +669,14 @@ export function PatientFormSheet({ open, onOpenChange, patient, defaultValues, o
             matches={liveMatches}
             objectKey="patients"
             onIgnore={() => setDuplicateAck(true)}
-            onResolve={(rec) => setResolveWith(rec)}
+            // Show the match over this form instead of navigating to it. The
+            // navigate unmounted the route, and with it every typed field.
+            onOpenRecord={(rec) => setPreviewing(rec as unknown as PreviewPatient)}
+            // Merge needs a saved record to merge INTO, so it is offered only
+            // when editing. While adding, the same slot offers the action that
+            // can work: use the existing patient instead of this new entry.
+            onResolve={isEditing ? (rec) => setResolveWith(rec) : undefined}
+            onUseInstead={isEditing ? undefined : useExistingInstead}
           />
         )}
 

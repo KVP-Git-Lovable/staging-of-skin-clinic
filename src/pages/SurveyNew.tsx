@@ -12,6 +12,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
 import { ArrowLeft, ClipboardCheck, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
+import { stillAsked } from "@/lib/surveyQuestionConfig";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
@@ -35,7 +36,7 @@ export default function SurveyNew() {
     enabled: !!templateId,
   });
 
-  const { data: questions = [] } = useQuery({
+  const { data: allQuestions = [] } = useQuery({
     queryKey: ["survey-questions", templateId],
     queryFn: async () => {
       const { data, error } = await supabase.from("survey_questions").select("*").eq("template_id", templateId).order("sort_order");
@@ -44,6 +45,9 @@ export default function SurveyNew() {
     },
     enabled: !!templateId,
   });
+  // A retired question is not asked here either, as in the portal. The cache
+  // entry is shared with the answers views, which still need every question.
+  const questions = stillAsked(allQuestions);
 
   const { data: patient } = useQuery({
     queryKey: ["patient-min", patientId],

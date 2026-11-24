@@ -26,38 +26,76 @@ const POSITION_TIMEOUT_MS = 10_000;
  *  they checked in, and a cold GPS lock is the slowest part of the flow. */
 const POSITION_MAX_AGE_MS = 120_000;
 
+/**
+ * The rough fallback: Wi-Fi and mobile-network location, no GPS.
+ *
+ * Asking only for a high-accuracy fix meant that a phone indoors, which often
+ * cannot get a GPS lock inside ten seconds, saved the attendance with no
+ * location at all - the same person would get one at check-out and none at
+ * check-in. A network fix is usually within a few dozen metres and arrives in
+ * a second or two, which is plenty to show somebody was at the clinic.
+ */
+const ROUGH_TIMEOUT_MS = 15_000;
+const ROUGH_MAX_AGE_MS = 10 * 60_000;
+
 /** The address lookup is a nicety; the coordinates and the time are the
  *  record. Four seconds, then give up and stamp without it. */
 const GEOCODE_TIMEOUT_MS = 4_000;
 
-/** The browser's position, or null. Never rejects. */
-export function currentPosition(): Promise<Fix | null> {
-  if (typeof navigator === "undefined" || !navigator.geolocation) return Promise.resolve(null);
-  return new Promise<Fix | null>((resolve) => {
+/** Position error code for "the user (or the browser) said no". */
+const PERMISSION_DENIED = 1;
+
+type Answer = { fix: Fix } | { denied: true } | null;
+
+/** One request to the browser. Never rejects. */
+function ask(options: PositionOptions & { timeout: number }): Promise<Answer> {
+  return new Promise<Answer>((resolve) => {
     let settled = false;
-    const done = (value: Fix | null) => { if (!settled) { settled = true; resolve(value); } };
+    const done = (value: Answer) => { if (!settled) { settled = true; resolve(value); } };
     try {
       navigator.geolocation.getCurrentPosition(
         (pos) => done({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          accuracy: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null,
+          fix: {
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null,
+          },
         }),
-        // Denied, unavailable or timed out - all the same answer here.
-        () => done(null),
-        // maximumAge was 0, so every call paid for a cold high-accuracy lock
-        // - including check-out, minutes after a check-in from the same spot.
-        // Two minutes is short enough that the fix is still where they are
-        // standing and long enough to make the second lookup instant.
-        { enableHighAccuracy: true, timeout: POSITION_TIMEOUT_MS, maximumAge: POSITION_MAX_AGE_MS },
+        (err) => done(err && err.code === PERMISSION_DENIED ? { denied: true } : null),
+        options,
       );
     } catch {
       done(null);
     }
     // Belt and braces: some browsers never call either callback when the
     // permission prompt is dismissed rather than answered.
-    setTimeout(() => done(null), POSITION_TIMEOUT_MS + 1_000);
+    setTimeout(() => done(null), options.timeout + 1_000);
   });
+}
+
+/**
+ * The browser's position, or null. Never rejects.
+ *
+ * A precise (GPS) fix and a rough (network) fix are asked for at the same
+ * time. The precise one wins when it arrives; when it times out or is
+ * unavailable the rough one is used instead. A denied permission gets no
+ * fallback - there is nothing a second request could do about it.
+ */
+export async function currentPosition(): Promise<Fix | null> {
+  if (typeof navigator === "undefined" || !navigator.geolocation) return null;
+  // maximumAge was 0, so every call paid for a cold high-accuracy lock
+  // - including check-out, minutes after a check-in from the same spot.
+  // Two minutes is short enough that the fix is still where they are
+  // standing and long enough to make the second lookup instant.
+  const precise = ask({ enableHighAccuracy: true, timeout: POSITION_TIMEOUT_MS, maximumAge: POSITION_MAX_AGE_MS });
+  const rough = ask({ enableHighAccuracy: false, timeout: ROUGH_TIMEOUT_MS, maximumAge: ROUGH_MAX_AGE_MS });
+
+  const first = await precise;
+  if (first && "fix" in first) return first.fix;
+  if (first && "denied" in first) return null;
+
+  const second = await rough;
+  return second && "fix" in second ? second.fix : null;
 }
 
 /**

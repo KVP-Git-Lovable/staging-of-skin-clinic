@@ -137,6 +137,14 @@ export const REPORT_OBJECTS: ReportObject[] = [
       { key: "specialization", label: "Specialization", type: "text" },
       { key: "email", label: "Email", type: "text" },
       { key: "phone", label: "Phone", type: "text" },
+      { key: "is_active", label: "Active", type: "boolean" },
+      // Ids rather than names, and deliberately so: these three are what
+      // /admin/history-tracking has to be able to tick, because role_id is the
+      // column that actually grants permissions and auth_user_id is the login
+      // the record answers to. A change to either is the kind that went
+      // unrecorded on 11 Nov. The readable "Role" row sits beside them.
+      { key: "role_id", label: "Permission Role ID", type: "text" },
+      { key: "auth_user_id", label: "Login User ID", type: "text" },
       { key: "created_at", label: "Created At", type: "date" },
       { key: "_full_name", label: "Full Name", type: "text" },
     ],

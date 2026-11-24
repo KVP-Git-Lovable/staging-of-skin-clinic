@@ -13,6 +13,16 @@ export function articleResources(value: unknown): KnowledgeResource[] {
   return value.flatMap((item) => { const parsed = resourceSchema.safeParse(item); return parsed.success ? [parsed.data] : []; });
 }
 
+/**
+ * Where article attachments live. Private: every read is a signed URL, and
+ * storage RLS only shows a non-editor the files of a published, active article.
+ *
+ * Named here rather than in the component that uploads them, because the
+ * printed patient handout reads from the same bucket and two copies of a
+ * bucket name is a rename waiting to go wrong.
+ */
+export const KNOWLEDGE_BUCKET = "knowledge-attachments";
+
 export type KnowledgeArticle = Tables<"knowledge_articles">;
 export const clinicalFields = [
   ["clinical_protocol", "Clinical protocol"],
@@ -83,6 +93,94 @@ export function safeImageSrc(src: string | null | undefined): string | null {
     return null;
   }
 }
+/**
+ * The marker a collapsed source citation carries as its link text.
+ *
+ * U+E000 is in the Unicode Private Use Area, so it cannot occur in clinical
+ * prose, in a URL, or in anything a doctor can type. compactSourceCitations
+ * also strips it from its input before doing anything else, so stored text
+ * can never forge one.
+ */
+export const CITATION_LINK_LABEL = "cite";
+
+/** The hostname of a URL, without `www.`, or null if it is not a URL. */
+export function citationHost(url: string | null | undefined): string | null {
+  try {
+    return new URL(String(url ?? "")).hostname.toLowerCase().replace(/^www\./, "") || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Is this link's visible text just the hostname of its own href?
+ *
+ * `[fda.gov](https://www.fda.gov/...)` - yes, the text adds nothing the URL
+ * does not already say. `[the IADVL guidance](https://ijdvl.com/...)` - no,
+ * that text is the author telling you what you are about to open.
+ *
+ * `www.` is ignored on both sides, so `[fda.gov]` matches a `www.fda.gov`
+ * href. A label carrying a path - `[fda.gov/medical-devices]` - is NOT a
+ * bare hostname and is deliberately left alone.
+ */
+function isBareHostLabel(label: string, url: string): boolean {
+  const host = citationHost(url);
+  if (!host) return false;
+  return label.trim().toLowerCase().replace(/^www\./, "").replace(/\/+$/, "") === host;
+}
+
+/*
+ * A trailing source parenthetical: `([fda.gov](https://www.fda.gov/...))`.
+ *
+ * The inner URL may itself contain one balanced pair of parentheses, which
+ * real references do - PMC and Wikipedia URLs both. Nested deeper than that
+ * is not matched, and such a citation is simply left as it is rather than
+ * cut in half.
+ */
+const SOURCE_PARENTHETICAL = /\(\[([^\]\n]+)\]\((https?:\/\/(?:[^()\s]|\([^()\s]*\))*)\)\)/g;
+
+/**
+ * Collapse repeated-hostname source citations to a bare link.
+ *
+ * The clinic's articles end most bullets with the same reference twice:
+ *
+ *   defer until controlled.[3,5] ([fda.gov](https://www.fda.gov/medical-devices/...))
+ *
+ * `[3,5]` already cites it and the full URL is in the article's own
+ * bibliography, so the trailing hostname-in-brackets is noise repeated after
+ * nearly every line - which is most of why the page reads as a wall.
+ *
+ * This rewrites that parenthetical, literal parens included, into a single
+ * link carrying CITATION_LINK_LABEL, which ArticleContent renders as a small
+ * external-link icon. Nothing is removed: the link still works and still
+ * points at the same URL.
+ *
+ * PRESENTATION ONLY. It runs on the way to the renderer and never touches
+ * the stored article, so no clinical text changes and nothing needs
+ * re-approving under the knowledge_article_guard review trigger.
+ *
+ * Code is left alone - fenced blocks and inline spans both - because a
+ * markdown example of a citation is documentation of the syntax, not a
+ * citation, and rewriting it would make the example wrong.
+ */
+export function compactSourceCitations(markdown: string | null | undefined): string {
+  const text = String(markdown ?? "");
+  if (!text) return "";
+  // Stored text can never supply its own marker.
+  const clean = text.split(CITATION_LINK_LABEL).join("");
+  // Odd indices are the captured code delimiters; they pass through untouched.
+  return clean
+    .split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g)
+    .map((chunk, i) =>
+      i % 2 === 1
+        ? chunk
+        : chunk.replace(SOURCE_PARENTHETICAL, (whole, label: string, url: string) =>
+            isBareHostLabel(label, url) ? `[${CITATION_LINK_LABEL}](${url})` : whole,
+          ),
+    )
+    .join("");
+}
+
 export function ageInYears(dob: string | null | undefined, today = new Date()): number | null {
   if (!dob) return null;
   const [year, month, day] = dob.slice(0, 10).split("-").map(Number);

@@ -3,6 +3,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { edgeFunctionErrorMessage } from "@/lib/edgeFunctionError";
 import { PASSWORD_RULE_TEXT, passwordProblem } from "@/lib/passwordRules";
+import { CopyButton } from "@/components/shared/CopyButton";
+import { credentialsMessage } from "@/lib/tempPassword";
 import { toast } from "@/hooks/use-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -31,6 +33,8 @@ export default function CreateUserDialog({ open, onOpenChange, staffList, roles 
   const [roleId, setRoleId] = useState<string>("");
   const [isActive, setIsActive] = useState(true);
   const [autoGenPassword, setAutoGenPassword] = useState(true);
+  /** The one-time credentials on screen, or null when there are none to show. */
+  const [issued, setIssued] = useState<{ name: string; email: string; password: string } | null>(null);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [forceChange, setForceChange] = useState(true);
@@ -60,6 +64,12 @@ export default function CreateUserDialog({ open, onOpenChange, staffList, roles 
     setConfirmPassword("");
     setForceChange(true);
     setFormError(null);
+    setIssued(null);
+  };
+
+  const closeDialog = () => {
+    resetForm();
+    onOpenChange(false);
   };
 
   const createUser = useMutation({
@@ -98,7 +108,7 @@ export default function CreateUserDialog({ open, onOpenChange, staffList, roles 
           role_id: roleId || null,
           full_name: fullName,
           phone,
-          send_email: autoGenPassword,
+          send_email: false,
           force_password_change: forceChange,
         },
       });
@@ -126,6 +136,14 @@ export default function CreateUserDialog({ open, onOpenChange, staffList, roles 
       }
       queryClient.invalidateQueries({ queryKey: ["staff-with-roles"] });
       toast({ title: "User created successfully" });
+
+      // Shown once. Supabase keeps only the hash, so closing here without
+      // showing it - which is what this did - loses the only copy.
+      const temp = (result.data as { temp_password?: string | null } | undefined)?.temp_password;
+      if (temp) {
+        setIssued({ name: fullName, email, password: temp });
+        return;
+      }
       resetForm();
       onOpenChange(false);
     },
@@ -136,6 +154,47 @@ export default function CreateUserDialog({ open, onOpenChange, staffList, roles 
 
   // Filter to staff without auth_user_id
   const availableStaff = staffList.filter((s: any) => !s.auth_user_id);
+
+  if (issued) {
+    return (
+      <Dialog open={open} onOpenChange={(o) => { if (!o) closeDialog(); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-5 w-5" />
+              Login created for {issued.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4" data-testid="issued-credentials">
+            <div className="rounded-lg border border-border bg-muted/40 p-3 space-y-2">
+              <div>
+                <p className="text-xs text-muted-foreground">Email</p>
+                <p className="font-mono text-sm break-all">{issued.email}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Temporary password</p>
+                <p className="font-mono text-lg font-bold tracking-wider break-all" data-testid="temp-password">
+                  {issued.password}
+                </p>
+              </div>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Copy this now - it is shown only once and cannot be looked up later.
+            </p>
+            <div className="flex items-center gap-2">
+              <CopyButton
+                value={credentialsMessage({ name: issued.name, email: issued.email, password: issued.password })}
+                label="Login details"
+                className="h-9 w-9"
+              />
+              <span className="text-sm text-muted-foreground">Copy the whole message to send</span>
+            </div>
+            <Button className="w-full" data-testid="issued-done" onClick={closeDialog}>Done</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -219,7 +278,12 @@ export default function CreateUserDialog({ open, onOpenChange, staffList, roles 
             <h3 className="text-sm font-semibold text-muted-foreground mb-3">Security</h3>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <Label>Auto-generate & send via email</Label>
+                {/* Was "Auto-generate & send via email". create-user-account
+                    sends no email - no Resend, no SMTP, no inviteUserByEmail
+                    - so this created an account whose password nobody knew
+                    and told the admin it had been posted. The password is
+                    shown on screen when it is done instead. */}
+                <Label>Auto-generate password</Label>
                 <Switch checked={autoGenPassword} onCheckedChange={(checked) => { setAutoGenPassword(checked); setFormError(null); }} />
               </div>
               {!autoGenPassword && (

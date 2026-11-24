@@ -10,7 +10,9 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
-import { buildOrFilter, buildPrefixFilter, buildTokenFilters, fuzzyRank } from "@/lib/fuzzySearch";
+import { buildOrFilter, buildPrefixFilter, fuzzyRank } from "@/lib/fuzzySearch";
+import { patientSearchFilters } from "@/lib/patientSearch";
+import { phoneKey } from "@/lib/portalPhoneLogin";
 import { hashImageFile } from "@/lib/photoHashImage";
 import { matchQualityLabel, POSSIBLE_MAX } from "@/lib/photoHash";
 import { cn } from "@/lib/utils";
@@ -25,7 +27,25 @@ type Kind = "patient" | "appointment" | "procedure" | "invoice" | "staff" | "ser
 
 /** The patient columns this dropdown selects - the only shape the new
  * prefix/broad merge below needs to know about. */
+/**
+ * The number to show beside a patient, given what was searched.
+ *
+ * Defaults to the primary. When the search was a phone number and only the
+ * ALTERNATE one matches it, show that instead - otherwise typing a number and
+ * seeing a different one under the result reads as the wrong patient.
+ */
+function matchedPatientNumber(p: PatientRow, term: string): string | null {
+  const digits = phoneKey(term);
+  if (digits && !phoneDigits(p.phone).includes(digits) && phoneDigits(p.alternate_phone).includes(digits)) {
+    return p.alternate_phone ?? null;
+  }
+  return p.phone ?? null;
+}
+
+const phoneDigits = (v: string | null | undefined) => String(v ?? "").replace(/\D/g, "");
+
 type PatientRow = {
+  alternate_phone?: string | null;
   id: string;
   first_name: string | null;
   last_name: string | null;
@@ -153,9 +173,14 @@ export function GlobalSearch({ className }: { className?: string }) {
       // Every word has to appear somewhere on the record: separate .or() calls
       // are ANDed by PostgREST. "nisha rai" now means nisha AND rai, so it finds
       // Anisha Rai instead of every Rai in the clinic.
-      const tokenFilters = buildTokenFilters(q, PATIENT_COLS);
+      // patientSearchFilters, not a column list of its own: this bar searched
+      // phone but never alternate_phone, so a caller's second number found
+      // nobody here even while the Patients page found them. For a number it
+      // returns a single filter matching the normalised digits, which is also
+      // what makes one stored as "+91 96634 38657" findable.
+      const tokenFilters = patientSearchFilters(q);
       const strictPatients = async () => {
-        let query = supabase.from("patients").select("id, first_name, last_name, phone, email");
+        let query = supabase.from("patients").select("id, first_name, last_name, phone, email, alternate_phone");
         for (const f of tokenFilters) query = query.or(f);
         if (tokenFilters.length === 0) query = query.or(`first_name.ilike.${like}`);
         // Ordered, because this is capped. Unordered, the 25 rows the cap kept
@@ -169,11 +194,11 @@ export function GlobalSearch({ className }: { className?: string }) {
       // meant. Runs alongside the broad search rather than after it, so it costs
       // no extra wait, and its hits go above the broad ones below.
       const prefixPatients = async () => {
-        const prefixFilter = buildPrefixFilter(q, ["first_name", "last_name", "phone"]);
+        const prefixFilter = buildPrefixFilter(q, ["first_name", "last_name", "phone", "alternate_phone"]);
         if (!prefixFilter) return { data: [] as PatientRow[] };
         return supabase
           .from("patients")
-          .select("id, first_name, last_name, phone, email")
+          .select("id, first_name, last_name, phone, email, alternate_phone")
           .or(prefixFilter)
           .order("last_visit_date", { ascending: false, nullsFirst: false })
           .limit(10);
@@ -222,7 +247,7 @@ export function GlobalSearch({ className }: { className?: string }) {
         const loose = buildOrFilter(q, PATIENT_COLS);
         if (loose) {
           const { data: looseRows } = await supabase
-            .from("patients").select("id, first_name, last_name, phone, email")
+            .from("patients").select("id, first_name, last_name, phone, email, alternate_phone")
             .or(loose)
             .order("last_visit_date", { ascending: false, nullsFirst: false })
             .limit(25);
@@ -255,7 +280,10 @@ export function GlobalSearch({ className }: { className?: string }) {
           id: p.id,
           kind: "patient" as const,
           title: `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Patient",
-          subtitle: [p.phone, p.email].filter(Boolean).join(" · ") || "Patient",
+          // Show the number that actually matched. Showing only the primary
+          // made a correct hit look like the wrong person: you type one number
+          // and the row underneath shows a different one.
+          subtitle: [matchedPatientNumber(p, q), p.email].filter(Boolean).join(" · ") || "Patient",
           route: `/patients/${p.id}`,
         })),
         ...(((appts as any).data || []) as any[]).slice(0, 5).map((a: any) => ({

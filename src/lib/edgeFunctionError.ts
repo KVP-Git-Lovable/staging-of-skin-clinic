@@ -22,7 +22,16 @@ interface WithResponseContext {
   message?: string;
 }
 
-const GENERIC = /non-2xx status code/i;
+/**
+ * The two sentences supabase-js produces that tell the operator nothing.
+ *
+ * "non-2xx status code" is a FunctionsHttpError: the function ran and refused,
+ * and its reason is in the body, recovered above. "Failed to send a request" is
+ * a FunctionsFetchError: the request never reached a function at all, because
+ * it is not deployed or is down - so there is no body, and the caller's own
+ * fallback is the only thing worth showing.
+ */
+const GENERIC = /non-2xx status code|failed to send a request/i;
 
 /** Supabase rejects passwords it considers weak or found in a breach corpus. */
 const WEAK_PASSWORD = /weak|easy to guess|pwned|breach/i;

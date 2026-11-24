@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CameraDialog } from "@/components/shared/CameraDialog";
 import { MAX_FACE_ATTEMPTS } from "@/lib/attendance";
 import { useMyAttendanceDay } from "@/hooks/useMyAttendanceDay";
+import { MyAttendanceHistory } from "@/components/attendance/MyAttendanceHistory";
 
 /**
  * Starting and ending a working day.
@@ -14,6 +15,12 @@ import { useMyAttendanceDay } from "@/hooks/useMyAttendanceDay";
  * link to them either - everyone's attendance and the policy live in
  * Admin > Attendance. Both have been on this page at some point and both
  * were wrong here: this is the screen somebody opens to start a shift.
+ *
+ * Their own history is a different matter and sits underneath: the clinic
+ * asked to be able to read back a day, a week or a month of their own hours,
+ * and this is the only page where that is theirs to see. It is also now the
+ * only place in the app where a day is marked - the dashboard card links
+ * here rather than taking the selfie itself.
  *
  * Both buttons are always on screen, as the Bharath Builders app shows them,
  * with the unavailable one greyed out and naming what already happened. The
@@ -35,7 +42,7 @@ export default function Attendance() {
   } = useMyAttendanceDay();
 
   return (
-    <div className="p-4 md:p-6 space-y-5 max-w-2xl">
+    <div className="p-4 md:p-6 space-y-5 max-w-3xl">
       <header className="flex items-center gap-2">
         <CalendarCheck className="h-6 w-6 text-primary" />
         <h1 className="text-2xl font-semibold font-display">Attendance</h1>
@@ -120,6 +127,8 @@ export default function Attendance() {
           )}
         </CardContent>
       </Card>
+
+      <MyAttendanceHistory />
 
       <CameraDialog {...cameraProps} />
     </div>

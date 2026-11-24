@@ -1,15 +1,12 @@
 import { supabase } from "@/integrations/supabase/client";
 import { fetchAll } from "@/lib/supabasePaginate";
-import { buildFuzzyOrFilter, buildTokenFilters, fuzzyRank } from "@/lib/fuzzySearch";
+import { buildFuzzyOrFilter, fuzzyRank } from "@/lib/fuzzySearch";
+import { isPhoneSearch, patientSearchFilters } from "@/lib/patientSearch";
 import type { Tables } from "@/integrations/supabase/types";
 
 export type Patient = Tables<"patients">;
 
 export const PATIENTS_PAGE_SIZE = 50;
-
-// alternate_phone too: a patient who gave the clinic both an Indian and an
-// international number is searched for by whichever one the caller used.
-const SEARCH_COLS = ["first_name", "last_name", "email", "phone", "alternate_phone"];
 
 export interface PatientsPage {
   rows: Patient[];
@@ -101,6 +98,16 @@ export async function fetchPatientsPage(page: number, search: string): Promise<P
   const tokens = term.split(/\s+/).filter(Boolean);
   const strategies: Narrow[] = [];
 
+  // A phone number is its own strategy, and it goes first. It cannot be folded
+  // into the name strategies below: those ilike a raw token, and a number typed
+  // as "+91 96634 38657" is three tokens that match nobody.
+  if (isPhoneSearch(term)) {
+    strategies.push((q) => {
+      for (const f of patientSearchFilters(term)) q = q.or(f);
+      return q;
+    });
+  }
+
   if (tokens.length >= 2) {
     const [firstName, ...rest] = tokens;
     const lastName = rest.join(" ");
@@ -121,7 +128,7 @@ export async function fetchPatientsPage(page: number, search: string): Promise<P
   // lost when a strict match finds nobody: the typo-tolerant fallback below
   // still runs on an empty result.
   strategies.push((q) => {
-    for (const f of buildTokenFilters(term, SEARCH_COLS)) q = q.or(f);
+    for (const f of patientSearchFilters(term)) q = q.or(f);
     return q;
   });
 
@@ -193,9 +200,10 @@ export const fetchAllPatients = async (search: string): Promise<Patient[]> => {
       .order("id", { ascending: true })
       .range(from, to);
     if (term) {
-      for (const f of buildTokenFilters(term, ["first_name", "last_name", "email", "phone"])) {
-        q = q.or(f);
-      }
+      // This is the path EVERY saved view takes, and the one that was missing
+      // alternate_phone. It shares its rule with the paged search above now, so
+      // the same search cannot work or fail depending on which view is open.
+      for (const f of patientSearchFilters(term)) q = q.or(f);
     }
     return q;
   });

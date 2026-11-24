@@ -24,12 +24,8 @@ import {
   FileText,
   ListChecks,
   ShieldCheck,
-  SlidersHorizontal,
   Megaphone,
-  CopyCheck,
   Trash2,
-  History,
-  Coins,
   MessageCircle,
   Phone,
   Mail,
@@ -40,6 +36,9 @@ import {
   Sparkles,
   BookOpen,
   CalendarCheck,
+  AlertTriangle,
+  MessageSquareHeart,
+  MoreHorizontal,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Link, useLocation } from "react-router-dom";
@@ -68,6 +67,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { useAuth } from "@/hooks/useAuth";
+import { canViewModule } from "@/lib/staffAccess";
+import { ADMIN_LINKS, visibleAdminLinks } from "@/lib/adminSections";
 
 const mainItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard, moduleKey: "dashboard" },
@@ -78,11 +79,7 @@ const mainItems = [
   { title: "Pharmacy", url: "/pharma", icon: Pill, moduleKey: "pharmacy" },
   { title: "Photos", url: "/photos", icon: Camera, moduleKey: "photos" },
   { title: "Assets", url: "/assets", icon: Package, moduleKey: "assets" },
-  { title: "Portal Orders", url: "/orders", icon: ShoppingBag, moduleKey: "portal_orders" },
-  { title: "Expenses", url: "/expenses", icon: Wallet, moduleKey: "expenses" },
   { title: "Reports", url: "/reports", icon: BarChart3, moduleKey: "reports" },
-  { title: "Report Builder", url: "/report-builder", icon: FileBarChart, moduleKey: "report_builder" },
-  { title: "Dashboards", url: "/dashboards", icon: LayoutDashboard, moduleKey: "dashboards" },
   { title: "Leads", url: "/leads", icon: Target, moduleKey: "leads" },
   { title: "Campaigns", url: "/campaigns", icon: Megaphone, moduleKey: "campaigns" },
   { title: "WhatsApp Delivery", url: "/whatsapp-log", icon: MessageCircle, moduleKey: "campaigns" },
@@ -103,15 +100,48 @@ const communicationsItems = [
 
 const employeesSubItems = [
   { title: "Staff", url: "/staff", icon: UserCog, moduleKey: "staff" },
-  { title: "My Attendance", url: "/attendance", icon: CalendarCheck, moduleKey: "staff" },
+  { title: "My Attendance", url: "/attendance", icon: CalendarCheck, moduleKey: "attendance" },
   { title: "Leave", url: "/leave", icon: CalendarDays, moduleKey: "leave" },
 ];
 
-const surveySubItems = [
-  { title: "Survey Templates", url: "/survey-templates", icon: FileText },
-  { title: "All Surveys", url: "/all-surveys", icon: ListChecks },
+/**
+ * The occasional pages, out of the daily run.
+ *
+ * Each keeps the moduleKey it carried in the main list, so who can see what is
+ * exactly as it was - this group moves where they sit, not who they are for.
+ */
+const othersItems = [
+  { title: "Dashboards", url: "/dashboards", icon: LayoutDashboard, moduleKey: "dashboards" },
+  { title: "Report Builder", url: "/report-builder", icon: FileBarChart, moduleKey: "report_builder" },
+  { title: "Portal Orders", url: "/orders", icon: ShoppingBag, moduleKey: "portal_orders" },
+  { title: "Expenses", url: "/expenses", icon: Wallet, moduleKey: "expenses" },
 ];
 
+/**
+ * It sits below WhatsApp Delivery, where the clinic looks for it.
+ *
+ * All Feedbacks comes first: it is where every score is read, and the cases
+ * below it are what some of those scores turn into.
+ */
+const feedbackItems = [
+  { title: "All Feedbacks", url: "/all-feedbacks", icon: MessageSquareHeart, moduleKey: "feedback_rca" },
+  { title: "Root Cause Analysis", url: "/feedback-rca", icon: AlertTriangle, moduleKey: "feedback_rca" },
+];
+
+/**
+ * Master Data, with the two survey pages folded into one entry.
+ *
+ * Eight lines read as congestion, and Survey Templates and All Surveys are one
+ * subject sharing one permission key. The parent opens a group rather than a
+ * page: there is no /surveys index route, and /surveys/* already belongs to the
+ * survey RESPONSE pages, so a url here would 404 and then light the entry up on
+ * every /surveys/:id.
+ *
+ * The parent keeps moduleKey "surveys" - the key both children carried - because
+ * canView hides any entry without one. Who sees this is exactly who saw the two
+ * entries before. The children need no key of their own: nothing reaches them
+ * except through a parent already asking the same question.
+ */
 const masterDataItems = [
   { title: "Service Master", url: "/services", icon: Stethoscope, moduleKey: "services" },
   { title: "Knowledge Articles", url: "/knowledge", icon: BookOpen, moduleKey: "services" },
@@ -119,24 +149,50 @@ const masterDataItems = [
   { title: "Category Master", url: "/category-master", icon: Tags, moduleKey: "category_master" },
   { title: "Tax Master", url: "/tax-master", icon: Percent, moduleKey: "settings" },
   { title: "Primary Concern", url: "/problem-areas", icon: AlertCircle, moduleKey: "problem_areas" },
-];
+  {
+    title: "Surveys",
+    icon: ClipboardCheck,
+    moduleKey: "surveys",
+    children: [
+      { title: "Survey Templates", url: "/survey-templates", icon: FileText },
+      { title: "All Surveys", url: "/all-surveys", icon: ListChecks },
+    ],
+  },
+] as {
+  title: string;
+  url?: string;
+  icon: typeof Users;
+  moduleKey?: string;
+  children?: { title: string; url: string; icon: typeof Users }[];
+}[];
 
 const settingsItems = [
-  { title: "Trash", url: "/trash", icon: Trash2 },
+  // Trash had no moduleKey and no route guard, so it was on everybody's menu.
+  // Its own key rather than "settings": doctors can reach Trash today and must
+  // keep it, and they have no settings permission.
+  { title: "Trash", url: "/trash", icon: Trash2, moduleKey: "trash" },
   { title: "Settings", url: "/settings", icon: Settings, moduleKey: "settings" },
 ];
 
-const adminSubItems = [
-  { title: "Validation Rules", url: "/validation-rules", icon: ShieldCheck },
-  { title: "Custom Fields", url: "/custom-fields", icon: SlidersHorizontal },
-  { title: "Duplicate Management", url: "/duplicate-management", icon: CopyCheck },
-  { title: "History Tracking", url: "/admin/history-tracking", icon: History },
-  { title: "Knowledge Categories", url: "/admin/knowledge-categories", icon: BookOpen },
-  { title: "Currency & Billing", url: "/admin/currency", icon: Coins },
-  { title: "Attendance", url: "/admin/attendance", icon: CalendarCheck },
-  { title: "User Management", url: "/user-management", icon: Users },
-  { title: "Trash Policy & Audit", url: "/admin/trash", icon: Trash2 },
-];
+/**
+ * The Admin group is one link now.
+ *
+ * It used to list eleven sub-items, which filled the sidebar and pushed Trash
+ * and Settings off the bottom. They live on Admin Home instead, drawn from
+ * ADMIN_LINKS in src/lib/adminSections.ts - one list, so the menu and that
+ * page can no longer drift apart the way they had.
+ *
+ * ── Why it is not simply a link ──
+ *
+ * /admin is guarded by moduleKey="settings", so Admin Home can only serve
+ * somebody who holds that key. A role given attendance_admin WITHOUT settings
+ * can open /admin/attendance but not /admin, and collapsing the group blindly
+ * would strand them. So: with settings, one Admin link; without it, the old
+ * collapsible carrying only what they can still reach, and no Admin Home
+ * entry, because that page would refuse them. Nobody is in that state on the
+ * live clinic today - only the Admin role holds either key - but one tick in
+ * User Management creates it.
+ */
 
 export function AppSidebar() {
   const { state, isMobile, setOpenMobile } = useSidebar();
@@ -152,11 +208,10 @@ export function AppSidebar() {
   const isActive = (path: string) =>
     path === "/" ? currentPath === "/" : currentPath.startsWith(path);
 
-  const canView = (moduleKey: string) => {
-    // For now, allow all logged-in users to view all modules
-    // This enables new accounts and patients to access the clinic
-    return true;
-  };
+  // The same answer the route guard gives, from the same function, so the menu
+  // can never offer a page that then refuses to open - or hide one that would.
+  const canView = (moduleKey?: string) =>
+    !!moduleKey && canViewModule({ isAdmin, permissions, moduleKey });
 
   const filteredMain = mainItems.filter((i) => canView(i.moduleKey));
   // The Communications Center renders between "Dashboards" and "Campaigns", which one .map()
@@ -170,13 +225,27 @@ export function AppSidebar() {
   const showCommunications = canView("communications");
   const communicationsPaths = communicationsItems.map((i) => i.url);
   const filteredMaster = masterDataItems.filter((i) => canView(i.moduleKey));
-  const showSurveys = canView("surveys");
-  const showEmployees = canView("staff") || canView("leave");
+  const showEmployees = canView("staff") || canView("attendance") || canView("leave");
+  const filteredOthers = othersItems.filter((i) => canView(i.moduleKey));
+  const filteredFeedback = feedbackItems.filter((i) => canView(i.moduleKey));
+  const othersPaths = othersItems.map((i) => i.url);
+  const feedbackPaths = feedbackItems.map((i) => i.url);
 
   const employeesPaths = ["/staff", "/leave", "/attendance"];
-  const adminPaths = ["/admin", ...adminSubItems.map((i) => i.url)];
-  const showAdmin = canView("settings");
-  const masterPaths = masterDataItems.map((i) => i.url);
+  // Admin Home itself. With it, the group is one link; without it, whatever
+  // admin pages they can still reach have to be offered directly.
+  const canOpenAdminHome = canView("settings");
+  const adminLeftovers = canOpenAdminHome
+    ? []
+    : visibleAdminLinks({ isAdmin, permissions });
+  const adminPaths = ["/admin", ...ADMIN_LINKS.map((i) => i.url)];
+  const showAdmin = canOpenAdminHome || adminLeftovers.length > 0;
+  // Flattened, not mapped: the Surveys entry has no url of its own, and the two
+  // pages beneath it still have to open Master Data when one of them is the page
+  // you are on.
+  const masterPaths = masterDataItems.flatMap((i) =>
+    i.url ? [i.url] : (i.children ?? []).map((c) => c.url),
+  );
 
   return (
     <Sidebar collapsible="icon">
@@ -292,6 +361,42 @@ export function AppSidebar() {
                 </SidebarMenuItem>
               ))}
 
+              {filteredFeedback.length > 0 && (
+                <Collapsible
+                  defaultOpen={feedbackPaths.some((p) => currentPath.startsWith(p))}
+                  className="group/collapsible"
+                >
+                  <SidebarMenuItem>
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuButton
+                        tooltip="Feedback"
+                        isActive={feedbackPaths.some((p) => currentPath.startsWith(p))}
+                      >
+                        <ClipboardCheck className="mr-2 h-4 w-4" />
+                        {!collapsed && <span>Feedback</span>}
+                        {!collapsed && (
+                          <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                        )}
+                      </SidebarMenuButton>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarMenuSub>
+                        {filteredFeedback.map((sub) => (
+                          <SidebarMenuSubItem key={sub.url}>
+                            <SidebarMenuSubButton asChild isActive={isActive(sub.url)}>
+                              <Link to={sub.url}>
+                                <sub.icon className="mr-2 h-3.5 w-3.5" />
+                                <span>{sub.title}</span>
+                              </Link>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                        ))}
+                      </SidebarMenuSub>
+                    </CollapsibleContent>
+                  </SidebarMenuItem>
+                </Collapsible>
+              )}
+
               {showEmployees && (
                 <Collapsible
                   defaultOpen={employeesPaths.some((p) => currentPath.startsWith(p))}
@@ -333,19 +438,19 @@ export function AppSidebar() {
                 </Collapsible>
               )}
 
-              {showSurveys && (
+              {filteredOthers.length > 0 && (
                 <Collapsible
-                  defaultOpen={currentPath.startsWith("/survey-templates") || currentPath.startsWith("/all-surveys")}
+                  defaultOpen={othersPaths.some((p) => currentPath.startsWith(p))}
                   className="group/collapsible"
                 >
                   <SidebarMenuItem>
                     <CollapsibleTrigger asChild>
                       <SidebarMenuButton
-                        tooltip="Surveys"
-                        isActive={currentPath.startsWith("/survey-templates") || currentPath.startsWith("/all-surveys")}
+                        tooltip="Others"
+                        isActive={othersPaths.some((p) => currentPath.startsWith(p))}
                       >
-                        <ClipboardCheck className="mr-2 h-4 w-4" />
-                        {!collapsed && <span>Surveys</span>}
+                        <MoreHorizontal className="mr-2 h-4 w-4" />
+                        {!collapsed && <span>Others</span>}
                         {!collapsed && (
                           <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
                         )}
@@ -353,12 +458,9 @@ export function AppSidebar() {
                     </CollapsibleTrigger>
                     <CollapsibleContent>
                       <SidebarMenuSub>
-                        {surveySubItems.map((sub) => (
+                        {filteredOthers.map((sub) => (
                           <SidebarMenuSubItem key={sub.url}>
-                            <SidebarMenuSubButton
-                              asChild
-                              isActive={isActive(sub.url)}
-                            >
+                            <SidebarMenuSubButton asChild isActive={isActive(sub.url)}>
                               <Link to={sub.url}>
                                 <sub.icon className="mr-2 h-3.5 w-3.5" />
                                 <span>{sub.title}</span>
@@ -400,19 +502,66 @@ export function AppSidebar() {
                     </CollapsibleTrigger>
                     <CollapsibleContent>
                       <SidebarMenuSub>
-                        {filteredMaster.map((item) => (
-                          <SidebarMenuSubItem key={item.title}>
-                            <SidebarMenuSubButton
-                              asChild
-                              isActive={isActive(item.url)}
+                        {filteredMaster.map((item) =>
+                          item.children ? (
+                            // The one entry with pages under it. Its own group
+                            // name - never group/collapsible, which Master Data
+                            // above already owns, or the two chevrons turn
+                            // together on one state.
+                            <Collapsible
+                              key={item.title}
+                              defaultOpen={item.children.some((c) => currentPath.startsWith(c.url))}
+                              className="group/surveys"
                             >
-                              <Link to={item.url}>
-                                <item.icon className="mr-2 h-3.5 w-3.5" />
-                                <span>{item.title}</span>
-                              </Link>
-                            </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                        ))}
+                              <SidebarMenuSubItem>
+                                <CollapsibleTrigger asChild>
+                                  <SidebarMenuSubButton
+                                    asChild
+                                    isActive={item.children.some((c) => currentPath.startsWith(c.url))}
+                                  >
+                                    {/* A button, not the default anchor: it opens
+                                        a group rather than going anywhere, and an
+                                        href here would count as a page. */}
+                                    <button type="button" className="w-full">
+                                      <item.icon className="mr-2 h-3.5 w-3.5" />
+                                      <span>{item.title}</span>
+                                      <ChevronDown className="ml-auto h-3.5 w-3.5 transition-transform group-data-[state=open]/surveys:rotate-180" />
+                                    </button>
+                                  </SidebarMenuSubButton>
+                                </CollapsibleTrigger>
+                                <CollapsibleContent>
+                                  {/* mx-1 pl-2 rather than the default mx-3.5
+                                      px-2.5: a third level at full indent reads
+                                      as two steps in, not one. */}
+                                  <SidebarMenuSub className="mx-1 px-0 pl-2">
+                                    {item.children.map((sub) => (
+                                      <SidebarMenuSubItem key={sub.url}>
+                                        <SidebarMenuSubButton asChild isActive={isActive(sub.url)}>
+                                          <Link to={sub.url}>
+                                            <sub.icon className="mr-2 h-3.5 w-3.5" />
+                                            <span>{sub.title}</span>
+                                          </Link>
+                                        </SidebarMenuSubButton>
+                                      </SidebarMenuSubItem>
+                                    ))}
+                                  </SidebarMenuSub>
+                                </CollapsibleContent>
+                              </SidebarMenuSubItem>
+                            </Collapsible>
+                          ) : (
+                            <SidebarMenuSubItem key={item.title}>
+                              <SidebarMenuSubButton
+                                asChild
+                                isActive={isActive(item.url!)}
+                              >
+                                <Link to={item.url!}>
+                                  <item.icon className="mr-2 h-3.5 w-3.5" />
+                                  <span>{item.title}</span>
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          ),
+                        )}
                       </SidebarMenuSub>
                     </CollapsibleContent>
                   </SidebarMenuItem>
@@ -427,51 +576,64 @@ export function AppSidebar() {
             <SidebarGroupLabel>Admin</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                <Collapsible
-                  defaultOpen={adminPaths.some((p) => currentPath.startsWith(p))}
-                  className="group/collapsible"
-                >
+                {canOpenAdminHome ? (
+                  /* One entry. Everything that used to hang under it is on
+                     Admin Home, which is what this opens. */
                   <SidebarMenuItem>
-                    <CollapsibleTrigger asChild>
-                      <SidebarMenuButton
-                        tooltip="Admin"
-                        isActive={adminPaths.some((p) => currentPath.startsWith(p))}
-                      >
+                    <SidebarMenuButton
+                      asChild
+                      tooltip="Admin"
+                      isActive={adminPaths.some((p) => currentPath.startsWith(p))}
+                    >
+                      <Link to="/admin">
                         <ShieldCheck className="mr-2 h-4 w-4" />
                         {!collapsed && <span>Admin</span>}
-                        {!collapsed && (
-                          <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
-                        )}
-                      </SidebarMenuButton>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <SidebarMenuSub>
-                        <SidebarMenuSubItem>
-                          <SidebarMenuSubButton asChild isActive={currentPath === "/admin"}>
-                            <Link to="/admin">
-                              <Settings className="mr-2 h-3.5 w-3.5" />
-                              <span>Admin Home</span>
-                            </Link>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                        {adminSubItems.map((item) => (
-                          <SidebarMenuSubItem key={item.title}>
-                            <SidebarMenuSubButton asChild isActive={isActive(item.url)}>
-                              <Link to={item.url}>
-                                <item.icon className="mr-2 h-3.5 w-3.5" />
-                                <span>{item.title}</span>
-                              </Link>
-                            </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                        ))}
-                      </SidebarMenuSub>
-                    </CollapsibleContent>
+                      </Link>
+                    </SidebarMenuButton>
                   </SidebarMenuItem>
-                </Collapsible>
+                ) : (
+                  /* They cannot open Admin Home, so the pages they CAN open
+                     are offered directly rather than behind a door that
+                     refuses them. */
+                  <Collapsible
+                    defaultOpen={adminPaths.some((p) => currentPath.startsWith(p))}
+                    className="group/collapsible"
+                  >
+                    <SidebarMenuItem>
+                      <CollapsibleTrigger asChild>
+                        <SidebarMenuButton
+                          tooltip="Admin"
+                          isActive={adminPaths.some((p) => currentPath.startsWith(p))}
+                        >
+                          <ShieldCheck className="mr-2 h-4 w-4" />
+                          {!collapsed && <span>Admin</span>}
+                          {!collapsed && (
+                            <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                          )}
+                        </SidebarMenuButton>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <SidebarMenuSub>
+                          {adminLeftovers.map((item) => (
+                            <SidebarMenuSubItem key={item.title}>
+                              <SidebarMenuSubButton asChild isActive={isActive(item.url)}>
+                                <Link to={item.url}>
+                                  <item.icon className="mr-2 h-3.5 w-3.5" />
+                                  <span>{item.title}</span>
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          ))}
+                        </SidebarMenuSub>
+                      </CollapsibleContent>
+                    </SidebarMenuItem>
+                  </Collapsible>
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
         )}
+
       </SidebarContent>
 
       <SidebarFooter>

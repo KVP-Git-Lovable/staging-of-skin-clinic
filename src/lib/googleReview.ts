@@ -1,4 +1,7 @@
 import { normalizePhone } from "@/lib/audienceImport";
+// The "already sent / link opened" wording is shared with the follow-up
+// buttons, which face exactly the same two-marks problem. See contactNotice.ts.
+import { contactNotice, toDate, whenWords } from "@/lib/contactNotice";
 
 /**
  * Asking a patient for a Google review.
@@ -112,6 +115,30 @@ export function whatsappShareUrl(
   return `https://web.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(message)}`;
 }
 
+/** What a web.whatsapp.com/send URL begins with, before the query. */
+const WEB_SEND_PREFIX = "https://web.whatsapp.com/send?";
+
+/**
+ * The same address, pointed at WhatsApp Desktop instead of the browser.
+ *
+ * The clinic has the desktop app installed on the front-desk machines and it
+ * was never being used: every button handed the browser a web.whatsapp.com
+ * address, so the browser kept it, and a second tab arrived on every click.
+ * `whatsapp://` is the protocol the installed app registers with the
+ * operating system, so the message goes to the app and no tab is created.
+ *
+ * Built by swapping the prefix rather than from the phone again, deliberately:
+ * the query string is then IDENTICAL, so the app and the web fallback cannot
+ * end up addressing a different person or carrying a different message. A URL
+ * that is not a web send link is returned unchanged, so a caller holding
+ * something unexpected falls through to the browser rather than to nothing.
+ */
+export function whatsappAppUrl(webUrl: string): string {
+  return webUrl.startsWith(WEB_SEND_PREFIX)
+    ? `whatsapp://send?${webUrl.slice(WEB_SEND_PREFIX.length)}`
+    : webUrl;
+}
+
 /**
  * What the Feedback tab's review button should do, decided here rather than in
  * the component.
@@ -169,25 +196,6 @@ export function isReviewRequestMessage(content: string | null | undefined): bool
   );
 }
 
-/** A timestamp from the database, or nothing usable. */
-function toDate(value: string | Date | null | undefined): Date | null {
-  if (!value) return null;
-  const when = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(when.getTime()) ? null : when;
-}
-
-/** "today at 3:42 PM", or "on 2 Nov 2026 at 3:42 PM". */
-function whenWords(when: Date, now: Date): string {
-  const time = when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  const sameDay =
-    when.getFullYear() === now.getFullYear() &&
-    when.getMonth() === now.getMonth() &&
-    when.getDate() === now.getDate();
-  if (sameDay) return `today at ${time}`;
-  const date = when.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-  return `on ${date} at ${time}`;
-}
-
 /**
  * When the last one went, in words - so a second send is a decision rather
  * than a reflex. Empty when none has been sent.
@@ -229,12 +237,5 @@ export function reviewContactNotice(
   lastOpenedAt: string | Date | null | undefined,
   now: Date = new Date(),
 ): string {
-  const sent = toDate(lastSentAt);
-  const opened = toDate(lastOpenedAt);
-  if (!sent && !opened) return "";
-  // >= rather than >: the tie goes to the send.
-  if (sent && (!opened || sent.getTime() >= opened.getTime())) {
-    return `Already sent ${whenWords(sent, now)}`;
-  }
-  return `Review link opened ${whenWords(opened as Date, now)}`;
+  return contactNotice(lastSentAt, lastOpenedAt, "Review link opened", now);
 }

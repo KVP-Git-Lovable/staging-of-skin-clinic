@@ -1,3 +1,4 @@
+import { titleFromGender } from "../_shared/patient-greeting.ts";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -18,15 +19,14 @@ const corsHeaders = {
 // Read from the environment so the next revision is a secret change rather than
 // a deploy (Twilio cannot edit an approved template, so every reword means a new
 // id). Same shape as portal-otp-send.
-// The revision before this one, which carried the date and time in a single
-// {{2}}. Named so this function can tell which template it is actually pointed
-// at: deploying the code and setting the secret are two separate acts by two
-// separate hands, and whichever lands first must not break the send. Once the
-// secret names the new template this constant and the branch below can go.
-const LEGACY_DATE_AND_TIME_SID = "HX2c965add7f2cc9d16757d594cd30f04c";
+// The approved revision (14 October 2026) is also the fallback. On 20 November
+// the secret went missing and this fell back to the revision before it, which
+// Twilio had since deleted ("Content was not found", 21655), so every
+// confirmation failed for a day. A missing secret must never mean a dead id.
+const CURRENT_TEMPLATE_SID = "HX94ee75fc816f1dc51c663285082d9510";
 
 const TEMPLATE_SID =
-  Deno.env.get("TWILIO_APPOINTMENT_TEMPLATE_SID") || LEGACY_DATE_AND_TIME_SID;
+  Deno.env.get("TWILIO_APPOINTMENT_TEMPLATE_SID") || CURRENT_TEMPLATE_SID;
 
 function normalizePhone(phone: string): string | null {
   if (!phone) return null;
@@ -37,14 +37,6 @@ function normalizePhone(phone: string): string | null {
   if (cleaned.length === 10) return `+91${cleaned}`;
   if (cleaned.length === 12 && cleaned.startsWith("91")) return `+${cleaned}`;
   return `+${cleaned}`;
-}
-
-function titleFromGender(gender?: string | null): string {
-  if (!gender) return "";
-  const g = gender.toLowerCase();
-  if (g.startsWith("m")) return "Mr.";
-  if (g.startsWith("f")) return "Ms.";
-  return "";
 }
 
 // If an ISO timestamp is passed instead of a pre-formatted string, render it
@@ -119,15 +111,10 @@ Deno.serve(async (req) => {
     const time = ensureIstTime(appointmentTime);
 
     // Exactly as many variables as the template declares - Twilio rejects the
-    // send outright on a mismatch, with nothing delivered - so the shape is
-    // read from which template is configured rather than assumed. serviceName is
-    // still accepted in the request body (callers pass it) but neither template
-    // names the service.
-    const contentVariables = JSON.stringify(
-      TEMPLATE_SID === LEGACY_DATE_AND_TIME_SID
-        ? { "1": namedPatient, "2": `${dayAndDate} at ${time}` }
-        : { "1": namedPatient, "2": dayAndDate, "3": time },
-    );
+    // send outright on a mismatch, with nothing delivered. serviceName is still
+    // accepted in the request body (callers pass it) but the template does not
+    // name the service.
+    const contentVariables = JSON.stringify({ "1": namedPatient, "2": dayAndDate, "3": time });
 
     const body = new URLSearchParams({
       To: toFormatted,

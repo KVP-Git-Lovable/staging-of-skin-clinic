@@ -20,50 +20,15 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ShieldCheck, Plus, Save, Search, UserPlus, KeyRound, Trash2, Pencil, UserCog, History } from "lucide-react";
 import { canImpersonate, startImpersonation } from "@/lib/impersonation";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { roleDeleteState } from "@/lib/roleDelete";
 import CreateUserDialog from "@/components/users/CreateUserDialog";
 import EditUserDialog from "@/components/users/EditUserDialog";
 import { ThemePicker } from "@/components/theme/ThemePicker";
 import { BILLING_AMOUNTS_KEY } from "@/lib/billingVisibility";
+import { ALL_MODULES, defaultsToVisible } from "@/lib/modules";
+import { CopyButton } from "@/components/shared/CopyButton";
+import { credentialsMessage } from "@/lib/tempPassword";
 
-const ALL_MODULES = [
-  { key: "dashboard", label: "Dashboard" },
-  { key: "patients", label: "Patients" },
-  { key: "appointments", label: "Appointments" },
-  { key: "procedures", label: "Procedures" },
-  { key: "photos", label: "Photos" },
-  { key: "pharmacy", label: "Pharmacy" },
-  { key: "billing", label: "Billing" },
-  { key: "leave", label: "Leave" },
-  { key: "assets", label: "Assets" },
-  { key: "portal_orders", label: "Portal Orders" },
-  { key: "campaigns", label: "Campaigns" },
-  { key: "leads", label: "Leads" },
-  { key: "communications", label: "Communications Center" },
-  { key: "meta", label: "Meta" },
-  { key: "meta_connection", label: "Meta Connection" },
-  { key: "agentic_marketing", label: "Agentic Marketing" },
-  { key: "expenses", label: "Expenses" },
-  { key: "staff", label: "Staff" },
-  { key: "problem_areas", label: "Primary Concern" },
-  { key: "reports", label: "Reports" },
-  { key: "dashboards", label: "Dashboards" },
-  { key: "report_builder", label: "Report Builder" },
-  { key: "surveys", label: "Surveys" },
-  { key: "services", label: "Services" },
-  { key: "vendors", label: "Vendors" },
-  { key: "unit_master", label: "Unit Master" },
-  { key: "category_master", label: "Category Master" },
-  { key: "settings", label: "Settings" },
-  { key: "user_management", label: "User Management" },
-  // Not a module: a single switch. Untick View to hide invoice amounts, amounts
-  // paid, revenue figures and payment modes from this role everywhere in the app.
-  // A role with no row keeps seeing them (see lib/billingVisibility.ts), so the
-  // editor treats a missing row as ticked.
-  { key: BILLING_AMOUNTS_KEY, label: "Billing amounts & payment modes (untick to hide)", viewOnly: true },
-] as { key: string; label: string; viewOnly?: boolean }[];
-
-/** Rows the editor shows ticked when the role has no row for them yet. */
-const defaultsToVisible = (key: string) => key === BILLING_AMOUNTS_KEY;
 
 type PermMap = Record<string, { can_view: boolean; can_create: boolean; can_edit: boolean; can_delete: boolean }>;
 
@@ -84,7 +49,12 @@ export default function UserManagement() {
   const [resetPwMode, setResetPwMode] = useState<"auto" | "manual">("auto");
   const [resetPwValue, setResetPwValue] = useState("");
   const [resetPwConfirm, setResetPwConfirm] = useState("");
+  /** The one-time credentials on screen, or null when there are none to show. */
+  const [issued, setIssued] = useState<
+    { name: string; email: string; password: string; created: boolean } | null
+  >(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteRoleOpen, setDeleteRoleOpen] = useState(false);
   const [deleteStaff, setDeleteStaff] = useState<any>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editStaff, setEditStaff] = useState<any>(null);
@@ -241,6 +211,50 @@ export default function UserManagement() {
     },
   });
 
+  /**
+   * Remove a role nobody holds.
+   *
+   * Its permission rows go with it: role_module_permissions.role_id is
+   * ON DELETE CASCADE. staff.role_id is ON DELETE SET NULL, which is why a
+   * role in use must never reach here - roleDeleteState refuses it, and a
+   * trigger on the table refuses it again if this somehow does.
+   */
+  const deleteRole = useMutation({
+    mutationFn: async () => {
+      if (!selectedRole?.id) throw new Error("No role selected");
+      const { error } = await supabase.from("user_roles_config").delete().eq("id", selectedRole.id);
+      if (error) throw error;
+      return selectedRole.id as string;
+    },
+    onSuccess: (goneId) => {
+      queryClient.invalidateQueries({ queryKey: ["user-roles-config"] });
+      queryClient.invalidateQueries({ queryKey: ["staff-with-roles"] });
+      // Never leave the page pointing at a role that is gone.
+      const next = roles.find((r: { id: string }) => r.id !== goneId);
+      setSelectedRoleId(next?.id ?? "");
+      setDirtyPerms(null);
+      setDeleteRoleOpen(false);
+      toast({ title: "Role deleted" });
+    },
+    onError: (e: unknown) => {
+      setDeleteRoleOpen(false);
+      toast({
+        title: "Could not delete role",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const closeResetDialog = () => {
+    setResetPwOpen(false);
+    setResetPwStaff(null);
+    setResetPwValue("");
+    setResetPwConfirm("");
+    setResetPwMode("auto");
+    setIssued(null);
+  };
+
   const resetPassword = useMutation({
     mutationFn: async () => {
       if (!resetPwStaff) throw new Error("No user selected");
@@ -268,7 +282,11 @@ export default function UserManagement() {
         });
         if (error) throw new Error(await edgeFunctionErrorMessage(error));
         if (data?.error) throw new Error(data.error);
-        return;
+        // Kept, not dropped. This used to be a bare `return;`, so the
+        // generated password - the only copy in existence, since Supabase
+        // stores a hash - went out of scope here and could never be given to
+        // anybody. Akash Macwan's login was created that way on 13 Nov.
+        return { created: true, tempPassword: (data as { temp_password?: string | null })?.temp_password ?? null };
       }
 
       const { data, error } = await supabase.functions.invoke("create-user-account", {
@@ -288,15 +306,29 @@ export default function UserManagement() {
       const { error: flagError } = await supabase
         .from("staff").update({ force_password_change: true } as never).eq("id", resetPwStaff.id);
       if (flagError) throw flagError;
+
+      return { created: false, tempPassword: (data as { temp_password?: string | null })?.temp_password ?? null };
     },
-    onSuccess: () => {
-      toast({ title: resetPwStaff?.auth_user_id ? "Password reset successfully" : "Login account created" });
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["staff-with-roles"] });
-      setResetPwOpen(false);
-      setResetPwStaff(null);
-      setResetPwValue("");
-      setResetPwConfirm("");
-      setResetPwMode("auto");
+      toast({ title: result?.created ? "Login account created" : "Password reset successfully" });
+
+      // An auto-generated password is shown ONCE, here, and the dialog stays
+      // open until it has been. Closing on success is what made this feature
+      // useless: the only copy of the password went with it.
+      if (result?.tempPassword) {
+        setIssued({
+          name: resetPwStaff?.name ?? "",
+          email: resetPwStaff?.email ?? "",
+          password: result.tempPassword,
+          created: !!result.created,
+        });
+        setResetPwValue("");
+        setResetPwConfirm("");
+        return;
+      }
+
+      closeResetDialog();
     },
     onError: (err: any) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -354,6 +386,12 @@ export default function UserManagement() {
   );
 
   const selectedRole = roles.find((r: any) => r.id === selectedRoleId);
+  // The staff list is already loaded for the Users tab, so the count costs
+  // nothing extra.
+  const staffOnSelectedRole = staff.filter(
+    (x: { role_id?: string | null }) => x.role_id === selectedRoleId,
+  ).length;
+  const roleDelete = roleDeleteState({ role: selectedRole, staffCount: staffOnSelectedRole });
 
   return (
     <div className="space-y-4">
@@ -433,6 +471,26 @@ export default function UserManagement() {
                       </TableCell>
                       {isAdmin && (
                         <TableCell className="flex gap-1">
+                          {/* One slot, two states. "Log in as this user"
+                              needs a real account to switch into, so it can
+                              never appear for somebody who has none - and on
+                              those rows it read as a missing feature rather
+                              than a missing account. Thirteen of the clinic's
+                              twenty-one staff had an email on their staff row
+                              and no login behind it.
+
+                              So that slot now offers the step that is
+                              actually needed. Creating the account is not
+                              gated on mayImpersonate: that flag is the
+                              impersonate function's own server-side
+                              allow-list and answers "may I become another
+                              user", which is a narrower question than "may I
+                              make one an account" - and this whole cell is
+                              already admin-only.
+
+                              Nothing further to do afterwards: the dialog
+                              invalidates staff-with-roles on success, so the
+                              row comes back with the other branch. */}
                           {mayImpersonate && s.auth_user_id && s.is_active && (
                             <Button
                               variant="ghost"
@@ -441,6 +499,23 @@ export default function UserManagement() {
                               onClick={() => setImpersonateStaff(s)}
                             >
                               <UserCog className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {!s.auth_user_id && s.is_active && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="Create login"
+                              data-testid="create-login"
+                              onClick={() => {
+                                setResetPwStaff(s);
+                                setResetPwMode("auto");
+                                setResetPwValue("");
+                                setResetPwConfirm("");
+                                setResetPwOpen(true);
+                              }}
+                            >
+                              <UserPlus className="h-4 w-4" />
                             </Button>
                           )}
                           <Button
@@ -457,7 +532,7 @@ export default function UserManagement() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            title="Reset Password"
+                            title={s.auth_user_id ? "Reset Password" : "Create Login"}
                             onClick={() => {
                               setResetPwStaff(s);
                               setResetPwMode("auto");
@@ -554,6 +629,11 @@ export default function UserManagement() {
                   {selectedRole?.is_system && (
                     <Badge variant="outline" className="text-xs">System Role</Badge>
                   )}
+                  {selectedRole && !selectedRole.is_system && !roleDelete.canDelete && (
+                    <span className="text-xs text-muted-foreground" data-testid="role-delete-reason">
+                      {roleDelete.reason}
+                    </span>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <Dialog open={addRoleOpen} onOpenChange={setAddRoleOpen}>
@@ -577,6 +657,21 @@ export default function UserManagement() {
                       </div>
                     </DialogContent>
                   </Dialog>
+                  {/* Absent entirely for a system role - there is no case in
+                      which Admin or Doctor should be removable - and disabled
+                      with the reason when somebody still holds it. */}
+                  {selectedRole && !selectedRole.is_system && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      data-testid="delete-role"
+                      disabled={!roleDelete.canDelete || deleteRole.isPending}
+                      title={roleDelete.canDelete ? `Delete the ${selectedRole.name} role` : roleDelete.reason}
+                      onClick={() => setDeleteRoleOpen(true)}
+                    >
+                      <Trash2 className="h-4 w-4 mr-1" />Delete Role
+                    </Button>
+                  )}
                   {dirtyPerms && (
                     <Button size="sm" onClick={() => savePerms.mutate()}>
                       <Save className="h-4 w-4 mr-1" />Save Permissions
@@ -702,13 +797,53 @@ export default function UserManagement() {
       />
 
       {/* Reset Password Dialog */}
-      <Dialog open={resetPwOpen} onOpenChange={setResetPwOpen}>
+      <Dialog open={resetPwOpen} onOpenChange={(o) => { if (!o) closeResetDialog(); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {resetPwStaff?.auth_user_id ? "Reset Password for " : "Create Login for "}{resetPwStaff?.name}
+              {issued
+                ? (issued.created ? "Login created for " : "Password reset for ")
+                : resetPwStaff?.auth_user_id ? "Reset Password for " : "Create Login for "}{resetPwStaff?.name}
             </DialogTitle>
           </DialogHeader>
+
+          {issued ? (
+            /* Shown once and never again: Supabase keeps only the hash, so
+               this panel is the single moment the password exists anywhere
+               outside the function that made it. Same shape as the portal
+               access code card on PatientDetail, for the same reason. */
+            <div className="space-y-4" data-testid="issued-credentials">
+              <div className="rounded-lg border border-border bg-muted/40 p-3 space-y-2">
+                <div>
+                  <p className="text-xs text-muted-foreground">Email</p>
+                  <p className="font-mono text-sm break-all">{issued.email}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Temporary password</p>
+                  <p className="font-mono text-lg font-bold tracking-wider break-all" data-testid="temp-password">
+                    {issued.password}
+                  </p>
+                </div>
+              </div>
+              <p className="text-sm flex items-start gap-2 text-muted-foreground">
+                <KeyRound className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>
+                  Copy this now - it is shown only once and cannot be looked up later.
+                  {issued.name ? ` ${issued.name}` : " They"} will be asked to choose their own
+                  password the first time they sign in.
+                </span>
+              </p>
+              <div className="flex items-center gap-2">
+                <CopyButton
+                  value={credentialsMessage({ name: issued.name, email: issued.email, password: issued.password })}
+                  label="Login details"
+                  className="h-9 w-9"
+                />
+                <span className="text-sm text-muted-foreground">Copy the whole message to send</span>
+              </div>
+              <Button className="w-full" data-testid="issued-done" onClick={closeResetDialog}>Done</Button>
+            </div>
+          ) : (
           <div className="space-y-4">
             {!resetPwStaff?.auth_user_id && (
               <p className="text-sm text-muted-foreground">
@@ -762,8 +897,32 @@ export default function UserManagement() {
                 : (resetPwStaff?.auth_user_id ? "Reset Password" : "Create Login")}
             </Button>
           </div>
+          )}
         </DialogContent>
       </Dialog>
+
+      {/* Delete Role Confirmation */}
+      <AlertDialog open={deleteRoleOpen} onOpenChange={setDeleteRoleOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete role</AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete <strong>{selectedRole?.name}</strong>? Its module permissions go with it.
+              Nobody currently has this role, so no one loses access. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="confirm-delete-role"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteRole.mutate()}
+            >
+              {deleteRole.isPending ? "Deleting..." : "Delete Role"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Delete User Confirmation */}
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>

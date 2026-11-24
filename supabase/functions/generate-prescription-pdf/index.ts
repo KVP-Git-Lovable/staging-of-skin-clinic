@@ -183,7 +183,12 @@ async function buildPrescriptionPdf(client: ReturnType<typeof createClient>, pro
     { data: serviceLineRows },
     { data: stickyNoteRows },
   ] = await Promise.all([
-    client.from("prescriptions").select("*").eq("procedure_id", procedureId).order("created_at"),
+    // sort_order first: every product of one save shares a created_at, so
+    // ordering by that alone is a tie the database breaks however it likes -
+    // which is how Triclenz, Triflow came out as Deriva, Triflow, Triclenz.
+    // Kept in step with src/lib/prescriptionOrder.ts.
+    client.from("prescriptions").select("*").eq("procedure_id", procedureId)
+      .order("sort_order", { nullsFirst: false }).order("created_at").order("id"),
     client.from("clinic_settings").select("*").limit(1).maybeSingle(),
     client.from("procedure_services").select("*").eq("procedure_id", procedureId).order("sort_order"),
     client.from("procedure_sticky_notes").select("*").eq("procedure_id", procedureId).order("created_at"),

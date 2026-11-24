@@ -56,6 +56,42 @@ describe("currentPosition", () => {
     await expect(currentPosition()).resolves.toBeNull();
   });
 
+  it("uses the rough network fix when the precise GPS fix times out indoors", async () => {
+    vi.stubGlobal("navigator", {
+      geolocation: {
+        getCurrentPosition: (ok: (p: unknown) => void, fail: (e: unknown) => void, opts: PositionOptions) =>
+          opts.enableHighAccuracy
+            ? fail({ code: 3 })
+            : ok({ coords: { latitude: 12.86, longitude: 74.85, accuracy: 60 } }),
+      },
+    });
+    await expect(currentPosition()).resolves.toEqual({ latitude: 12.86, longitude: 74.85, accuracy: 60 });
+  });
+
+  it("prefers the precise fix when both arrive", async () => {
+    vi.stubGlobal("navigator", {
+      geolocation: {
+        getCurrentPosition: (ok: (p: unknown) => void, _fail: unknown, opts: PositionOptions) =>
+          ok({ coords: opts.enableHighAccuracy
+            ? { latitude: 12.87, longitude: 74.84, accuracy: 9 }
+            : { latitude: 12.80, longitude: 74.80, accuracy: 900 } }),
+      },
+    });
+    await expect(currentPosition()).resolves.toEqual({ latitude: 12.87, longitude: 74.84, accuracy: 9 });
+  });
+
+  it("gives no location when permission is denied, even if a rough fix would answer", async () => {
+    vi.stubGlobal("navigator", {
+      geolocation: {
+        getCurrentPosition: (ok: (p: unknown) => void, fail: (e: unknown) => void, opts: PositionOptions) =>
+          opts.enableHighAccuracy
+            ? fail({ code: 1 })
+            : ok({ coords: { latitude: 12.86, longitude: 74.85, accuracy: 60 } }),
+      },
+    });
+    await expect(currentPosition()).resolves.toBeNull();
+  });
+
   it("resolves null on a browser with no geolocation at all", async () => {
     vi.stubGlobal("navigator", {});
     await expect(currentPosition()).resolves.toBeNull();

@@ -42,7 +42,7 @@ function extensionOf(url: string | null | undefined): string {
 }
 
 /** dd-MM-yyyy. Hyphens, because a slash would start a new folder. */
-function dateOf(takenAt: string | null | undefined): string {
+export function fileDate(takenAt: string | null | undefined): string {
   const value = String(takenAt ?? "").trim();
   if (!value) return "";
   const d = new Date(value);
@@ -59,7 +59,7 @@ function dateOf(takenAt: string | null | undefined): string {
  * clinic's own data carry a trailing space ("Shaida ", "Ayesha ") which some
  * systems quietly drop and others refuse.
  */
-function clean(part: string): string {
+export function cleanFilePart(part: string): string {
   return part
     .replace(/[\\/:*?"<>|]+/g, " ")
     // Control characters would be legal in places and unreadable everywhere.
@@ -70,8 +70,8 @@ function clean(part: string): string {
 }
 
 export function photoFileName(parts: PhotoNameParts): string {
-  const pieces = [parts.patientName, parts.serviceName, dateOf(parts.takenAt)]
-    .map((p) => clean(String(p ?? "")))
+  const pieces = [parts.patientName, parts.serviceName, fileDate(parts.takenAt)]
+    .map((p) => cleanFilePart(String(p ?? "")))
     .filter(Boolean);
 
   // "photo" rather than a bare extension, for a photo with nothing known about

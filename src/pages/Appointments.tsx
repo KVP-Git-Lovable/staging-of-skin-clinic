@@ -1,5 +1,15 @@
-import { THERAPIST_ROLES, therapistDisplayName, isTherapistRole, type TherapistCandidate } from "@/lib/appointmentTherapist";
+import {
+  THERAPIST_ROLES,
+  THERAPIST_FIELD_LABEL,
+  therapistDisplayName,
+  therapistIdsOf,
+  isTherapistRole,
+  type TherapistCandidate,
+} from "@/lib/appointmentTherapist";
 import { StaffCombobox } from "@/components/shared/StaffCombobox";
+import { useAuth } from "@/hooks/useAuth";
+import { canActOnModule, canViewModule } from "@/lib/staffAccess";
+import { StaffMultiCombobox } from "@/components/shared/StaffMultiCombobox";
 import { useStackedTable } from "@/hooks/useStackedTable";
 import { resizeColumn, mergeSavedWidths, type ColumnWidth } from "@/lib/columnWidths";
 import { isPageSortedColumn, sortAppointments } from "@/lib/appointmentSort";
@@ -568,6 +578,28 @@ const Appointments = () => {
   const [editValues, setEditValues] = useState<any>({});
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string; fromSalesforce: boolean } | null>(null);
 
+  /**
+   * What this person may DO here, as opposed to see.
+   *
+   * can_create, can_edit and can_delete have been stored on every role since
+   * the permission table was built and were enforced nowhere, so a therapist
+   * impersonated into this page was offered New Appt, a pencil, a status
+   * dropdown and a delete button on all 58,001 appointments. The row that
+   * says otherwise already existed; nothing read it.
+   *
+   * "Add Prescription" asks the procedures module instead, because that is
+   * the page it navigates to - offering a button that lands on Access Denied
+   * is worse than not offering it.
+   */
+  const { isAdmin: iAmAdmin, permissions: myPermissions } = useAuth();
+  const mayAct = (action: "can_create" | "can_edit" | "can_delete") =>
+    canActOnModule({ isAdmin: iAmAdmin, permissions: myPermissions, moduleKey: "appointments", action });
+  const canCreateAppt = mayAct("can_create");
+  const canEditAppt = mayAct("can_edit");
+  const canDeleteAppt = mayAct("can_delete");
+  const canAddPrescription = canViewModule({ isAdmin: iAmAdmin, permissions: myPermissions, moduleKey: "procedures" });
+  const showRowActions = canEditAppt || canDeleteAppt || canAddPrescription;
+
   // Drag-reschedule state
   const dragRef = useRef<{ aptId: string; originalStart: string; originalEnd: string } | null>(null);
 
@@ -579,7 +611,7 @@ const Appointments = () => {
   // Form state
   const [patientId, setPatientId] = useState("");
   const [staffId, setStaffId] = useState("");
-  const [therapistId, setTherapistId] = useState("");
+  const [therapistIds, setTherapistIds] = useState<string[]>([]);
   const [serviceId, setServiceId] = useState("");
   const [appointmentStatus, setAppointmentStatus] = useState("Reserved");
   const [visitStatus, setVisitStatus] = useState("");
@@ -1267,6 +1299,9 @@ const Appointments = () => {
       service: apt.service || "",
       doctor: apt.staff_id || "",
       therapist: apt.therapist_id || "",
+      // The whole list, for filtering only. The column above still shows the
+      // first person, so nothing that reads `therapist` changes.
+      therapist_ids: therapistIdsOf(apt),
       status: apt.status || "",
       visit_status: apt.visit_status || "",
       bill: canSeeBilling ? inv?.total_amount || 0 : 0,
@@ -1460,7 +1495,7 @@ const Appointments = () => {
       reason_for_consultation: apt.reason_for_consultation || "",
       service: apt.service || "",
       staff_id: apt.staff_id || "",
-      therapist_id: apt.therapist_id || "",
+      therapist_ids: therapistIdsOf(apt),
       status: apt.status,
       start_time: format(new Date(apt.start_time), "yyyy-MM-dd'T'HH:mm"),
       end_time: format(new Date(apt.end_time), "yyyy-MM-dd'T'HH:mm"),
@@ -1482,8 +1517,13 @@ const Appointments = () => {
     if (editValues.service) updates.service = editValues.service;
     if (editValues.staff_id) updates.staff_id = editValues.staff_id;
     // Not a truthy guard, unlike the doctor above: clearing the therapist has
-    // to be possible, so an empty choice must reach the database as null.
-    if (editValues.therapist_id !== undefined) updates.therapist_id = editValues.therapist_id || null;
+    // to be possible, so an empty choice must reach the database as null. Both
+    // columns move together - therapist_id carries the first of them, which is
+    // all the published build can read.
+    if (editValues.therapist_ids !== undefined) {
+      updates.therapist_ids = editValues.therapist_ids;
+      updates.therapist_id = editValues.therapist_ids[0] || null;
+    }
     if (editValues.status) updates.status = editValues.status;
     if (editValues.start_time) updates.start_time = new Date(editValues.start_time).toISOString();
     if (editValues.end_time) updates.end_time = new Date(editValues.end_time).toISOString();
@@ -1571,7 +1611,8 @@ const Appointments = () => {
           patient_id: patientId || null,
           patient_name: patientName,
           staff_id: staffId || null,
-          therapist_id: therapistId || null,
+          therapist_id: therapistIds[0] || null,
+          therapist_ids: therapistIds,
           service: serviceName,
           status: appointmentStatus,
           visit_status: visitStatus || null,
@@ -1592,7 +1633,8 @@ const Appointments = () => {
           patient_id: patientId || null,
           patient_name: patientName,
           staff_id: staffId || null,
-          therapist_id: therapistId || null,
+          therapist_id: therapistIds[0] || null,
+          therapist_ids: therapistIds,
           service: serviceName,
           status: appointmentStatus,
           visit_status: visitStatus || null,
@@ -1912,7 +1954,7 @@ const Appointments = () => {
   const resetForm = () => {
     setPatientId("");
     setStaffId("");
-    setTherapistId("");
+    setTherapistIds([]);
     setServiceId("");
     setAppointmentStatus("Reserved");
     setVisitStatus("");
@@ -2268,9 +2310,11 @@ const Appointments = () => {
             <Printer className="h-4 w-4" />
           </Button>
           <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setLockPatient(false); }}>
+            {canCreateAppt && (
             <DialogTrigger asChild>
               <Button className="gap-2 h-8 md:h-9 text-xs md:text-sm"><Plus className="h-4 w-4" /> <span className="hidden sm:inline">New</span> Appt</Button>
             </DialogTrigger>
+            )}
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto mx-2 sm:mx-auto">
               <DialogHeader>
                 <DialogTitle className="font-display flex items-center justify-between gap-2">
@@ -2392,15 +2436,13 @@ const Appointments = () => {
                       does not know yet, and it is set or swapped later from
                       the appointment itself. */}
                   <div>
-                    <Label>Therapist</Label>
-                    <StaffCombobox
+                    <Label>{THERAPIST_FIELD_LABEL}</Label>
+                    <StaffMultiCombobox
                       className="mt-1.5"
-                      value={therapistId}
-                      onValueChange={setTherapistId}
+                      value={therapistIds}
+                      onValueChange={setTherapistIds}
                       roleFilter={[...THERAPIST_ROLES]}
-                      allowNone
-                      noneLabel="No therapist assigned"
-                      placeholder="Select therapist"
+                      placeholder="Select therapist or nurse"
                     />
                   </div>
 
@@ -3073,7 +3115,7 @@ const Appointments = () => {
                           />
                         </th>
                       )}
-                      <th className="text-left p-3 font-medium text-muted-foreground w-20">Actions</th>
+                      {showRowActions && <th className="text-left p-3 font-medium text-muted-foreground w-20">Actions</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -3162,14 +3204,12 @@ const Appointments = () => {
 
                                       {shouldShowColumn("therapist") && (
                                         <div className="w-44">
-                                          <span className="text-[11px] text-muted-foreground">Therapist</span>
-                                          <StaffCombobox
-                                            className="mt-1 h-8 text-xs"
-                                            value={editValues.therapist_id || ""}
-                                            onValueChange={(val) => setEditValues({ ...editValues, therapist_id: val })}
+                                          <span className="text-[11px] text-muted-foreground">{THERAPIST_FIELD_LABEL}</span>
+                                          <StaffMultiCombobox
+                                            className="mt-1"
+                                            value={editValues.therapist_ids || []}
+                                            onValueChange={(val) => setEditValues({ ...editValues, therapist_ids: val })}
                                             roleFilter={[...THERAPIST_ROLES]}
-                                            allowNone
-                                            noneLabel="No therapist"
                                             placeholder="Select"
                                           />
                                         </div>
@@ -3353,6 +3393,15 @@ const Appointments = () => {
                                 )}
                                 {shouldShowColumn("status") && (
                                   <td className="p-3" onClick={(e) => e.stopPropagation()}>
+                                    {/* A dropdown is an edit. Without a badge to
+                                        fall back to, somebody who may only read
+                                        the list would still be handed the one
+                                        control on it that changes a record. */}
+                                    {!canEditAppt ? (
+                                      <Badge className={cn("text-xs", showsAsBilled(apt.status, billInvoiceByAppointmentId.has(apt.id)) ? BILLED_BADGE_CLASSES : statusColor(apt.status))}>
+                                        {appointmentStatusLabel(apt.status, billInvoiceByAppointmentId.has(apt.id))}
+                                      </Badge>
+                                    ) : (
                                     <Select value={apt.status} onValueChange={(val) => inlineUpdateMutation.mutate({
                                       id: apt.id,
                                       status: val,
@@ -3378,13 +3427,18 @@ const Appointments = () => {
                                         {statusOptions.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                                       </SelectContent>
                                     </Select>
+                                    )}
                                   </td>
                                 )}
+                                {showRowActions && (
                                 <td className="p-3" onClick={(e) => e.stopPropagation()}>
                                   <div className="flex items-center gap-0.5">
+                                    {canEditAppt && (
                                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startInlineEdit(apt)}>
                                       <Pencil className="h-3.5 w-3.5" />
                                     </Button>
+                                    )}
+                                    {canAddPrescription && (
                                     <Button
                                       variant="ghost"
                                       size="icon"
@@ -3402,6 +3456,8 @@ const Appointments = () => {
                                     >
                                       <ClipboardList className="h-3.5 w-3.5" />
                                     </Button>
+                                    )}
+                                    {canDeleteAppt && (
                                     <Button
                                       variant="ghost"
                                       size="icon"
@@ -3415,8 +3471,10 @@ const Appointments = () => {
                                     >
                                       <Trash2 className="h-3.5 w-3.5" />
                                     </Button>
+                                    )}
                                   </div>
                                 </td>
+                                )}
                               </tr>
                             );
                           })}

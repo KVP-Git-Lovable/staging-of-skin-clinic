@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   dayButtons,
   dayPhase,
@@ -8,6 +9,7 @@ import {
   hoursWorked,
   attendancePhotoPath,
   MAX_FACE_ATTEMPTS,
+  faceFailureReason,
 } from "./attendance";
 
 /**
@@ -286,5 +288,101 @@ describe("greeting", () => {
 
   it("greets the small hours as morning, which is when a night shift ends", () => {
     expect(greeting(new Date("2026-11-03T02:00:00+05:30"))).toBe("Good morning");
+  });
+});
+
+/**
+ * Saying why, when the answer is not "try again".
+ *
+ * 17 of the clinic's 18 active staff have no profile photo. The face check
+ * compares a selfie against staff.photo_url, so for all 17 the function
+ * answers "Set your profile photo first" - and every one of them was told
+ * "Face verification service error. Attempt 1/3. Please try again." three
+ * times before being let in flagged for review.
+ */
+describe("faceFailureReason", () => {
+  it("recognises the two refusals the function actually sends", () => {
+    expect(faceFailureReason("Set your profile photo first")).toBe("no_photo");
+    expect(faceFailureReason("No staff record for this login")).toBe("not_staff");
+  });
+
+  it("does not care about case or surrounding words", () => {
+    expect(faceFailureReason("ERROR: set your PROFILE PHOTO first.")).toBe("no_photo");
+  });
+
+  it("returns nothing for anything it does not know", () => {
+    // A new error string must leave the old service-fault path alone rather
+    // than stranding somebody at the door with a message that fits nothing.
+    expect(faceFailureReason("That photo is not yours")).toBeNull();
+    expect(faceFailureReason("Please sign in")).toBeNull();
+    expect(faceFailureReason("")).toBeNull();
+    expect(faceFailureReason(null)).toBeNull();
+    expect(faceFailureReason(undefined)).toBeNull();
+  });
+});
+
+describe("faceVerdict, when the function refused and said why", () => {
+  it("tells somebody with no photo exactly that, and does not retry", () => {
+    const v = faceVerdict({ status: "bypassed", confidence: 0, reason: "no_photo" }, 1, 3);
+    expect(v.proceed).toBe(false);
+    expect(v.retry).toBe(false);
+    expect(v.message).toMatch(/add your profile photo/i);
+    expect(v.message).not.toMatch(/service error|attempt/i);
+  });
+
+  it("says the same thing on the last attempt as on the first", () => {
+    // Retrying cannot conjure a profile photo, so running out of goes must
+    // not quietly let them in flagged for review instead.
+    const last = faceVerdict({ status: "bypassed", confidence: 0, reason: "no_photo" }, 3, 3);
+    expect(last.proceed).toBe(false);
+    expect(last.retry).toBe(false);
+    expect(last.message).toMatch(/add your profile photo/i);
+  });
+
+  it("names the real problem when the login has no staff record", () => {
+    const v = faceVerdict({ status: "bypassed", confidence: 0, reason: "not_staff" }, 1, 3);
+    expect(v.proceed).toBe(false);
+    expect(v.retry).toBe(false);
+    expect(v.message).toMatch(/not linked to a staff record/i);
+  });
+
+  it("still lets a verified check-in through, reason or not", () => {
+    expect(faceVerdict({ status: "verified", confidence: 91, reason: "no_photo" }, 1, 3).proceed).toBe(true);
+  });
+
+  it("leaves a genuine service fault behaving exactly as it did", () => {
+    // No reason set - the function was unreachable, or said something new.
+    const first = faceVerdict({ status: "bypassed", confidence: 0 }, 1, 3);
+    expect(first.retry).toBe(true);
+    expect(first.message).toMatch(/service error/i);
+    const last = faceVerdict({ status: "bypassed", confidence: 0 }, 3, 3);
+    expect(last.proceed).toBe(true);
+    expect(last.recordStatus).toBe("bypassed");
+  });
+});
+
+describe("the check-in hook", () => {
+  const hook = () =>
+    readFileSync("src/hooks/useMyAttendanceDay.ts", "utf8")
+      .replace(/^\s*\/\/.*$/gm, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it("reads the refusal out of the response body", () => {
+    // supabase-js puts only the status line on the Error; the reason is in
+    // the body, reachable through error.context.
+    const src = hook();
+    expect(src).toMatch(/const response = \(error as \{ context\?: Response \}\)\?\.context/);
+    expect(src).toMatch(/faceFailureReason\(/);
+    expect(src).toMatch(/reason: await refusalReason\(error\)/);
+  });
+
+  it("does not spend one of their three goes on a refusal", () => {
+    expect(hook()).toMatch(/if \(result\.reason\) setAttempt\(attempt\)/);
+  });
+
+  it("falls back to the old behaviour when the body cannot be read", () => {
+    const fn = hook().split("async function refusalReason")[1].split("export")[0];
+    expect(fn).toMatch(/return null/);
+    expect(fn).toMatch(/catch \{\s*return null;\s*\}/);
   });
 });

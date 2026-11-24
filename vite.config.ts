@@ -43,6 +43,10 @@ export default defineConfig(({ mode }) => ({
         // time it is opened or navigated, so no form is interrupted.
         skipWaiting: true,
         clientsClaim: true,
+        // Workbox's default keeps every superseded precache for ever, so a
+        // phone could go on being served an index.html from a build whose
+        // hashed chunks no longer exist on the server.
+        cleanupOutdatedCaches: true,
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
         runtimeCaching: [
           {

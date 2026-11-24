@@ -141,10 +141,31 @@ function normalizeIncomingPhone(twilioFrom: string): string {
   return twilioFrom.replace(/^whatsapp:/, "").trim();
 }
 
+/**
+ * Which patient a message from this number is from.
+ *
+ * This used to ask for any patient on the number and take the first row back
+ * - `.limit(1)` with no ORDER BY, which has no defined answer. The clinic
+ * reminded Pooja N Patil of her appointment tomorrow, she replied "Confirm",
+ * and the bot thanked Vihaan: her son shares the number and Postgres happened
+ * to hand his row over first. 2,587 numbers here carry more than one patient,
+ * 5,879 people in all, and for every one of them the answer was arbitrary.
+ *
+ * whatsapp_patient_for_phone picks the one with an appointment around now,
+ * failing that whoever came most recently, failing that the oldest profile.
+ * The rule lives in the database (see the 20261118140000 migration) because
+ * it needs the appointments to decide, and because one copy of it cannot
+ * disagree with another.
+ */
 async function findPatientByPhone(sb: any, phone: string) {
-  const last10 = phone.replace(/\D/g, "").slice(-10);
-  const { data } = await sb.from("patients").select("id, first_name, last_name, phone, gender, date_of_birth, skin_type, skin_concerns, allergies, current_medications, medical_history").or(`phone.eq.${phone},phone.ilike.%${last10}`).limit(1);
-  return data?.[0] || null;
+  const { data: patientId, error } = await sb.rpc("whatsapp_patient_for_phone", { p_phone: phone });
+  if (error || !patientId) return null;
+  const { data } = await sb
+    .from("patients")
+    .select("id, first_name, last_name, phone, gender, date_of_birth, skin_type, skin_concerns, allergies, current_medications, medical_history")
+    .eq("id", patientId)
+    .maybeSingle();
+  return data || null;
 }
 
 async function sendWhatsAppReply(toPhone: string, body: string): Promise<string | null> {

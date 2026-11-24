@@ -151,30 +151,20 @@ Deno.serve(async (req) => {
       return json({ status: "not_registered" }, 200);
     }
 
-    if (action === "check") {
-      // Several people on one number - a family. Which of them is logging
-      // in has to be asked, because the PIN belongs to the person and not
-      // to the phone.
-      if (candidates.length > 1) {
-        return json({
-          status: "choose_patient",
-          patients: candidates.map((c) => ({ id: c.id, name: fullName(c) })),
-        });
-      }
-      const only = candidates[0];
-      return json({
-        status: only.portal_pin_hash ? "pin_required" : "set_pin",
-        patientId: only.id,
-        patientName: fullName(only),
-      });
-    }
-
-    // Everything past this point acts ON a patient, so the id has to be one
-    // of the candidates for the number that was typed.
+    // Check also acts on the selected patient: validate the id against this
+    // phone before deciding which PIN screen to show.
     const patient = chosenPatient(candidates, patientId);
     if (!patient) {
       return json({ status: "choose_patient",
         patients: candidates.map((c) => ({ id: c.id, name: fullName(c) })) }, 200);
+    }
+
+    if (action === "check") {
+      return json({
+        status: patient.portal_pin_hash ? "pin_required" : "set_pin",
+        patientId: patient.id,
+        patientName: fullName(patient),
+      });
     }
 
     if (action === "set_pin") {

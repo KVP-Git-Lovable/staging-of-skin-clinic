@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { GOOGLE_REVIEW_LINK, GOOGLE_REVIEW_LINK_LEGACY, GOOGLE_REVIEW_MESSAGE, isReviewRequestMessage, reviewAlreadySentNotice, reviewContactNotice, reviewRequestState, whatsappShareUrl } from "./googleReview";
+import { readFileSync } from "node:fs";
+import { GOOGLE_REVIEW_LINK, GOOGLE_REVIEW_LINK_LEGACY, GOOGLE_REVIEW_MESSAGE, isReviewRequestMessage, reviewAlreadySentNotice, reviewContactNotice, reviewRequestState, whatsappShareUrl,
+  whatsappAppUrl,
+} from "./googleReview";
 
 describe("GOOGLE_REVIEW_MESSAGE", () => {
   /**
@@ -290,5 +293,70 @@ describe("reviewContactNotice", () => {
     // if refactoring moved the wording, the whole Feedback tab reads wrong.
     expect(reviewContactNotice(todayAfternoon, null, now))
       .toBe(reviewAlreadySentNotice(todayAfternoon, now));
+  });
+});
+
+describe("the review button is wired the way it is meant to be", () => {
+  /**
+   * The button lives in AppointmentDetailSheet, which would need the whole of
+   * Supabase, React Query and the router mocked to render. So its wiring is
+   * read from the source, with comments stripped: the file explains the traps
+   * it avoids, and a plain search finds the warning and reports it as the
+   * mistake.
+   */
+  const sheet = () =>
+    readFileSync("src/components/appointments/AppointmentDetailSheet.tsx", "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+
+  it("opens WhatsApp through the shared helper, not its own window.open", () => {
+    // One copy of the three rules - web.whatsapp.com not wa.me, no noopener,
+    // no dialog in the way - rather than two that drift.
+    const src = sheet();
+    expect(src).toContain("openWhatsApp(review.url, GOOGLE_REVIEW_MESSAGE)");
+    expect(src).not.toContain("window.open(");
+  });
+
+  it("records the ask ONLY when a tab really opened", () => {
+    // Inside the Lovable editor's preview frame no tab can work, and a row
+    // written anyway would later tell the clinic this patient had been asked.
+    expect(sheet()).toMatch(/if \(openWhatsApp\(.+\)\) recordReviewOpen\(\)/);
+  });
+});
+
+/**
+ * The address that reaches WhatsApp Desktop.
+ *
+ * The clinic has the app installed on the front desk and it was never used:
+ * every button handed the browser a web.whatsapp.com address, so the browser
+ * kept it, and a second tab arrived on every click.
+ */
+describe("whatsappAppUrl", () => {
+  const web = (text: string) => `https://web.whatsapp.com/send?phone=919606342269&text=${text}`;
+
+  it("keeps the query exactly, so the app and the web cannot differ", () => {
+    // Built by swapping the prefix rather than from the phone again: the two
+    // must never end up addressing a different person or carrying different
+    // words.
+    expect(whatsappAppUrl(web("Hello%20there")))
+      .toBe("whatsapp://send?phone=919606342269&text=Hello%20there");
+  });
+
+  it("uses the protocol the installed app registers", () => {
+    expect(whatsappAppUrl(web("x")).startsWith("whatsapp://")).toBe(true);
+    expect(whatsappAppUrl(web("x"))).not.toContain("web.whatsapp.com");
+    expect(whatsappAppUrl(web("x"))).not.toContain("http");
+  });
+
+  it("carries an encoded message through untouched", () => {
+    const encoded = encodeURIComponent("Hello Ms. Surekha,\nHow are you?");
+    expect(whatsappAppUrl(web(encoded))).toContain(`text=${encoded}`);
+  });
+
+  it("hands back anything that is not a web send link, rather than nothing", () => {
+    // A caller holding something unexpected falls through to the browser,
+    // which is recoverable; returning null or "" would open nothing at all.
+    expect(whatsappAppUrl("https://wa.me/919606342269")).toBe("https://wa.me/919606342269");
+    expect(whatsappAppUrl("")).toBe("");
   });
 });

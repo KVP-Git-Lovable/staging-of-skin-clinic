@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { assertWrote } from "@/lib/rowAccess";
 import { PASSWORD_RULE_TEXT, passwordProblem } from "@/lib/passwordRules";
+import { SESSION_GONE_BODY, SESSION_GONE_TITLE, isSessionGone } from "@/lib/sessionExpired";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,12 +19,20 @@ import { toast } from "sonner";
  *
  * Sign out is always available: if the update fails for any reason, nobody is
  * trapped in here.
+ *
+ * And a session that has died is handled on its own. Resetting a password
+ * invalidates the session the person already has open, so somebody whose
+ * password was just changed for them lands here holding a dead token; the
+ * update then fails with "Auth session missing!" on a form that can never
+ * succeed. Both doctors hit that on 13 November. It now says what happened
+ * and offers the one thing that works.
  */
 export function ChangePasswordRequired() {
   const { staffProfile, refreshStaffProfile, signOut } = useAuth();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [saving, setSaving] = useState(false);
+  const [sessionGone, setSessionGone] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,6 +46,14 @@ export function ChangePasswordRequired() {
 
     setSaving(true);
     try {
+      // Asked before the attempt, because updateUser's own refusal is the
+      // raw string the person was left staring at.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setSessionGone(true);
+        return;
+      }
+
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
 
@@ -55,11 +72,33 @@ export function ChangePasswordRequired() {
       await refreshStaffProfile();
       toast.success("Password updated");
     } catch (err) {
+      // The session can die between the check above and the call itself.
+      if (isSessionGone(err)) {
+        setSessionGone(true);
+        return;
+      }
       toast.error((err as Error).message || "Could not update the password");
     } finally {
       setSaving(false);
     }
   };
+
+  if (sessionGone) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 bg-background">
+        <div className="w-full max-w-sm text-center" data-testid="session-gone">
+          <div className="mx-auto mb-3 h-11 w-11 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+            <KeyRound className="h-5 w-5" />
+          </div>
+          <h1 className="text-lg font-semibold font-display">{SESSION_GONE_TITLE}</h1>
+          <p className="text-sm text-muted-foreground mt-2">{SESSION_GONE_BODY}</p>
+          <Button className="w-full mt-5" data-testid="session-gone-sign-in" onClick={() => signOut()}>
+            Sign in again
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-background">

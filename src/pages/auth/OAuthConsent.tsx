@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AppLoadingScreen } from "@/components/shared/AppLoadingScreen";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { Loader2, ShieldCheck, ShieldX } from "lucide-react";
 import skinClinicLogo from "@/assets/skin-clinic-logo.png";
@@ -62,11 +63,7 @@ const OAuthConsent = () => {
   }
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
+    return <AppLoadingScreen variant="spinner" />;
   }
 
   if (!user) {

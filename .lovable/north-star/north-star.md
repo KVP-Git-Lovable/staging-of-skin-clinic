@@ -2,8 +2,8 @@
 
 # North star
 
-Skin clinic patients get the treatment they need and keep coming back.
+Skin clinic patients get seen and leave with the right treatment.
 
 ## Metric
 
-Appointments marked completed each week
+Patient visits with a saved prescription, counted each day

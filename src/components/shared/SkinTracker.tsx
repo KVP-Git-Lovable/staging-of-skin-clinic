@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { X, SlidersHorizontal, Columns2, Sparkles, Loader2, ZoomIn, ZoomOut, RotateCcw, RotateCw, Undo2 } from "lucide-react";
+import { X, SlidersHorizontal, Columns2, Sparkles, Loader2, ZoomIn, ZoomOut, RotateCcw, RotateCw, Undo2, Download } from "lucide-react";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,8 @@ import { toast } from "sonner";
 import { SkinAnalysisResults, type SkinAnalysis } from "./SkinAnalysisResults";
 import { saveAiRecord } from "@/lib/aiRepository";
 import { useQueryClient } from "@tanstack/react-query";
+import { compareFileName } from "@/lib/compareExport";
+import { renderComparison, saveBlob } from "@/lib/compareImage";
 
 interface Photo {
   id: string;
@@ -45,6 +47,11 @@ export function SkinTracker({ open, onOpenChange, photos, patientName, patientId
   const [analysis, setAnalysis] = useState<SkinAnalysis | null>(null);
   const sliderRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  // Measured, not assumed. The pan is recorded in on-screen pixels as the
+  // pointer moves, so the export has to know how wide the box was to scale it.
+  const beforeBoxRef = useRef<HTMLDivElement>(null);
+  const afterBoxRef = useRef<HTMLDivElement>(null);
+  const [saving, setSaving] = useState(false);
 
   // Zoom, pan and tilt all belong to one photo rather than both.
   //
@@ -159,6 +166,7 @@ export function SkinTracker({ open, onOpenChange, photos, patientName, patientId
     setSliderPos(50);
     setAnalysis(null);
     setAnalyzing(false);
+    setSaving(false);
     resetView();
   };
 
@@ -187,6 +195,53 @@ export function SkinTracker({ open, onOpenChange, photos, patientName, patientId
       toast.error(err?.message || "Failed to analyze skin photos. Please try again.");
     } finally {
       setAnalyzing(false);
+    }
+  };
+
+  /**
+   * Save the comparison exactly as it is on screen.
+   *
+   * Redrawn on a canvas rather than fetched as two files, because the zoom,
+   * pan and tilt that line the two photos up live only in this component's
+   * state - and that alignment is the thing being shown.
+   */
+  const downloadComparison = async () => {
+    if (!beforePhoto || !afterPhoto) return;
+    setSaving(true);
+    try {
+      const caption = (p: Photo) =>
+        `${format(new Date(p.taken_at), "MMM d, yyyy")}${
+          compareMode === "side-by-side" && p.procedures?.service_name ? ` · ${p.procedures.service_name}` : ""
+        }`;
+      // In Slider the two photos share one box, so both pans were measured
+      // against that same width.
+      const sharedWidth = sliderRef.current?.offsetWidth ?? null;
+      const blob = await renderComparison({
+        mode: compareMode,
+        sliderPercent: sliderPos,
+        before: {
+          url: beforePhoto.photo_url,
+          caption: caption(beforePhoto),
+          view: { zoom: zoom.before, tiltDeg: tilt.before, pan: pan.before },
+          boxWidthOnScreen: compareMode === "slider" ? sharedWidth : beforeBoxRef.current?.offsetWidth ?? null,
+        },
+        after: {
+          url: afterPhoto.photo_url,
+          caption: caption(afterPhoto),
+          view: { zoom: zoom.after, tiltDeg: tilt.after, pan: pan.after },
+          boxWidthOnScreen: compareMode === "slider" ? sharedWidth : afterBoxRef.current?.offsetWidth ?? null,
+        },
+      });
+      saveBlob(blob, compareFileName({
+        patientName,
+        beforeAt: beforePhoto.taken_at,
+        afterAt: afterPhoto.taken_at,
+      }));
+    } catch (err) {
+      console.error("Comparison download failed:", err);
+      toast.error((err as Error)?.message || "Could not save the comparison. Please try again.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -295,15 +350,30 @@ export function SkinTracker({ open, onOpenChange, photos, patientName, patientId
                     </TabsTrigger>
                   </TabsList>
                 </Tabs>
-                <Button
-                  size="sm"
-                  onClick={runAnalysis}
-                  disabled={analyzing}
-                  className="gap-1.5"
-                >
-                  {analyzing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                  {analyzing ? "Analyzing…" : "AI Analysis"}
-                </Button>
+                <div className="flex items-center gap-2">
+                  {/* Saves whichever view is showing, with the corrections
+                      baked in - see src/lib/compareExport.ts. */}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={downloadComparison}
+                    disabled={saving}
+                    className="gap-1.5"
+                    data-testid="download-comparison"
+                  >
+                    {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                    {saving ? "Saving…" : "Download"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={runAnalysis}
+                    disabled={analyzing}
+                    className="gap-1.5"
+                  >
+                    {analyzing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    {analyzing ? "Analyzing…" : "AI Analysis"}
+                  </Button>
+                </div>
               </div>
 
               {/* Zoom and tilt, the same controls whichever way the photos are
@@ -398,6 +468,7 @@ export function SkinTracker({ open, onOpenChange, photos, patientName, patientId
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <div
+                        ref={beforeBoxRef}
                         className={`relative rounded-xl overflow-hidden border bg-neutral-900 ${zoom.before > 1 ? "touch-none cursor-grab active:cursor-grabbing" : ""}`}
                         onPointerDown={(e) => startPan("before", e)}
                         onPointerMove={handlePointerMove}
@@ -414,6 +485,7 @@ export function SkinTracker({ open, onOpenChange, photos, patientName, patientId
                     </div>
                     <div>
                       <div
+                        ref={afterBoxRef}
                         className={`relative rounded-xl overflow-hidden border bg-neutral-900 ${zoom.after > 1 ? "touch-none cursor-grab active:cursor-grabbing" : ""}`}
                         onPointerDown={(e) => startPan("after", e)}
                         onPointerMove={handlePointerMove}

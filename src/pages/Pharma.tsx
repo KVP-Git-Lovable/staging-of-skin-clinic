@@ -215,6 +215,7 @@ const Pharma = () => {
     bills_enabled: true,
     outstanding_balance_enabled: true,
     surveys_enabled: true,
+    feedback_enabled: false,
     ai_bot_enabled: true,
     our_team_enabled: true,
     clinic_hours_enabled: true,
@@ -238,6 +239,8 @@ const Pharma = () => {
         bills_enabled: (portalSettings as any).bills_enabled ?? true,
         outstanding_balance_enabled: (portalSettings as any).outstanding_balance_enabled ?? true,
         surveys_enabled: (portalSettings as any).surveys_enabled ?? true,
+        // Opt-in, unlike the rest: see src/lib/portalModules.ts.
+        feedback_enabled: (portalSettings as any).feedback_enabled === true,
         ai_bot_enabled: (portalSettings as any).ai_bot_enabled ?? true,
         our_team_enabled: (portalSettings as any).our_team_enabled ?? true,
         clinic_hours_enabled: (portalSettings as any).clinic_hours_enabled ?? true,
@@ -1319,6 +1322,12 @@ const Pharma = () => {
                 <div className="border-t pt-4">
                   <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground mb-3">Surveys</p>
                   <ToggleRow label="Enable Surveys" desc="Let patients fill assigned and self-serve surveys" checked={settingsForm.surveys_enabled} onChange={(v) => setSettingsForm({ ...settingsForm, surveys_enabled: v })} />
+                </div>
+
+                {/* Feedback */}
+                <div className="border-t pt-4">
+                  <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground mb-3">Feedback</p>
+                  <ToggleRow label="Enable Feedback" desc="Let patients read the feedback recorded against their visits and correct it. Every correction keeps the original answer." checked={settingsForm.feedback_enabled} onChange={(v) => setSettingsForm({ ...settingsForm, feedback_enabled: v })} />
                 </div>
 
                 {/* AI Bot */}

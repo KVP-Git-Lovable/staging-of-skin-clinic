@@ -15,6 +15,11 @@ interface Props {
   rowHref?: (row: any) => string | null;
   defaultSort?: { key: string; dir: "asc" | "desc" };
   pageSize?: number;
+  /**
+   * Extra classes for one row, both on the table and on the phone cards.
+   * Applied after the zebra striping so a highlight wins over it.
+   */
+  rowClassName?: (row: unknown) => string | undefined;
 }
 
 function getCellValue(col: ReportColumn, row: any) {
@@ -44,7 +49,7 @@ function renderCell(col: ReportColumn, row: any) {
   }
 }
 
-export function SortableDataTable({ columns, rows, rowHref, defaultSort, pageSize = 50 }: Props) {
+export function SortableDataTable({ columns, rows, rowHref, defaultSort, pageSize = 50, rowClassName }: Props) {
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(defaultSort ?? null);
   const [page, setPage] = useState(1);
   const navigate = useNavigate();
@@ -111,7 +116,7 @@ export function SortableDataTable({ columns, rows, rowHref, defaultSort, pageSiz
           <div
             key={row.id ?? i}
             onClick={() => handleRowClick(row)}
-            className={cn("p-3 space-y-1.5", rowHref && "active:bg-primary/5 cursor-pointer")}
+            className={cn("p-3 space-y-1.5", rowHref && "active:bg-primary/5 cursor-pointer", rowClassName?.(row))}
           >
             {columns.map((col, idx) => (
               <div key={col.key} className="flex items-start justify-between gap-3">
@@ -165,6 +170,7 @@ export function SortableDataTable({ columns, rows, rowHref, defaultSort, pageSiz
                   "border-b last:border-0 transition-colors",
                   i % 2 === 1 && "bg-muted/20",
                   rowHref && "cursor-pointer hover:bg-primary/5",
+                  rowClassName?.(row),
                 )}
               >
                 {columns.map((col, idx) => (

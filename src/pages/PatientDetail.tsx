@@ -8,10 +8,12 @@ import { applyMedicineDefaults } from "@/lib/medicineDefaults";
 import { usePharmaLookup } from "@/hooks/usePharmaLookup";
 import { useParams, useNavigate } from "react-router-dom";
 import { cn, shortPatientId } from "@/lib/utils";
-import { ArrowLeft, Camera, Calendar, ClipboardList, Pill, Receipt, User, Loader2, Share2, Copy, Check, ScanEye, FileText, Users, Plus, Save, Edit2, Info, Paperclip, Upload, X, ClipboardCheck, Trash2, ChevronDown, Eye, KeyRound, Megaphone, Search, Sparkles, ImageOff, Lock, Crown } from "lucide-react";
+import { ArrowLeft, Camera, Calendar, ClipboardList, Pill, Receipt, User, Loader2, Share2, Copy, Check, ScanEye, FileText, Users, Plus, Save, Edit2, Info, Paperclip, Upload, X, ClipboardCheck, Trash2, ChevronDown, Eye, KeyRound, Megaphone, Search, Sparkles, ImageOff, Lock, Crown, MessageSquareHeart } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { format } from "date-fns";
 import { EngagementScoreCard } from "@/components/patients/EngagementScoreCard";
+import { PatientFeedbackSummary, PatientFeedbackList } from "@/components/patients/PatientFeedback";
+import { usePatientFeedback } from "@/hooks/usePatientFeedback";
 import { PatientEngagementRollups } from "@/components/patients/PatientEngagementRollups";
 import { SystemRecordSection } from "@/components/shared/SystemRecordSection";
 import { RecordOwnerField } from "@/components/shared/RecordOwnerField";
@@ -463,6 +465,11 @@ const PatientDetail = () => {
 
   // Kept for the tab label's count only; PatientAttachments owns the list and
   // uses this same query key, so this costs no extra request.
+  // The tab label's count only. It shares its query key with the summary card
+  // and the tab body, the same trick the attachments count below uses, so all
+  // three cost one request between them rather than three.
+  const feedbackCount = usePatientFeedback(id).data?.rows.length ?? 0;
+
   const { data: attachments = [] } = useQuery({
     queryKey: ["patient-attachments", id],
     queryFn: async () => {
@@ -865,6 +872,10 @@ const PatientDetail = () => {
 
       <div className="space-y-4 mb-4">
         <EngagementScoreCard patientId={id!} hideBilled={hideOtherDoctorDetails} />
+        {/* Renders nothing at all when this patient has never given feedback,
+            which is most of them - 829 of 27,661 have. An empty card saying
+            "no data" on every other patient record is worse than no card. */}
+        <PatientFeedbackSummary patientId={id!} />
       </div>
 
       <Tabs defaultValue="details" className="mt-2">
@@ -878,6 +889,7 @@ const PatientDetail = () => {
             <TabsTrigger value="prescriptions" title="Prescriptions" aria-label="Prescriptions" className="gap-1 text-xs md:text-sm"><Pill className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Rx</span> ({prescriptions.length})</TabsTrigger>
             <TabsTrigger value="family" title="Family" aria-label="Family" className="gap-1 text-xs md:text-sm"><Users className="h-3.5 w-3.5" /> Family</TabsTrigger>
             <TabsTrigger value="surveys" title="Surveys" aria-label="Surveys" className="gap-1 text-xs md:text-sm"><ClipboardCheck className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Surveys</span> ({surveyResponses.length + surveyAssignments.length})</TabsTrigger>
+            <TabsTrigger value="feedback" title="Feedback" aria-label="Feedback" className="gap-1 text-xs md:text-sm"><MessageSquareHeart className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Feedback</span> ({feedbackCount})</TabsTrigger>
             <TabsTrigger value="attachments" title="Attachments" aria-label="Attachments" className="gap-1 text-xs md:text-sm"><Paperclip className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Attachments</span> ({attachments.length})</TabsTrigger>
             <TabsTrigger value="campaigns" title="Campaigns" aria-label="Campaigns" className="gap-1 text-xs md:text-sm"><Megaphone className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Campaigns</span> ({patientCampaigns.length})</TabsTrigger>
             <TabsTrigger value="ai-repo" title="AI Repository" aria-label="AI Repository" className="gap-1 text-xs md:text-sm"><Sparkles className="h-3.5 w-3.5" /> <span className="hidden sm:inline">AI Repository</span></TabsTrigger>
@@ -1871,6 +1883,13 @@ const PatientDetail = () => {
         </TabsContent>
 
         {/* Attachments Tab - shared with the appointment sheet, see PatientAttachments */}
+        {/* Feedback Tab */}
+        <TabsContent value="feedback">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-4">
+            <PatientFeedbackList patientId={id!} />
+          </motion.div>
+        </TabsContent>
+
         <TabsContent value="attachments">
           <PatientAttachments patientId={id} defaultProcedureId={procedures.length > 0 ? procedures[0].id : null} />
         </TabsContent>

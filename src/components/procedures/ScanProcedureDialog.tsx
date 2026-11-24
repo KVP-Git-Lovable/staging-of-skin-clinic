@@ -147,8 +147,10 @@ export function ScanProcedureDialog({ open, onOpenChange, appointmentId, patient
       const meds = data.medicines.filter((m) => m.medicine_name?.trim());
       if (meds.length) {
         const { error: pErr } = await supabase.from("prescriptions").insert(
-          meds.map((m) => ({
+          meds.map((m, i) => ({
             procedure_id: procId,
+            // The order they were read off the page.
+            sort_order: i,
             medicine_name: m.medicine_name.trim(),
             dosage: m.dosage || null,
             frequency: m.frequency || null,

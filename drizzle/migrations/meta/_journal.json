@@ -215,29 +215,71 @@
     {
       "idx": 30,
       "version": "7",
-      "when": 1795003593465,
-      "tag": "0030_create_comms_whatsapp_opt_outs",
+      "when": 1794298683049,
+      "tag": "0030_signed_in_must_be_staff",
       "breakpoints": true
     },
     {
       "idx": 31,
       "version": "7",
-      "when": 1795004844863,
-      "tag": "0031_agentic_marketing",
+      "when": 1794804079993,
+      "tag": "0031_replace_always_true_staff_rules",
       "breakpoints": true
     },
     {
       "idx": 32,
       "version": "7",
-      "when": 1795082739684,
-      "tag": "0032_expenses_zoho_sync_columns",
+      "when": 1794890565085,
+      "tag": "0032_close_open_public_rules",
       "breakpoints": true
     },
     {
       "idx": 33,
       "version": "7",
+      "when": 1794890565086,
+      "tag": "0033_patient_summary_on_knowledge_articles",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1795160413158,
+      "tag": "0034_lock_down_trash_functions",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1795427005181,
+      "tag": "0035_trash_and_visit_notes_no_caller_built_sql",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1795003593465,
+      "tag": "0036_create_comms_whatsapp_opt_outs",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1795004844863,
+      "tag": "0037_agentic_marketing",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1795082739684,
+      "tag": "0038_expenses_zoho_sync_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
       "when": 1795087211593,
-      "tag": "0033_invoices_zoho_sync_columns",
+      "tag": "0039_invoices_zoho_sync_columns",
       "breakpoints": true
     }
   ]

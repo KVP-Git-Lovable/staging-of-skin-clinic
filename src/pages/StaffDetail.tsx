@@ -7,7 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { format } from "date-fns";
-import { ArrowLeft, Phone, Mail, Clock, GraduationCap, Briefcase, Target, MessageSquare, CalendarCheck, Receipt, Activity, Plus, Trash2, Edit, Lightbulb, HelpCircle, MessageCircle } from "lucide-react";
+import { ArrowLeft, Phone, Mail, Clock, GraduationCap, Briefcase, Target, MessageSquare, CalendarCheck, Receipt, Activity, Plus, Trash2, Edit, Lightbulb, HelpCircle, MessageCircle, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -26,6 +26,7 @@ import { procedureDateLabel } from "@/lib/procedureDate";
 import { appointmentPatientName } from "@/lib/appointmentPatientName";
 import { appointmentStatusLabel, appointmentStatusClasses, showsAsBilled, BILLED_BADGE_CLASSES } from "@/lib/appointmentStatus";
 import { fetchInvoicesByAppointmentIds, invoiceMapByAppointment, type VisitBill } from "@/lib/invoicesForAppointments";
+import { FieldHistorySection } from "@/components/shared/FieldHistorySection";
 
 const StaffDetail = () => {
   const { id } = useParams<{ id: string }>();
@@ -89,6 +90,7 @@ const StaffDetail = () => {
           <TabsTrigger value="experience"><Briefcase className="h-3.5 w-3.5 mr-1" />Experience</TabsTrigger>
           <TabsTrigger value="aspirations"><Target className="h-3.5 w-3.5 mr-1" />Aspirations</TabsTrigger>
           <TabsTrigger value="requests"><MessageSquare className="h-3.5 w-3.5 mr-1" />Requests</TabsTrigger>
+          <TabsTrigger value="history"><History className="h-3.5 w-3.5 mr-1" />History</TabsTrigger>
         </TabsList>
 
         <TabsContent value="performance">
@@ -102,6 +104,7 @@ const StaffDetail = () => {
         <TabsContent value="experience"><ExperienceTab staffId={id!} /></TabsContent>
         <TabsContent value="aspirations"><AspirationsTab staffId={id!} /></TabsContent>
         <TabsContent value="requests"><RequestsTab staffId={id!} /></TabsContent>
+        <TabsContent value="history"><FieldHistorySection objectType="staff" recordId={id} /></TabsContent>
       </Tabs>
     </div>
   );

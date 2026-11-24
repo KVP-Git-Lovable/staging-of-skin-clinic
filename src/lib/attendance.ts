@@ -76,9 +76,45 @@ export function dayButtons(row: AttendanceRow | null | undefined): { start: DayB
 
 /** What the verifier came back with. */
 export type FaceStatus = "verified" | "failed" | "bypassed";
+
+/**
+ * Why the face check could not answer, when it could not.
+ *
+ * Separate from FaceStatus on purpose. FaceStatus is what gets WRITTEN on the
+ * attendance row and the CHECK constraint attendance_face_status_values
+ * allows exactly three values; none of these ever reaches the row, because an
+ * attempt that fails for one of them never proceeds. So the reason rides
+ * alongside the status rather than widening it.
+ *
+ * It exists because 17 of the clinic's 18 active staff have no profile photo
+ * and the app told them all the same thing: "Face verification service
+ * error. Attempt 1/3. Please try again." Three selfies later they were let in
+ * flagged for review, none the wiser about what was actually wrong.
+ */
+export type FaceFailureReason = "no_photo" | "not_staff";
 export interface FaceResult {
   status: FaceStatus;
   confidence: number;
+  /** Set only when the function refused and said why. */
+  reason?: FaceFailureReason | null;
+}
+
+/**
+ * The function's own words, turned into a reason.
+ *
+ * Matched on the message verify-face-match actually sends rather than on the
+ * HTTP status, because 400 covers both "set your profile photo" and "that
+ * photo is not yours" and only one of those is the person's to fix. Anything
+ * unrecognised returns null and is treated exactly as before - a service
+ * fault, retried, and eventually allowed through flagged. A new error string
+ * must not strand somebody at the door.
+ */
+export function faceFailureReason(message: string | null | undefined): FaceFailureReason | null {
+  const text = String(message ?? "").toLowerCase();
+  if (!text) return null;
+  if (text.includes("profile photo")) return "no_photo";
+  if (text.includes("no staff record")) return "not_staff";
+  return null;
 }
 
 /** Attempts a person gets before they are told to find an admin, when the
@@ -92,6 +128,8 @@ export interface AttendanceConfig {
   capture_location: boolean;
   face_match_threshold: number;
   face_max_attempts: number;
+  /** Corrections one person may ask for against any one month. 0 = no limit. */
+  regularisation_monthly_limit: number;
 }
 
 /** What the app falls back to before the settings row has loaded - the same
@@ -102,6 +140,8 @@ export const DEFAULT_ATTENDANCE_CONFIG: AttendanceConfig = {
   capture_location: true,
   face_match_threshold: 75,
   face_max_attempts: MAX_FACE_ATTEMPTS,
+  // 0 is "no limit", which is what there was before the setting existed.
+  regularisation_monthly_limit: 0,
 };
 
 export interface FaceVerdict {
@@ -145,6 +185,27 @@ export function faceVerdict(
   }
 
   const last = attempt >= cap;
+
+  // Asked and answered: the service worked, and the answer was that there is
+  // nothing to compare against. Retrying cannot change it, so it does not
+  // count as an attempt and does not pretend to be a fault.
+  if (result.reason === "no_photo") {
+    return {
+      proceed: false,
+      retry: false,
+      message:
+        "Add your profile photo before checking in - ask an admin to set it on your staff record.",
+      recordStatus: "bypassed",
+    };
+  }
+  if (result.reason === "not_staff") {
+    return {
+      proceed: false,
+      retry: false,
+      message: "This login is not linked to a staff record. Ask an admin to link it.",
+      recordStatus: "bypassed",
+    };
+  }
 
   if (result.status === "bypassed") {
     if (!last) {

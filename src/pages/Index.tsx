@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { AppLoadingScreen } from "@/components/shared/AppLoadingScreen";
 import { useState, useMemo, useEffect } from "react";
 import { Users, Calendar, IndianRupee, UserCheck, Clock, Receipt, ClipboardList, AlertCircle, Megaphone, Pin, PinOff } from "lucide-react";
 import { StatCard } from "@/components/dashboard/StatCard";
@@ -31,6 +32,9 @@ import { appointmentStatusLabel, showsAsBilled, BILLED_BADGE_CLASSES } from "@/l
 import { useLiveAppointments } from "@/hooks/useLiveAppointments";
 import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { MyDayCard } from "@/components/attendance/MyDayCard";
+import { MyDashboard } from "@/components/dashboard/MyDashboard";
+import { useAuth } from "@/hooks/useAuth";
+import { dashboardScope } from "@/lib/dashboardScope";
 
 
 // Data-heavy panels are capped so a large date range can never turn into a
@@ -99,7 +103,7 @@ function getDateRange(key: string, customStart?: string, customEnd?: string): { 
 }
 
 
-const Index = () => {
+const ClinicDashboard = () => {
   const navigate = useNavigate();
   const { formatMoney } = useMoneyFormat();
   const canSeeBilling = useCanSeeBillingAmounts();
@@ -799,6 +803,33 @@ const Index = () => {
 
     </div>
   );
+};
+
+/**
+ * Who gets which dashboard.
+ *
+ * ClinicDashboard above is unchanged and still the whole clinic's day. It is
+ * simply no longer the only answer: a therapist signing in was landing on 39
+ * appointments, every doctor's name, the NPS score and the pending invoices,
+ * because nothing in those 805 lines ever asked who was looking.
+ *
+ * Three separate components rather than one with an early return. The
+ * branch has to happen ABOVE ClinicDashboard's eleven useQuery calls - that
+ * is the point, so a therapist's phone never fires them - and a conditional
+ * return above hooks inside one component changes the hook count between
+ * renders and crashes React. Different components each own their own.
+ *
+ * The loading guard is load-bearing too, not politeness. While auth
+ * resolves, `permissions` is {} and the empty-map rule reads as "full", so
+ * without it a therapist would watch the clinic dashboard flash past - and
+ * every one of those queries would already have been sent.
+ */
+const Index = () => {
+  const { isAdmin, permissions, loading } = useAuth();
+  if (loading) return <AppLoadingScreen />;
+  const scope = dashboardScope({ isAdmin, permissions });
+  if (scope === "full") return <ClinicDashboard />;
+  return <MyDashboard withAppointments={scope === "my_day"} />;
 };
 
 export default Index;

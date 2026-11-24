@@ -2,24 +2,34 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { format } from "date-fns";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { ArrowRight, Camera, CheckCircle2, Clock, Loader2, LogIn, LogOut } from "lucide-react";
+import { ArrowRight, CheckCircle2, Clock, LogIn, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CameraDialog } from "@/components/shared/CameraDialog";
 import { useAuth } from "@/hooks/useAuth";
-import { useMyAttendanceDay } from "@/hooks/useMyAttendanceDay";
+import { useMyAttendanceToday } from "@/hooks/useMyAttendanceToday";
 import { greeting } from "@/lib/attendance";
+import { hoursLabel } from "@/lib/attendanceHistory";
 
 /**
- * Start and end the day without leaving the dashboard.
+ * Where the working day stands, and the way into it.
  *
- * The clinic's complaint was the walk: Employees > Attendance > Start My Day,
- * three navigations before a receptionist has clocked in at nine in the
- * morning. This puts the same two buttons on the page everybody already
- * lands on.
+ * This card used to take the selfie itself. The clinic's complaint then was
+ * the walk - Employees > Attendance > Start My Day, three navigations before
+ * a receptionist had clocked in at nine in the morning - so both buttons
+ * were put on the page everybody lands on.
  *
- * It is the SAME check-in. Every decision - face match, retries, location,
- * the photo stamp - comes from useMyAttendanceDay, and the camera gets the
- * identical props object. This component only decides how it looks.
+ * They have since asked for the opposite: the buttons open Employees > My
+ * Attendance, and the day is marked there. Both were put side by side and
+ * this is the one chosen, so the camera, the face match and the retry count
+ * have gone back to the page that owns them, and there is now exactly one
+ * place in the app where attendance is recorded.
+ *
+ * What stays is the answer to "am I clocked in?", which the dashboard should
+ * give without a tap: the phase, the two times, today's hours and the live
+ * counter. That is the "same thing can be shown in dashboard" half.
+ *
+ * Reading only - useMyAttendanceToday, not useMyAttendanceDay. Mounting the
+ * acting hook here would bring the camera state and the staff-photo query
+ * onto a page that can no longer use either.
  *
  * Nothing else on the dashboard moves. The card sits above the KPI row and
  * takes one line of vertical space when the day is done.
@@ -33,10 +43,7 @@ const TICK_MS = 20_000;
 
 export function MyDayCard() {
   const { staffProfile } = useAuth();
-  const {
-    record, phase, buttons, busy, mode, stepLabel,
-    closedToday, press, cameraProps, elapsed,
-  } = useMyAttendanceDay();
+  const { record, phase, buttons, closedToday, elapsed, hours } = useMyAttendanceToday();
 
   const reduced = useReducedMotion();
 
@@ -125,6 +132,12 @@ export function MyDayCard() {
               <LogOut className="h-3 w-3" />
               Ended {record?.check_out_time ? format(new Date(record.check_out_time), "h:mm a") : "—"}
             </span>
+            {hours !== null && (
+              <span className="inline-flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                {hoursLabel(hours)} today
+              </span>
+            )}
             {closedToday && (
               <span className="inline-flex items-center gap-1">
                 <Clock className="h-3 w-3" />
@@ -153,32 +166,33 @@ export function MyDayCard() {
               are in their day. Once the day is complete the headline already
               says "Day complete - 9h 28m", so a pair of dead buttons both
               reading "Day Ended" would be noise taking up the strip. */}
+          {/* Links, not actions. The greyed-out one still names what has
+              already happened, which is what tells somebody at a glance
+              where they are in their day - a disabled anchor is not a
+              thing, so the spent one renders as a disabled button. */}
           {phase !== "complete" && (<>
-          <Button
-            type="button"
-            size="sm"
-            disabled={busy || buttons.start.disabled}
-            onClick={() => press("check_in")}
-            data-testid="dash-start-my-day"
-            className="min-h-11 w-full gap-2 transition-transform hover:-translate-y-0.5 motion-reduce:transform-none motion-reduce:transition-none sm:w-auto"
-          >
-            {busy && mode === "check_in"
-              ? <><Loader2 className="h-4 w-4 animate-spin" />{stepLabel}</>
-              : <><Camera className="h-4 w-4" />{buttons.start.label}</>}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={busy || buttons.end.disabled}
-            onClick={() => press("check_out")}
-            data-testid="dash-end-my-day"
-            className="min-h-11 w-full gap-2 transition-transform hover:-translate-y-0.5 motion-reduce:transform-none motion-reduce:transition-none sm:w-auto"
-          >
-            {busy && mode === "check_out"
-              ? <><Loader2 className="h-4 w-4 animate-spin" />{stepLabel}</>
-              : <><Camera className="h-4 w-4" />{buttons.end.label}</>}
-          </Button>
+          {buttons.start.disabled ? (
+            <Button type="button" size="sm" disabled data-testid="dash-start-my-day"
+              className="min-h-11 w-full gap-2 sm:w-auto">
+              <LogIn className="h-4 w-4" />{buttons.start.label}
+            </Button>
+          ) : (
+            <Button asChild size="sm" data-testid="dash-start-my-day"
+              className="min-h-11 w-full gap-2 transition-transform hover:-translate-y-0.5 motion-reduce:transform-none motion-reduce:transition-none sm:w-auto">
+              <Link to="/attendance"><LogIn className="h-4 w-4" />{buttons.start.label}</Link>
+            </Button>
+          )}
+          {buttons.end.disabled ? (
+            <Button type="button" size="sm" variant="outline" disabled data-testid="dash-end-my-day"
+              className="min-h-11 w-full gap-2 sm:w-auto">
+              <LogOut className="h-4 w-4" />{buttons.end.label}
+            </Button>
+          ) : (
+            <Button asChild size="sm" variant="outline" data-testid="dash-end-my-day"
+              className="min-h-11 w-full gap-2 transition-transform hover:-translate-y-0.5 motion-reduce:transform-none motion-reduce:transition-none sm:w-auto">
+              <Link to="/attendance"><LogOut className="h-4 w-4" />{buttons.end.label}</Link>
+            </Button>
+          )}
           </>)}
           <Button asChild size="sm" variant="ghost" className="min-h-11 gap-1 text-xs text-muted-foreground sm:min-h-0">
             <Link to="/attendance">History<ArrowRight className="h-3 w-3" /></Link>
@@ -186,7 +200,6 @@ export function MyDayCard() {
         </div>
       </div>
 
-      <CameraDialog {...cameraProps} />
     </motion.section>
   );
 }

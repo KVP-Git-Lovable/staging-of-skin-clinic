@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Mail, Lock, Loader2, ArrowRight } from "lucide-react";
 import skinClinicLogo from "@/assets/skin-clinic-logo.png";
 import { Input } from "@/components/ui/input";
@@ -71,13 +71,6 @@ const Login = () => {
           </Button>
         </form>
 
-        <p className="text-center text-sm text-muted-foreground mt-6">
-          Don't have an account?{" "}
-          <Link to="/signup" className="text-primary font-medium hover:underline">Sign Up</Link>
-        </p>
-        <p className="text-center text-xs text-muted-foreground mt-2">
-          <Link to="/shop" className="hover:underline">Continue browsing as guest →</Link>
-        </p>
       </motion.div>
     </div>
   );

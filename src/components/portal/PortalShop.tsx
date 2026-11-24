@@ -62,12 +62,9 @@ const PortalShop = ({ patientId, patientName }: PortalShopProps) => {
   const { data: orders = [] } = useQuery({
     queryKey: ["portal-orders", patientId],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("portal_orders")
-        .select("*, portal_order_items(*)")
-        .eq("patient_id", patientId)
-        .order("created_at", { ascending: false });
-      return data || [];
+      // Orders hold the patient's phone and address, so they come through
+      // the session-checked portal gateway rather than a direct table read.
+      return (await portalRequest("orders")) || [];
     },
   });
 
@@ -80,33 +77,17 @@ const PortalShop = ({ patientId, patientName }: PortalShopProps) => {
 
   const placeOrder = useMutation({
     mutationFn: async () => {
-      const total = cart.reduce((s, i) => s + i.price * i.quantity, 0);
-      const gst = cart.reduce((s, i) => s + (i.price * i.quantity * i.gstPercent) / 100, 0);
-      const grandTotal = total + gst;
-      const { data: order, error } = await supabase.from("portal_orders").insert({
-        patient_id: patientId,
-        patient_name: patientName,
-        delivery_method: deliveryMethod,
-        address: deliveryMethod === "delivery" ? address.address : null,
-        city: deliveryMethod === "delivery" ? address.city : null,
-        state: deliveryMethod === "delivery" ? address.state : null,
-        pincode: deliveryMethod === "delivery" ? address.pincode : null,
-        phone: address.phone || patientData?.phone,
-        total_amount: grandTotal,
-        notes: orderNotes || null,
-      }).select().single();
-      if (error) throw error;
-
-      const items = cart.map(item => ({
-        order_id: order.id,
-        product_id: item.productId,
-        product_name: item.name,
-        quantity: item.quantity,
-        unit_price: item.price,
-        total_price: item.price * item.quantity,
-      }));
-      const { error: itemsError } = await supabase.from("portal_order_items").insert(items);
-      if (itemsError) throw itemsError;
+      // Prices and product names are re-read from the catalogue on the server.
+      await portalRequest("create_order", {
+        items: cart.map((item) => ({ productId: item.productId, quantity: item.quantity })),
+        deliveryMethod,
+        address: address.address,
+        city: address.city,
+        state: address.state,
+        pincode: address.pincode,
+        phone: address.phone || patientData?.phone || "",
+        notes: orderNotes,
+      });
     },
     onSuccess: () => {
       saveCart([]);

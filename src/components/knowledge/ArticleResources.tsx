@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { ExternalLink, FileText, Film, ImageIcon, Paperclip, Plus, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { articleResources, resourceSchema, type KnowledgeResource } from "@/lib/knowledge";
+import { articleResources, KNOWLEDGE_BUCKET, resourceSchema, type KnowledgeResource } from "@/lib/knowledge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/shared/SearchableSelect";
 
-const bucket = "knowledge-attachments";
+const bucket = KNOWLEDGE_BUCKET;
 export async function uploadKnowledgeFile(file: File, group: string): Promise<KnowledgeResource> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Please sign in");

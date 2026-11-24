@@ -14,6 +14,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { stillAsked } from "@/lib/surveyQuestionConfig";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
@@ -31,7 +32,7 @@ export function SurveyFill({ open, onOpenChange, templateId, appointmentId, pati
   const [submitting, setSubmitting] = useState(false);
   const [elaborating, setElaborating] = useState<string | null>(null);
 
-  const { data: questions = [] } = useQuery({
+  const { data: allQuestions = [] } = useQuery({
     queryKey: ["survey-questions", templateId],
     queryFn: async () => {
       const { data, error } = await supabase.from("survey_questions").select("*").eq("template_id", templateId).order("sort_order");
@@ -40,6 +41,9 @@ export function SurveyFill({ open, onOpenChange, templateId, appointmentId, pati
     },
     enabled: !!templateId && open,
   });
+  // A retired question is not asked here either, as in the portal. The cache
+  // entry is shared with the answers views, which still need every question.
+  const questions = stillAsked(allQuestions);
 
   const { data: template } = useQuery({
     queryKey: ["survey-template", templateId],

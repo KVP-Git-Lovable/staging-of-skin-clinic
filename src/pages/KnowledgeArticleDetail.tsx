@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, BookOpen, Copy, Pencil, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpen, Copy, Pencil, Printer, Sparkles, Trash2, Users } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useKnowledgeCategories } from "@/hooks/useKnowledge";
@@ -10,6 +10,11 @@ import { ArticleContent } from "@/components/knowledge/ArticleContent";
 import { ArticleEditor } from "@/components/knowledge/ArticleEditor";
 import { ArticleEngagement } from "@/components/knowledge/ArticleEngagement";
 import { ArticleHistory } from "@/components/knowledge/ArticleHistory";
+import { PatientSummary } from "@/components/knowledge/PatientSummary";
+import { hasPatientSummary, patientSummaryIsPublic, WRITE_SUMMARY_CTA } from "@/lib/patientSummary";
+import { printPatientHandout } from "@/lib/patientHandout";
+import { reserveTab } from "@/lib/newTab";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import DeleteConfirmDialog from "@/components/shared/DeleteConfirmDialog";
@@ -38,6 +43,10 @@ export default function KnowledgeArticleDetail() {
   const { data: categories = [] } = useKnowledgeCategories();
 
   const [editor, setEditor] = useState<KnowledgeArticle | "new" | null>(null);
+  /** What the editor should open doing. "Write patient summary" lands on that
+   *  section AND starts writing, rather than showing a second button of the
+   *  same name and waiting - which is what it used to do. */
+  const [editorStart, setEditorStart] = useState<"patient-summary" | undefined>();
   const [cloning, setCloning] = useState<KnowledgeArticle | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -55,6 +64,23 @@ export default function KnowledgeArticleDetail() {
       return data;
     },
   });
+
+  /**
+   * Who sees the patient tab.
+   *
+   * An editor sees it ALWAYS, empty or not. It was once shown only when there
+   * was already something in it, which hid the feature from exactly the person
+   * who needed it: with no summary written the tab did not render, and the only
+   * way in was a section buried below five clinical textareas inside the Edit
+   * sheet. An empty tab that says what it is for is the point.
+   *
+   * Everybody else only once the article is published and active -
+   * patientSummaryIsPublic is the single rule the whole feature rests on, and
+   * the printed handout asks it again for itself.
+   */
+  const showPatient = !!article && (canEdit || patientSummaryIsPublic(article));
+  const patientSummaryWritten = !!article && hasPatientSummary(article);
+  const canPrintHandout = !!article && patientSummaryIsPublic(article);
 
   const back = () => navigate("/knowledge");
 
@@ -113,10 +139,62 @@ export default function KnowledgeArticleDetail() {
             )}
           </header>
 
-          {/* collapsible: the long sections start folded behind "Read more".
-              Only here - the editor diff and revision history still show
-              every word, because a clinician there is checking wording. */}
-          <ArticleContent article={article} collapsible />
+          {/* Two audiences, one article. The patient tab appears for an editor
+              whenever there is something in it, so they can see what they are
+              writing; for everybody else only once the article is published and
+              active, which is the same gate the clinical text already passes.
+              collapsible: the long clinical sections start folded behind "Read
+              more" - only here, because the editor diff and revision history
+              still show every word to a clinician checking wording. */}
+          {showPatient ? (
+            <Tabs defaultValue="clinical">
+              <TabsList>
+                <TabsTrigger value="clinical">Clinical</TabsTrigger>
+                <TabsTrigger value="patient" data-testid="patient-tab">For the patient</TabsTrigger>
+              </TabsList>
+              <TabsContent value="clinical" className="pt-4">
+                <ArticleContent article={article} collapsible />
+              </TabsContent>
+              <TabsContent value="patient" className="pt-4 space-y-4">
+                {!patientSummaryWritten ? (
+                  // The whole reason the tab is shown empty: this is the way in.
+                  <div className="rounded-lg border border-dashed py-10 px-6 text-center space-y-3">
+                    <Users className="h-8 w-8 mx-auto text-muted-foreground" />
+                    <div className="space-y-1">
+                      <p className="font-medium">No patient summary yet</p>
+                      <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                        A plain-words version of this article to show the patient during the visit,
+                        and to print as a handout. Written from this article's own text.
+                      </p>
+                    </div>
+                    <Button size="sm" data-testid="write-patient-summary" onClick={() => { setEditorStart("patient-summary"); setEditor(article); }}>
+                      <Sparkles className="h-4 w-4 mr-2" />{WRITE_SUMMARY_CTA}
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    {canPrintHandout && (
+                      <Button size="sm" variant="outline" onClick={() => {
+                        // reserveTab FIRST, inside the click, or the browser treats
+                        // the window.open as an unsolicited pop-up. See newTab.ts.
+                        const tab = reserveTab();
+                        // The pictures are fetched and embedded before printing,
+                        // so this is a promise now; the reserved tab shows its
+                        // own "Preparing…" placeholder meanwhile.
+                        void printPatientHandout(article, { serviceName: article.title }, tab)
+                          .catch((e) => toast.error((e as Error).message));
+                      }}>
+                        <Printer className="h-4 w-4 mr-2" />Print handout
+                      </Button>
+                    )}
+                    <PatientSummary article={article} />
+                  </>
+                )}
+              </TabsContent>
+            </Tabs>
+          ) : (
+            <ArticleContent article={article} collapsible />
+          )}
           <ArticleEngagement key={article.id} articleId={article.id} />
           {canEdit && <ArticleHistory article={article} />}
         </article>
@@ -126,9 +204,11 @@ export default function KnowledgeArticleDetail() {
         <ArticleEditor
           article={editor === "new" ? undefined : editor}
           cloneFrom={cloning || undefined}
+          start={editorStart}
           onClose={() => {
             setEditor(null);
             setCloning(null);
+            setEditorStart(undefined);
             void qc.invalidateQueries({ queryKey: ["knowledge"] });
           }}
         />

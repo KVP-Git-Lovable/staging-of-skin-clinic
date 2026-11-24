@@ -1,4 +1,7 @@
 import { Toaster } from "@/components/ui/toaster";
+import { AppLoadingScreen } from "@/components/shared/AppLoadingScreen";
+import { ALL_FEEDBACKS_KEY } from "@/lib/reportsCatalog";
+import { staffAccess } from "@/lib/staffAccess";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -79,7 +82,6 @@ const PortalLanding = lazyWithReload(() => import("./pages/portal/PortalLanding"
 const PortalLogin = lazyWithReload(() => import("./pages/portal/PortalLogin"));
 const Portal = lazyWithReload(() => import("./pages/portal/Portal"));
 const Login = lazyWithReload(() => import("./pages/auth/Login"));
-const Signup = lazyWithReload(() => import("./pages/auth/Signup"));
 const OAuthConsent = lazyWithReload(() => import("./pages/auth/OAuthConsent"));
 const ShopHome = lazyWithReload(() => import("./pages/shop/ShopHome"));
 const ShopProduct = lazyWithReload(() => import("./pages/shop/ShopProduct"));
@@ -102,11 +104,15 @@ const HistoryTracking = lazyWithReload(() => import("./pages/admin/HistoryTracki
 const PhotoFingerprints = lazyWithReload(() => import("./pages/admin/PhotoFingerprints"));
 const KnowledgeCategories = lazyWithReload(() => import("./pages/admin/KnowledgeCategories"));
 const KnowledgeArticles = lazyWithReload(() => import("./pages/KnowledgeArticles"));
+const FeedbackRca = lazyWithReload(() => import("./pages/FeedbackRca"));
+const FeedbackRcaDetail = lazyWithReload(() => import("./pages/FeedbackRcaDetail"));
 const KnowledgeArticleDetail = lazyWithReload(() => import("./pages/KnowledgeArticleDetail"));
 const Attendance = lazyWithReload(() => import("./pages/Attendance"));
 const AttendanceAdmin = lazyWithReload(() => import("./pages/admin/AttendanceAdmin"));
 const VisitsNeedingReview = lazyWithReload(() => import("./pages/admin/VisitsNeedingReview"));
 const CurrencyBilling = lazyWithReload(() => import("./pages/admin/CurrencyBilling"));
+const PortalModules = lazyWithReload(() => import("./pages/admin/PortalModules"));
+const FeedbackSettings = lazyWithReload(() => import("./pages/admin/FeedbackSettings"));
 const UnitMaster = lazyWithReload(() => import("./pages/UnitMaster"));
 const ValidationRules = lazyWithReload(() => import("./pages/ValidationRules"));
 const ValidationRuleBuilder = lazyWithReload(() => import("./pages/ValidationRuleBuilder"));
@@ -167,11 +173,8 @@ function CurrencyLoader() {
 
 /** Shown briefly while a lazy-loaded page chunk downloads. */
 function PageLoader() {
-  return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
-    </div>
-  );
+  // A page file that stalls (rather than fails) used to spin for ever.
+  return <AppLoadingScreen variant="spinner" />;
 }
 
 /** Admin-only routes (user & profile management). */
@@ -193,26 +196,52 @@ function DeactivatedNotice() {
   );
 }
 
+// Signed in, but not a clinic staff member (for example a patient who created an
+// account). The clinic app is for staff only; the database refuses these accounts too.
+function NotStaffNotice() {
+  const { signOut } = useAuth();
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="max-w-sm text-center">
+        <h1 className="text-lg font-semibold">This app is for clinic staff only</h1>
+        <p className="text-sm text-muted-foreground mt-2">
+          Your account does not have access. Patients can use the patient portal instead.
+        </p>
+        <div className="mt-4 flex items-center justify-center gap-4 text-sm">
+          <a className="text-primary hover:underline" href="/portal">Go to patient portal</a>
+          <button className="text-primary hover:underline" onClick={() => signOut()}>
+            Sign out
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminRoute({ children }: { children: ReactNode }) {
-  const { isAdmin, staffDeactivated, loading } = useAuth();
-  if (loading) return null;
+  const { isAdmin, staffDeactivated, staffProfile, loading, session } = useAuth();
+  if (loading) return <AppLoadingScreen />;
+  if (!session) return <Navigate to="/login" replace />;
   if (staffDeactivated) return <DeactivatedNotice />;
+  if (!staffProfile) return <NotStaffNotice />;
   return isAdmin ? <>{children}</> : <AccessDenied />;
 }
 
 function ProtectedRoute({ moduleKey, children }: { moduleKey: string; children: ReactNode }) {
-  const { isAdmin, permissions, staffDeactivated, loading, session } = useAuth();
-  if (loading) return null;
-  // Without a session every query reaches the database as "anon", which the
-  // grants deny - send the user to sign in instead of rendering empty panels.
-  if (!session) return <Navigate to="/login" replace />;
-  // Before the checks below, because the last of them treats an empty
-  // permissions map as "allow everything" - which a deactivated account has.
-  if (staffDeactivated) return <DeactivatedNotice />;
-  if (isAdmin) return <>{children}</>;
-  if (permissions[moduleKey]?.can_view) return <>{children}</>;
-  // If no permissions loaded at all (no staff profile / not logged in as staff), allow access
-  if (Object.keys(permissions).length === 0) return <>{children}</>;
+  const { isAdmin, permissions, staffDeactivated, staffProfile, loading, session } = useAuth();
+  if (loading) return <AppLoadingScreen />;
+  const access = staffAccess({
+    hasSession: !!session,
+    isStaff: !!staffProfile,
+    staffDeactivated,
+    isAdmin,
+    permissions,
+    moduleKey,
+  });
+  if (access === "sign_in") return <Navigate to="/login" replace />;
+  if (access === "deactivated") return <DeactivatedNotice />;
+  if (access === "not_staff") return <NotStaffNotice />;
+  if (access === "allowed") return <>{children}</>;
   return <AccessDenied />;
 }
 
@@ -237,7 +266,8 @@ const App = () => (
             {/* Auth pages */}
             <Route path="/login" element={<Login />} />
             <Route path="/.lovable/oauth/consent" element={<OAuthConsent />} />
-            <Route path="/signup" element={<Signup />} />
+            {/* Public sign-up is closed: staff logins are created by an admin in User Management. */}
+            <Route path="/signup" element={<Navigate to="/login" replace />} />
             {/* Where the Meta connect popup lands; it reads the result from the URL fragment
                 and posts it back to the opener. Deliberately outside AppLayout. */}
             <Route path="/oauth/result" element={<OAuthResult />} />
@@ -268,12 +298,15 @@ const App = () => (
                     <Route path="/patients" element={<ProtectedRoute moduleKey="patients"><Patients /></ProtectedRoute>} />
                     <Route path="/patients/:id" element={<ProtectedRoute moduleKey="patients"><PatientDetail /></ProtectedRoute>} />
                     <Route path="/leave" element={<ProtectedRoute moduleKey="leave"><LeaveManagement /></ProtectedRoute>} />
-                    <Route path="/admin/attendance" element={<ProtectedRoute moduleKey="staff"><AttendanceAdmin /></ProtectedRoute>} />
+                    <Route path="/admin/attendance" element={<ProtectedRoute moduleKey="attendance_admin"><AttendanceAdmin /></ProtectedRoute>} />
                     <Route path="/admin/visits-to-review" element={<ProtectedRoute moduleKey="settings"><VisitsNeedingReview /></ProtectedRoute>} />
                     <Route path="/appointments" element={<ProtectedRoute moduleKey="appointments"><Appointments /></ProtectedRoute>} />
                     <Route path="/appointments/:id" element={<ProtectedRoute moduleKey="appointments"><AppointmentDetail /></ProtectedRoute>} />
                     <Route path="/services" element={<ProtectedRoute moduleKey="services"><Services /></ProtectedRoute>} />
                     <Route path="/knowledge" element={<ProtectedRoute moduleKey="services"><KnowledgeArticles /></ProtectedRoute>} />
+            <Route path="/all-feedbacks" element={<ProtectedRoute moduleKey="feedback_rca"><ReportView reportKey={ALL_FEEDBACKS_KEY} /></ProtectedRoute>} />
+            <Route path="/feedback-rca" element={<ProtectedRoute moduleKey="feedback_rca"><FeedbackRca /></ProtectedRoute>} />
+            <Route path="/feedback-rca/:id" element={<ProtectedRoute moduleKey="feedback_rca"><FeedbackRcaDetail /></ProtectedRoute>} />
                     <Route path="/knowledge/:id" element={<ProtectedRoute moduleKey="services"><KnowledgeArticleDetail /></ProtectedRoute>} />
                     <Route path="/billing" element={<ProtectedRoute moduleKey="billing"><Billing /></ProtectedRoute>} />
                     <Route path="/reports" element={<ProtectedRoute moduleKey="reports"><Reports /></ProtectedRoute>} />
@@ -333,11 +366,13 @@ const App = () => (
                     <Route path="/user-management" element={<AdminRoute><UserManagement /></AdminRoute>} />
                     <Route path="/validation-rules" element={<ProtectedRoute moduleKey="settings"><ValidationRules /></ProtectedRoute>} />
                     <Route path="/admin" element={<ProtectedRoute moduleKey="settings"><Admin /></ProtectedRoute>} />
-                    <Route path="/trash" element={<TrashPage />} />
+                    <Route path="/trash" element={<ProtectedRoute moduleKey="trash"><TrashPage /></ProtectedRoute>} />
                     <Route path="/admin/history-tracking" element={<ProtectedRoute moduleKey="settings"><HistoryTracking /></ProtectedRoute>} />
                     <Route path="/admin/photo-fingerprints" element={<ProtectedRoute moduleKey="settings"><PhotoFingerprints /></ProtectedRoute>} />
                     <Route path="/admin/knowledge-categories" element={<ProtectedRoute moduleKey="settings"><KnowledgeCategories /></ProtectedRoute>} />
                     <Route path="/admin/currency" element={<ProtectedRoute moduleKey="settings"><CurrencyBilling /></ProtectedRoute>} />
+                    <Route path="/admin/portal-modules" element={<ProtectedRoute moduleKey="settings"><PortalModules /></ProtectedRoute>} />
+                    <Route path="/admin/feedback" element={<ProtectedRoute moduleKey="settings"><FeedbackSettings /></ProtectedRoute>} />
                     <Route path="/admin/trash" element={<ProtectedRoute moduleKey="settings"><TrashAdmin /></ProtectedRoute>} />
                     <Route path="/validation-rules/:id" element={<ProtectedRoute moduleKey="settings"><ValidationRuleBuilder /></ProtectedRoute>} />
                     <Route path="/duplicate-management" element={<ProtectedRoute moduleKey="settings"><DuplicateManagement /></ProtectedRoute>} />
@@ -345,7 +380,7 @@ const App = () => (
                     <Route path="/settings" element={<ProtectedRoute moduleKey="settings"><Settings /></ProtectedRoute>} />
                     <Route path="/settings/tax-master/new" element={<ProtectedRoute moduleKey="settings"><TaxMasterForm /></ProtectedRoute>} />
                     <Route path="/settings/tax-master/:id" element={<ProtectedRoute moduleKey="settings"><TaxMasterForm /></ProtectedRoute>} />
-                    <Route path="/attendance" element={<Attendance />} />
+                    <Route path="/attendance" element={<ProtectedRoute moduleKey="attendance"><Attendance /></ProtectedRoute>} />
                     <Route path="/profile" element={<Profile />} />
                     <Route path="*" element={<NotFound />} />
                   </Routes>

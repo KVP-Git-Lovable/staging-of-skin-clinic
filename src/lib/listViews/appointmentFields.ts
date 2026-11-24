@@ -22,7 +22,9 @@ export const APPOINTMENT_VIEW_FIELDS: FieldDef[] = [
   // DEFAULT_APPOINTMENT_VIEW_COLUMNS below: offering the column is not the
   // same as forcing it onto every existing saved view and every clinic
   // day sheet that is already nine columns wide.
-  { key: "therapist", label: "Therapist", type: "picklist", optionsSource: "therapist" },
+  // multiKey: the column still shows and sorts by the first person, but a
+  // filter asks about everyone on the appointment - see FieldDef.multiKey.
+  { key: "therapist", label: "Therapist", type: "picklist", optionsSource: "therapist", multiKey: "therapist_ids" },
 ];
 
 export const DEFAULT_APPOINTMENT_VIEW_COLUMNS = [

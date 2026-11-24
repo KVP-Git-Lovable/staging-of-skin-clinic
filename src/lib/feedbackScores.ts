@@ -29,6 +29,16 @@ export const ratingLabel = (rating: number | null | undefined): string => {
   return "Excellent";
 };
 
+/**
+ * The root-cause threshold used to live here as two hardcoded numbers.
+ *
+ * It moved to src/lib/feedbackThresholds.ts when the clinic was given a screen
+ * to change it: the rule is a settings row now, so a module that knows only the
+ * bands cannot answer the question any more. npsCategory and ratingLabel stay
+ * here - those bands are the industry's and the clinic's wording, not policy
+ * anybody edits.
+ */
+
 export interface NpsBreakdown {
   responses: number;
   promoters: number;

@@ -816,7 +816,10 @@ function ProcedureForm({
         .filter((rx) => losesCatalogueLink(rx.product_id, catalogue))
         .map((rx) => rx.medicine_name);
       const rxToSave = prescriptions
-        .map((rx) => ({
+        .map((rx, i) => ({
+          // The position the clinician put it in, exactly as the services
+          // list beside this one already records.
+          sort_order: i,
           product_id: productIdForSave(rx.product_id, catalogue),
           medicine_name: rx.medicine_name,
           dosage: "",
@@ -1155,12 +1158,20 @@ function ProcedureForm({
           {patientId && (
             <PatientToolsBar patientId={patientId} patientName={selectedPatientName} context="patient" />
           )}
-          <Tabs defaultValue="procedure" className="w-full">
+          {/* Medical Information first, and the tab this opens on.
+              This has been reordered away three times now - d980c5d moved
+              Procedure to the front while adding the Knowledge Article tab,
+              8c3aaf6 put it back, and 2436bcf moved it again. The clinic
+              takes the history before recording what was done, and
+              ProcedureDetailSheet.tsx:1257 already opens on medical, so the
+              two screens agree. ProcedureFormDialog.test.tsx fails if this
+              order changes again. */}
+          <Tabs defaultValue="medical" className="w-full">
             <TabsList className="h-auto flex flex-wrap justify-start gap-1">
-              <TabsTrigger value="procedure">Procedure</TabsTrigger>
               <TabsTrigger value="medical" className="gap-1.5">
                 <HeartPulse className="h-3.5 w-3.5" /> Medical Information
               </TabsTrigger>
+              <TabsTrigger value="procedure">Procedure</TabsTrigger>
               <TabsTrigger value="surveys" className="gap-1.5">
                 <ClipboardList className="h-3.5 w-3.5" /> Surveys
               </TabsTrigger>

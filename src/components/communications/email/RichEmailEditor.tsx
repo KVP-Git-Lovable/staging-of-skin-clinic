@@ -161,7 +161,7 @@ export function RichEmailEditor({ value, onChange, placeholder, minHeight = 320 
           ref={ref}
           contentEditable
           suppressContentEditableWarning
-          className="p-4 outline-none prose prose-sm max-w-none focus:ring-0"
+          className="p-4 outline-none prose max-w-none focus:ring-0"
           style={{ minHeight }}
           onInput={(e) => onChange((e.target as HTMLDivElement).innerHTML)}
           data-placeholder={placeholder || "Compose your email…"}
