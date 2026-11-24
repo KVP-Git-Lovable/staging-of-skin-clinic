@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
-  Camera, FileText, Loader2, Minus, Paperclip, Plus, RotateCcw, Trash2, Upload,
+  Camera, Crop, FileText, Loader2, Minus, Paperclip, Plus, RotateCcw, Trash2, Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CameraDialog } from "@/components/shared/CameraDialog";
+import { ImageCropDialog } from "@/components/shared/ImageCropDialog";
 import { displayDate } from "@/lib/dateInput";
 import { attachmentStoragePath } from "@/lib/attachmentPath";
 import { attachmentKind } from "@/lib/attachmentPreview";
@@ -69,6 +70,30 @@ interface PatientAttachmentsProps {
   title?: string;
 }
 
+/**
+ * A thumbnail of a file that has not been uploaded yet.
+ *
+ * Its own object URL, revoked when it goes: a batch of seven phone photos
+ * held open is tens of megabytes the tab never gets back.
+ */
+function PendingThumb({ file }: { file: File }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    if (attachmentKind(file.name, "") !== "image") return;
+    const made = URL.createObjectURL(file);
+    setUrl(made);
+    return () => { URL.revokeObjectURL(made); setUrl(""); };
+  }, [file]);
+
+  return (
+    <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded border bg-muted">
+      {url
+        ? <img src={url} alt="" className="h-full w-full object-cover" />
+        : <FileText className="h-4 w-4 text-muted-foreground" />}
+    </span>
+  );
+}
+
 export function PatientAttachments({
   patientId,
   defaultProcedureId = null,
@@ -88,6 +113,14 @@ export function PatientAttachments({
   // how far through the batch it is.
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [docTypeDialogOpen, setDocTypeDialogOpen] = useState(false);
+  /**
+   * The picture being trimmed, and where it goes back to.
+   *
+   * index null means it came straight from the camera and has not reached
+   * pendingFiles yet; a number means it is already there and is being
+   * cropped again from the Document Type screen.
+   */
+  const [cropping, setCropping] = useState<{ file: File; index: number | null } | null>(null);
   const [selectedDocType, setSelectedDocType] = useState<string>("Prescription");
   const [viewing, setViewing] = useState<PatientAttachment | null>(null);
   // A file that has moved in storage must show its icon rather than a broken
@@ -422,9 +455,28 @@ export function PatientAttachments({
                 </p>
                 {/* Named, so staff can see they picked what they meant to
                     before one type is applied to the whole batch. */}
-                <ul className="mt-1 max-h-28 overflow-y-auto space-y-0.5">
+                {/* Named, and for a picture shown and trimmable: the same
+                    screen now serves a photo straight from the camera and a
+                    page somebody was sent on WhatsApp and uploaded. */}
+                <ul className="mt-1 max-h-40 overflow-y-auto space-y-1">
                   {pendingFiles.map((f, i) => (
-                    <li key={`${f.name}-${i}`} className="text-xs text-muted-foreground truncate">{f.name}</li>
+                    <li key={`${f.name}-${i}`} className="flex items-center gap-2">
+                      <PendingThumb file={f} />
+                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{f.name}</span>
+                      {attachmentKind(f.name, "") === "image" && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 shrink-0 gap-1 px-2 text-xs"
+                          disabled={uploading}
+                          aria-label={`Crop ${f.name}`}
+                          onClick={() => setCropping({ file: f, index: i })}
+                        >
+                          <Crop className="h-3.5 w-3.5" />Crop
+                        </Button>
+                      )}
+                    </li>
                   ))}
                 </ul>
                 {pendingFiles.length > 1 && (
@@ -458,16 +510,33 @@ export function PatientAttachments({
         </DialogContent>
       </Dialog>
 
+      <ImageCropDialog
+        open={!!cropping}
+        file={cropping?.file ?? null}
+        onOpenChange={(next) => { if (!next) setCropping(null); }}
+        onDone={(file) => {
+          const at = cropping?.index ?? null;
+          if (at === null) {
+            setPendingFiles([file]);
+            setSelectedDocType("Prescription");
+            setDocTypeDialogOpen(true);
+          } else {
+            setPendingFiles((current) => current.map((f, i) => (i === at ? file : f)));
+          }
+          setCropping(null);
+        }}
+      />
+
       <CameraDialog
         open={cameraOpen}
         onOpenChange={setCameraOpen}
         title="Capture Attachment"
         onCapture={(file) => {
-          // A camera gives one shot at a time; it goes through the same batch
-          // path as a batch of one.
-          setPendingFiles([file]);
-          setSelectedDocType("Prescription");
-          setDocTypeDialogOpen(true);
+          // Straight to the crop screen: a photographed page nearly always
+          // needs the desk trimming off it, and "Use full photo" is one tap
+          // for the times it does not. It goes through the same batch path
+          // as a batch of one either way.
+          setCropping({ file, index: null });
         }}
       />
 
