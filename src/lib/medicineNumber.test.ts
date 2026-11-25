@@ -66,3 +66,29 @@ describe("moveToPosition", () => {
     expect(keys(moveToPosition(list, "a", 3, (r) => !r.gone))).toEqual(["b", "x", "c", "a"]);
   });
 });
+
+import { withListedOrder } from "./medicineNumber";
+
+describe("withListedOrder (drag and drop)", () => {
+  type R = { key: string; _deleted: boolean };
+  const row = (key: string, _deleted = false): R => ({ key, _deleted });
+  const live = (r: { _deleted: boolean }) => !r._deleted;
+  const keys = (rows: { key: string }[]) => rows.map((r) => r.key).join("");
+
+  it("applies the dropped order", () => {
+    const rows = [row("a"), row("b"), row("c")];
+    expect(keys(withListedOrder<R>(rows, [rows[2], rows[0], rows[1]], live))).toBe("cab");
+  });
+
+  it("keeps removed rows in their own slots", () => {
+    const rows = [row("a"), row("x", true), row("b"), row("c")];
+    const out = withListedOrder<R>(rows, [rows[3], rows[2], rows[0]], live);
+    expect(keys(out)).toBe("cxba");
+  });
+
+  it("returns the list unchanged if the rows do not match", () => {
+    const rows = [row("a"), row("b")];
+    expect(withListedOrder<R>(rows, [rows[0]], live)).toBe(rows);
+    expect(withListedOrder<R>(rows, [rows[0], row("z")], live)).toBe(rows);
+  });
+});

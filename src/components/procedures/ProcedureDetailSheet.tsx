@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { numVal } from "@/lib/numberInput";
-import { moveToPosition } from "@/lib/medicineNumber";
+import { moveToPosition, withListedOrder } from "@/lib/medicineNumber";
+import { Reorder } from "framer-motion";
 import { MedicineNumberInput } from "./MedicineNumberInput";
+import { DraggableMedicine } from "./DraggableMedicine";
 import { applyMedicineDefaults } from "@/lib/medicineDefaults";
 import { usePharmaLookup } from "@/hooks/usePharmaLookup";
 import { edgeFunctionErrorMessage } from "@/lib/edgeFunctionError";
@@ -1591,11 +1593,22 @@ export function ProcedureDetailSheet({ procedureId, onClose, onSaved }: Procedur
                       <Plus className="h-3 w-3" /> Add Medicine
                     </Button>
                   </div>
-                  {visibleRx.length > 0 ? visibleRx.map((rx, idx) => {
+                  {visibleRx.length > 0 ? (<Reorder.Group
+                    as="div"
+                    axis="y"
+                    values={visibleRx}
+                    // Drag a card by its grip to reorder. Only the cards on screen are
+                    // reordered; a medicine marked removed keeps its own slot.
+                    onReorder={(next) => setEditPrescriptions((prev) => withListedOrder(prev, next, (r) => !r._deleted))}
+                  >{visibleRx.map((rx, idx) => {
                     return (
-                      <div key={rx.key} className="border rounded-lg p-3 mb-3 space-y-2 bg-background shadow-sm transition-shadow hover:shadow-md">
+                      <DraggableMedicine key={rx.key} value={rx} draggable={visibleRx.length > 1} className="border rounded-lg p-3 mb-3 space-y-2 bg-background shadow-sm transition-shadow hover:shadow-md">
+                       {(handle) => (<>
                         <div className="flex items-center justify-between">
-                          <MedicineNumberInput position={idx + 1} onMove={(position) => moveRx(rx.key, position)} />
+                          <div className="flex items-center gap-1">
+                            {handle}
+                            <MedicineNumberInput position={idx + 1} onMove={(position) => moveRx(rx.key, position)} />
+                          </div>
                           <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => removeRx(rx.key)}>Remove</Button>
                         </div>
                         <div className="grid grid-cols-2 gap-2">
@@ -1642,9 +1655,10 @@ export function ProcedureDetailSheet({ procedureId, onClose, onSaved }: Procedur
                           <Label className="text-xs text-muted-foreground flex items-center justify-between">Special Instructions <MicButton value={numVal(rx.instructions)} onChange={(v) => updateRx(rx.key, "instructions", v)} /></Label>
                           <Input className="mt-1" placeholder="e.g. After meals" value={rx.instructions} onChange={(e) => updateRx(rx.key, "instructions", e.target.value)} />
                         </div>
-                      </div>
+                       </>)}
+                      </DraggableMedicine>
                     );
-                  }) : (procedure as any)?.sf_id && importedPrescription.length ? (
+                  })}</Reorder.Group>) : (procedure as any)?.sf_id && importedPrescription.length ? (
                     /* The products a doctor prescribed in Salesforce arrive as the
                        free text they typed - 25,346 visits carry them this way -
                        while this panel reads the structured prescriptions table,

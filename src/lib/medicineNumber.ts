@@ -49,3 +49,30 @@ export function moveToPosition<T extends { key: string }>(
   let next = 0;
   return rows.map((row) => (isListed(row) ? reordered[next++] : row));
 }
+
+/**
+ * Put a dragged order back into the full list.
+ *
+ * Dragging reorders only the rows on screen. On the edit screen the full list
+ * can also hold medicines marked removed, which stay out of sight until the
+ * save deletes them; they must keep their own slots and must not be counted.
+ * `listedInNewOrder` is the on-screen rows in the order they were dropped;
+ * they refill the slots the on-screen rows occupied.
+ *
+ * If the two lists do not hold the same rows (which a drag cannot cause), the
+ * list is returned unchanged rather than losing or duplicating a medicine.
+ */
+export function withListedOrder<T extends { key: string }>(
+  rows: T[],
+  listedInNewOrder: T[],
+  isListed: (row: T) => boolean = () => true,
+): T[] {
+  const listed = rows.filter(isListed);
+  const sameRows =
+    listed.length === listedInNewOrder.length &&
+    new Set(listed.map((r) => r.key)).size === listed.length &&
+    listedInNewOrder.every((r) => listed.some((l) => l.key === r.key));
+  if (!sameRows) return rows;
+  let next = 0;
+  return rows.map((row) => (isListed(row) ? listedInNewOrder[next++] : row));
+}

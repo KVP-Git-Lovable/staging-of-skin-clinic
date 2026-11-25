@@ -24,6 +24,8 @@ describe("medicine numbering", () => {
     it(`${file.split("/").pop()} uses the number box and prints no second number`, () => {
       const source = read(file);
       expect(source).toContain("<MedicineNumberInput");
+      expect(source).toContain("<DraggableMedicine");
+      expect(source).toContain("<Reorder.Group");
       expect(source).not.toMatch(/Medicine \{(i|idx) \+ 1\}/);
     });
   }

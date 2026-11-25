@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { MAX_DATETIME, MIN_DATETIME, displayDate, isPlausibleIso } from "@/lib/dateInput";
 import { dedupeByName } from "@/lib/serviceLineSave";
 import { moveToPosition } from "@/lib/medicineNumber";
+import { Reorder } from "framer-motion";
 import { MedicineNumberInput } from "./MedicineNumberInput";
+import { DraggableMedicine } from "./DraggableMedicine";
 import { reservedVisits } from "@/lib/reservedVisits";
 import { clearVisitAt, joinVisitDateTime, removeVisitAt, splitVisitDateTime } from "@/lib/recurringVisits";
 import { DateInput } from "@/components/shared/DateInput";
@@ -1475,10 +1477,16 @@ function ProcedureForm({
                 <Plus className="h-3 w-3 mr-1" /> Add Medicine
               </Button>
             </div>
+            {/* Drag a card by its grip to reorder; the number on each card is its place in the list. */}
+            <Reorder.Group as="div" axis="y" values={prescriptions} onReorder={setPrescriptions}>
             {prescriptions.map((rx, i) => (
-              <div key={rx.key} className="border rounded-lg p-3 mb-3 space-y-2 bg-background">
+              <DraggableMedicine key={rx.key} value={rx} draggable={prescriptions.length > 1} className="border rounded-lg p-3 mb-3 space-y-2 bg-background">
+               {(handle) => (<>
                 <div className="flex items-center justify-between">
-                  <MedicineNumberInput position={i + 1} onMove={(position) => moveMedicine(rx.key, position)} />
+                  <div className="flex items-center gap-1">
+                    {handle}
+                    <MedicineNumberInput position={i + 1} onMove={(position) => moveMedicine(rx.key, position)} />
+                  </div>
                   <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => removePrescription(rx.key)}>Remove</Button>
                 </div>
                 <div>
@@ -1545,8 +1553,10 @@ function ProcedureForm({
                     </div>
                   </div>
                 </div>
-              </div>
+               </>)}
+              </DraggableMedicine>
             ))}
+            </Reorder.Group>
             {prescriptions.length > 0 && (
               <Button type="button" variant="outline" size="sm" className="w-full border-dashed" onClick={addPrescription}>
                 <Plus className="h-3.5 w-3.5 mr-1" /> Add another medicine
