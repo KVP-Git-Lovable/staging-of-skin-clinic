@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { MAX_DATETIME, MIN_DATETIME, displayDate, isPlausibleIso } from "@/lib/dateInput";
 import { dedupeByName } from "@/lib/serviceLineSave";
+import { moveToPosition } from "@/lib/medicineNumber";
+import { MedicineNumberInput } from "./MedicineNumberInput";
 import { reservedVisits } from "@/lib/reservedVisits";
 import { clearVisitAt, joinVisitDateTime, removeVisitAt, splitVisitDateTime } from "@/lib/recurringVisits";
 import { DateInput } from "@/components/shared/DateInput";
@@ -1039,6 +1041,13 @@ function ProcedureForm({
     );
   };
 
+  // The doctor typed a different number against a medicine: put it there and
+  // renumber the rest. The saved order is the on-screen order, so this is also
+  // the number printed on the prescription.
+  const moveMedicine = (key: string, position: number) => {
+    setPrescriptions((prev) => moveToPosition(prev, key, position));
+  };
+
   const removePrescription = (key: string) => {
     setPrescriptions((prev) => prev.filter((rx) => rx.key !== key));
     // The stock note belongs to the row that has gone, not to whatever row
@@ -1469,7 +1478,7 @@ function ProcedureForm({
             {prescriptions.map((rx, i) => (
               <div key={rx.key} className="border rounded-lg p-3 mb-3 space-y-2 bg-background">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground">Medicine {i + 1}</span>
+                  <MedicineNumberInput position={i + 1} onMove={(position) => moveMedicine(rx.key, position)} />
                   <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => removePrescription(rx.key)}>Remove</Button>
                 </div>
                 <div>

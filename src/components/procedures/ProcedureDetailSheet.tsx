@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useCanSeeBillingAmounts } from "@/hooks/useCanSeeBillingAmounts";
 import { numVal } from "@/lib/numberInput";
+import { moveToPosition } from "@/lib/medicineNumber";
+import { MedicineNumberInput } from "./MedicineNumberInput";
 import { applyMedicineDefaults } from "@/lib/medicineDefaults";
 import { usePharmaLookup } from "@/hooks/usePharmaLookup";
 import { edgeFunctionErrorMessage } from "@/lib/edgeFunctionError";
@@ -1011,6 +1013,14 @@ export function ProcedureDetailSheet({ procedureId, onClose, onSaved }: Procedur
     );
   };
 
+  // The doctor typed a different number against a medicine: put it there and
+  // renumber the rest. Only the rows still listed count - one marked removed
+  // keeps its slot and takes no number. The saved order is the on-screen order,
+  // so this is also the number printed on the prescription.
+  const moveRx = (key: string, position: number) => {
+    setEditPrescriptions((prev) => moveToPosition(prev, key, position, (rx) => !rx._deleted));
+  };
+
   const removeRx = (key: string) => {
     setEditPrescriptions((prev) =>
       prev
@@ -1585,7 +1595,7 @@ export function ProcedureDetailSheet({ procedureId, onClose, onSaved }: Procedur
                     return (
                       <div key={rx.key} className="border rounded-lg p-3 mb-3 space-y-2 bg-background shadow-sm transition-shadow hover:shadow-md">
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-muted-foreground">Medicine {idx + 1}</span>
+                          <MedicineNumberInput position={idx + 1} onMove={(position) => moveRx(rx.key, position)} />
                           <Button type="button" variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => removeRx(rx.key)}>Remove</Button>
                         </div>
                         <div className="grid grid-cols-2 gap-2">
