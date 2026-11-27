@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addEdge,
@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { ActivateJourneyDialog } from "@/components/communications/journey/ActivateJourneyDialog";
 import { JourneyDetailsDialog } from "@/components/communications/journey/JourneyDetailsDialog";
+import { JourneyMembersTab } from "@/components/communications/journey/JourneyMembersTab";
 import { JourneyScheduleDialog } from "@/components/communications/journey/JourneyScheduleDialog";
 import { JourneyCanvasContext, nodeTypes } from "@/components/communications/journey/JourneyNodes";
 import { NodePropertyPanel, type ApprovedTemplate } from "@/components/communications/journey/NodePropertyPanel";
@@ -28,6 +29,8 @@ import { SubmitApprovalDialog } from "@/components/communications/journey/Submit
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { JourneyAnalyticsView } from "@/pages/communications/JourneyAnalytics";
 import { cn } from "@/lib/utils";
 import {
   parseCanvas,
@@ -68,8 +71,18 @@ const ADDABLE: { type: Exclude<JourneyNodeType, "entry">; label: string; icon: t
   { type: "exit", label: "Exit", icon: Square },
 ];
 
+const TABS = ["canvas", "analytics", "members"] as const;
+type JourneyTab = (typeof TABS)[number];
+
 function Canvas({ journey }: { journey: Journey }) {
   const qc = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const tab: JourneyTab = TABS.find((t) => t === params.get("tab")) ?? "canvas";
+  const setTab = (next: string) => setParams(next === "canvas" ? {} : { tab: next }, { replace: true });
+  // The canvas is first drawn when its tab is shown (it needs a visible size to frame itself) and then kept,
+  // so switching tabs never loses unsaved steps or the view position.
+  const canvasShown = useRef(false);
+  if (tab === "canvas") canvasShown.current = true;
   const initial = useMemo(() => toRF(parseCanvas(journey.canvas_data)), [journey.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [nodes, setNodes, onNodesChange] = useNodesState<RFNode>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initial.edges);
@@ -231,7 +244,23 @@ function Canvas({ journey }: { journey: Journey }) {
         <p className="rounded-md bg-warning/10 p-3 text-sm text-warning">Editing the steps or audience of an approved journey sends it back to Draft for re-approval.</p>
       )}
 
-      <div className="flex flex-col gap-3 lg:flex-row">
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList>
+          <TabsTrigger value="canvas">Canvas</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
+          <TabsTrigger value="members">Members</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="analytics" className="mt-3">
+          <JourneyAnalyticsView id={journey.id} embedded />
+        </TabsContent>
+        <TabsContent value="members" className="mt-3">
+          <JourneyMembersTab journeyId={journey.id} canvas={parseCanvas(journey.canvas_data)} />
+        </TabsContent>
+      </Tabs>
+
+      {canvasShown.current && (
+      <div className={cn("flex-col gap-3 lg:flex-row", tab === "canvas" ? "flex" : "hidden")}>
         <div className="min-w-0 flex-1 space-y-2">
           {!locked && (
             <div className="flex flex-wrap items-center gap-2">
@@ -260,7 +289,7 @@ function Canvas({ journey }: { journey: Journey }) {
                 nodesDraggable={!locked}
                 nodesConnectable={!locked}
                 edgesReconnectable={false}
-                deleteKeyCode={locked ? null : ["Backspace", "Delete"]}
+                deleteKeyCode={locked || tab !== "canvas" ? null : ["Backspace", "Delete"]}
               >
                 <Background />
                 <Controls showInteractive={false} />
@@ -275,6 +304,7 @@ function Canvas({ journey }: { journey: Journey }) {
           <NodePropertyPanel node={selected} templates={templates} readOnly={locked} onChange={patchSelected} onDelete={deleteSelected} />
         )}
       </div>
+      )}
 
       <JourneyDetailsDialog open={showEdit} onOpenChange={setShowEdit} journey={journey} />
       <JourneyScheduleDialog journey={showSchedule ? journey : null} onOpenChange={(o) => !o && setShowSchedule(false)} />

@@ -43,6 +43,11 @@ const num = (n: number) => n.toLocaleString("en-IN");
 
 export default function JourneyAnalytics() {
   const { id = "" } = useParams<{ id: string }>();
+  return <JourneyAnalyticsView id={id} />;
+}
+
+/** The analytics body, shown on its own page and inside the journey's Analytics tab (`embedded` drops the page title). */
+export function JourneyAnalyticsView({ id, embedded = false }: { id: string; embedded?: boolean }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [rangeKey, setRangeKey] = useState<"7d" | "30d" | "all">("30d");
@@ -55,7 +60,8 @@ export default function JourneyAnalytics() {
   }, [rangeKey]);
 
   const { data: journey, isLoading: journeyLoading } = useQuery({
-    queryKey: ["comms-journey", id],
+    // Its own key under the journey's: the journey screen caches a differently shaped row under ["comms-journey", id].
+    queryKey: ["comms-journey", id, "analytics"],
     enabled: !!id,
     queryFn: async () => (await supabase.from("comms_journeys").select("*").eq("id", id).maybeSingle()).data,
   });
@@ -100,7 +106,8 @@ export default function JourneyAnalytics() {
   return (
     <TooltipProvider>
       <div className="space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className={`flex flex-wrap items-center gap-3 ${embedded ? "justify-end" : "justify-between"}`}>
+          {!embedded && (
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" onClick={() => navigate(`/communications/journeys/${id}`)} aria-label="Back to journey">
               <ArrowLeft className="h-4 w-4" />
@@ -115,6 +122,7 @@ export default function JourneyAnalytics() {
               </p>
             </div>
           </div>
+          )}
 
           <div className="flex flex-wrap items-center gap-2">
             <Select value={rangeKey} onValueChange={(v) => setRangeKey(v as typeof rangeKey)}>
